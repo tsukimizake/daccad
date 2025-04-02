@@ -3,6 +3,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use truck_modeling::{Curve, Mapped, Surface};
 use truck_polymesh::{Point3, PolygonMesh};
+// OpenCascade imports
+use opencascade::mesh::BRepMesh_IncrementalMesh;
+use opencascade::shape::{
+    TopoDS_Edge, TopoDS_Face, TopoDS_Shape, TopoDS_Shell, TopoDS_Solid, TopoDS_Vertex, TopoDS_Wire,
+};
+use opencascade_sys::ffi::gp_Pnt as OCPoint3;
 
 use super::gc;
 use super::parser::Expr;
@@ -13,6 +19,7 @@ pub type ModelId = usize;
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum Model {
+    // Legacy truck types
     Point3(truck_modeling::Point3),
     Vertex(Arc<truck_modeling::Vertex>),
     Edge(Arc<truck_modeling::Edge>),
@@ -21,9 +28,20 @@ pub enum Model {
     Shell(Arc<truck_modeling::Shell>),
     Solid(Arc<truck_modeling::Solid>),
     Mesh(Arc<truck_polymesh::PolygonMesh>),
+
+    // New OpenCascade types
+    OCPoint3(Point3),
+    OCVertex(opencascade::shape::TopoDS_Vertex),
+    OCEdge(opencascade::shape::TopoDS_Edge),
+    OCWire(opencascade::shape::TopoDS_Wire),
+    OCFace(opencascade::shape::TopoDS_Face),
+    OCShell(opencascade::shape::TopoDS_Shell),
+    OCSolid(opencascade::shape::TopoDS_Solid),
+    OCShape(opencascade::shape::TopoDS_Shape),
+    OCMesh(opencascade::mesh::BRepMesh_IncrementalMesh),
 }
 
-// Type-safe wrappers for model elements
+// Type-safe wrappers for model elements (Truck)
 #[derive(Debug, Clone)]
 pub struct VertexModel(pub Arc<truck_modeling::Vertex>);
 
@@ -44,6 +62,31 @@ pub struct SolidModel(pub Arc<truck_modeling::Solid>);
 
 #[derive(Debug, Clone)]
 pub struct MeshModel(pub Arc<truck_polymesh::PolygonMesh>);
+
+// Type-safe wrappers for OpenCascade model elements
+#[derive(Debug, Clone)]
+pub struct OCVertexModel(pub opencascade::shape::TopoDS_Vertex);
+
+#[derive(Debug, Clone)]
+pub struct OCEdgeModel(pub opencascade::shape::TopoDS_Edge);
+
+#[derive(Debug, Clone)]
+pub struct OCWireModel(pub opencascade::shape::TopoDS_Wire);
+
+#[derive(Debug, Clone)]
+pub struct OCFaceModel(pub opencascade::shape::TopoDS_Face);
+
+#[derive(Debug, Clone)]
+pub struct OCShellModel(pub opencascade::shape::TopoDS_Shell);
+
+#[derive(Debug, Clone)]
+pub struct OCSolidModel(pub opencascade::shape::TopoDS_Solid);
+
+#[derive(Debug, Clone)]
+pub struct OCShapeModel(pub opencascade::shape::TopoDS_Shape);
+
+#[derive(Debug, Clone)]
+pub struct OCMeshModel(pub opencascade::mesh::BRepMesh_IncrementalMesh);
 
 // Implement conversions to Model
 impl From<VertexModel> for Model {
@@ -131,8 +174,113 @@ impl From<Arc<truck_polymesh::PolygonMesh>> for Model {
     }
 }
 
+// Implement conversions for OpenCascade wrapper structs
+impl From<OCVertexModel> for Model {
+    fn from(model: OCVertexModel) -> Self {
+        Model::OCVertex(model.0)
+    }
+}
+
+impl From<OCEdgeModel> for Model {
+    fn from(model: OCEdgeModel) -> Self {
+        Model::OCEdge(model.0)
+    }
+}
+
+impl From<OCWireModel> for Model {
+    fn from(model: OCWireModel) -> Self {
+        Model::OCWire(model.0)
+    }
+}
+
+impl From<OCFaceModel> for Model {
+    fn from(model: OCFaceModel) -> Self {
+        Model::OCFace(model.0)
+    }
+}
+
+impl From<OCShellModel> for Model {
+    fn from(model: OCShellModel) -> Self {
+        Model::OCShell(model.0)
+    }
+}
+
+impl From<OCSolidModel> for Model {
+    fn from(model: OCSolidModel) -> Self {
+        Model::OCSolid(model.0)
+    }
+}
+
+impl From<OCShapeModel> for Model {
+    fn from(model: OCShapeModel) -> Self {
+        Model::OCShape(model.0)
+    }
+}
+
+impl From<OCMeshModel> for Model {
+    fn from(model: OCMeshModel) -> Self {
+        Model::OCMesh(model.0)
+    }
+}
+
+// Direct conversions for OpenCascade types
+impl From<OCPoint3> for Model {
+    fn from(point: OCPoint3) -> Self {
+        Model::OCPoint3(point)
+    }
+}
+
+impl From<TopoDS_Vertex> for Model {
+    fn from(vertex: TopoDS_Vertex) -> Self {
+        Model::OCVertex(vertex)
+    }
+}
+
+impl From<TopoDS_Edge> for Model {
+    fn from(edge: TopoDS_Edge) -> Self {
+        Model::OCEdge(edge)
+    }
+}
+
+impl From<TopoDS_Wire> for Model {
+    fn from(wire: TopoDS_Wire) -> Self {
+        Model::OCWire(wire)
+    }
+}
+
+impl From<TopoDS_Face> for Model {
+    fn from(face: TopoDS_Face) -> Self {
+        Model::OCFace(face)
+    }
+}
+
+impl From<TopoDS_Shell> for Model {
+    fn from(shell: TopoDS_Shell) -> Self {
+        Model::OCShell(shell)
+    }
+}
+
+impl From<TopoDS_Solid> for Model {
+    fn from(solid: TopoDS_Solid) -> Self {
+        Model::OCSolid(solid)
+    }
+}
+
+impl From<TopoDS_Shape> for Model {
+    fn from(shape: TopoDS_Shape) -> Self {
+        Model::OCShape(shape)
+    }
+}
+
+impl From<BRepMesh_IncrementalMesh> for Model {
+    fn from(mesh: BRepMesh_IncrementalMesh) -> Self {
+        Model::OCMesh(mesh)
+    }
+}
+
 // Methods to safely extract specific model types
 impl Model {
+    // Truck model accessors
     pub fn as_point3(&self) -> Option<&truck_modeling::Point3> {
         match self {
             Model::Point3(p) => Some(p),
@@ -189,6 +337,70 @@ impl Model {
     pub fn as_mesh(&self) -> Option<&Arc<truck_polymesh::PolygonMesh>> {
         match self {
             Model::Mesh(m) => Some(m),
+            _ => None,
+        }
+    }
+
+    // OpenCascade model accessors
+    pub fn as_oc_point3(&self) -> Option<&OCPoint3> {
+        match self {
+            Model::OCPoint3(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    pub fn as_oc_vertex(&self) -> Option<&TopoDS_Vertex> {
+        match self {
+            Model::OCVertex(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    pub fn as_oc_edge(&self) -> Option<&TopoDS_Edge> {
+        match self {
+            Model::OCEdge(e) => Some(e),
+            _ => None,
+        }
+    }
+
+    pub fn as_oc_wire(&self) -> Option<&TopoDS_Wire> {
+        match self {
+            Model::OCWire(w) => Some(w),
+            _ => None,
+        }
+    }
+
+    pub fn as_oc_face(&self) -> Option<&TopoDS_Face> {
+        match self {
+            Model::OCFace(f) => Some(f),
+            _ => None,
+        }
+    }
+
+    pub fn as_oc_shell(&self) -> Option<&TopoDS_Shell> {
+        match self {
+            Model::OCShell(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn as_oc_solid(&self) -> Option<&TopoDS_Solid> {
+        match self {
+            Model::OCSolid(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn as_oc_shape(&self) -> Option<&TopoDS_Shape> {
+        match self {
+            Model::OCShape(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn as_oc_mesh(&self) -> Option<&BRepMesh_IncrementalMesh> {
+        match self {
+            Model::OCMesh(m) => Some(m),
             _ => None,
         }
     }
@@ -345,6 +557,8 @@ pub mod extract {
         }
     }
 
+    // Truck model extractors
+
     /// Extract a vertex from an expression
     #[allow(dead_code)]
     pub fn vertex(
@@ -395,6 +609,53 @@ pub mod extract {
     pub fn point3(expr: &Expr, env: &Arc<Mutex<Env>>) -> Result<truck_modeling::Point3, String> {
         model(expr, env, |m| m.as_point3().cloned(), "point3")
     }
+
+    // OpenCascade model extractors
+
+    /// Extract an OpenCascade Point3 from an expression
+    pub fn oc_point3(expr: &Expr, env: &Arc<Mutex<Env>>) -> Result<OCPoint3, String> {
+        model(expr, env, |m| m.as_oc_point3().cloned(), "oc_point3")
+    }
+
+    /// Extract an OpenCascade Vertex from an expression
+    pub fn oc_vertex(expr: &Expr, env: &Arc<Mutex<Env>>) -> Result<TopoDS_Vertex, String> {
+        model(expr, env, |m| m.as_oc_vertex().cloned(), "oc_vertex")
+    }
+
+    /// Extract an OpenCascade Edge from an expression
+    pub fn oc_edge(expr: &Expr, env: &Arc<Mutex<Env>>) -> Result<TopoDS_Edge, String> {
+        model(expr, env, |m| m.as_oc_edge().cloned(), "oc_edge")
+    }
+
+    /// Extract an OpenCascade Wire from an expression
+    pub fn oc_wire(expr: &Expr, env: &Arc<Mutex<Env>>) -> Result<TopoDS_Wire, String> {
+        model(expr, env, |m| m.as_oc_wire().cloned(), "oc_wire")
+    }
+
+    /// Extract an OpenCascade Face from an expression
+    pub fn oc_face(expr: &Expr, env: &Arc<Mutex<Env>>) -> Result<TopoDS_Face, String> {
+        model(expr, env, |m| m.as_oc_face().cloned(), "oc_face")
+    }
+
+    /// Extract an OpenCascade Shell from an expression
+    pub fn oc_shell(expr: &Expr, env: &Arc<Mutex<Env>>) -> Result<TopoDS_Shell, String> {
+        model(expr, env, |m| m.as_oc_shell().cloned(), "oc_shell")
+    }
+
+    /// Extract an OpenCascade Solid from an expression
+    pub fn oc_solid(expr: &Expr, env: &Arc<Mutex<Env>>) -> Result<TopoDS_Solid, String> {
+        model(expr, env, |m| m.as_oc_solid().cloned(), "oc_solid")
+    }
+
+    /// Extract an OpenCascade Shape from an expression
+    pub fn oc_shape(expr: &Expr, env: &Arc<Mutex<Env>>) -> Result<TopoDS_Shape, String> {
+        model(expr, env, |m| m.as_oc_shape().cloned(), "oc_shape")
+    }
+
+    /// Extract an OpenCascade Mesh from an expression
+    pub fn oc_mesh(expr: &Expr, env: &Arc<Mutex<Env>>) -> Result<BRepMesh_IncrementalMesh, String> {
+        model(expr, env, |m| m.as_oc_mesh().cloned(), "oc_mesh")
+    }
 }
 
 inventory::collect!(LispPrimitive);
@@ -411,3 +672,4 @@ pub(crate) struct LispSpecialForm {
     pub name: &'static str,
     pub func: fn(&[Arc<Expr>], Arc<Mutex<crate::lisp::env::Env>>) -> Result<Arc<Expr>, String>,
 }
+

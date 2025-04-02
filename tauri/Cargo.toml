@@ -26,13 +26,16 @@ nom_locate = "4.2.0"
 tauri-plugin-dialog = "2"
 tauri-plugin-shell = "2"
 
+# Original truck dependencies
 truck-polymesh = { path = "/Users/tsukimizake/truck/truck-polymesh/" }
 truck-modeling = { path = "/Users/tsukimizake/truck/truck-modeling/" }
 truck-meshalgo = { path = "/Users/tsukimizake/truck/truck-meshalgo/" }
 truck-topology = { path = "/Users/tsukimizake/truck/truck-topology/" }
 truck-shapeops = { path = "/Users/tsukimizake/truck/truck-shapeops/" }
 
-
+# OpenCascade dependencies - commented out until full migration
+opencascade = {path = "../opencascade-rs/crates/opencascade"}
+opencascade-sys = {path = "../opencascade-rs/crates/opencascade-sys"}
 [features]
 # this feature is used for production builds or when `devPath` points to the filesystem
 # DO NOT REMOVE!!
