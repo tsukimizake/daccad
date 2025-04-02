@@ -672,4 +672,3 @@ pub(crate) struct LispSpecialForm {
     pub name: &'static str,
     pub func: fn(&[Arc<Expr>], Arc<Mutex<crate::lisp::env::Env>>) -> Result<Arc<Expr>, String>,
 }
-

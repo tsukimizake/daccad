@@ -9,13 +9,11 @@ use inventory;
 use lisp_macro::lisp_fn;
 use std::sync::{Arc, Mutex};
 
-// OpenCascade imports
-use opencascade::primitives::{Point3 as OCPoint3, Direction, Pnt};
-use opencascade::shape::{TopoDS_Shape, TopoDS_Edge, TopoDS_Wire, TopoDS_Face, TopoDS_Shell, TopoDS_Solid, TopoDS_Vertex};
-use opencascade::geometry::{BRepPrimAPI_MakeBox, BRepBuilderAPI_MakeVertex, BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeWire};
-use opencascade::boolean::{BRepAlgoAPI_Fuse, BRepAlgoAPI_Common, BRepAlgoAPI_Cut};
-use opencascade::transform::{gp_Trsf, BRepBuilderAPI_Transform};
-use opencascade::mesh::BRepMesh_IncrementalMesh;
+// Note: OpenCascade integration is currently on hold as the FFI types don't implement Send + Sync
+// which makes them incompatible with Tauri's state management.
+// We'll need to implement proper wrappers before we can fully integrate OpenCascade.
+
+// Legacy truck imports only for now
 
 // Legacy truck imports - will be phased out gradually
 use truck_meshalgo::prelude::*;
@@ -95,25 +93,25 @@ fn preview(args: &[Arc<Expr>], env: Arc<Mutex<Env>>) -> Result<Arc<Expr>, String
                 // Create a mesh from the shape with a deflection of 0.01
                 let mut mesh = BRepMesh_IncrementalMesh::new(shape.clone(), 0.01);
                 mesh.perform();
-                
+
                 // Store the mesh and add to preview list
                 let mesh_id = env_guard.insert_model(Model::OCMesh(mesh));
                 env_guard.insert_preview_list(mesh_id);
-                
+
                 drop(env_guard);
                 return_model(Model::OCShape(shape.clone()), env)
             } else if let Some(solid) = model.as_oc_solid() {
                 // OpenCascade solid - treat as a shape for preview
                 let solid_shape = solid.clone();
-                
+
                 // Create a mesh from the solid with a deflection of 0.01
                 let mut mesh = BRepMesh_IncrementalMesh::new(solid_shape.clone(), 0.01);
                 mesh.perform();
-                
+
                 // Store the mesh and add to preview list
                 let mesh_id = env_guard.insert_model(Model::OCMesh(mesh));
                 env_guard.insert_preview_list(mesh_id);
-                
+
                 drop(env_guard);
                 return_model(Model::OCSolid(solid.clone()), env)
             } else {
@@ -295,7 +293,7 @@ fn sandbox(_: &[Arc<Expr>], env: Arc<Mutex<Env>>) -> Result<Arc<Expr>, String> {
     // Creating a box using OpenCascade
     let box_maker = BRepPrimAPI_MakeBox::new(
         OCPoint3::new(0.0, 0.0, 0.0),
-        OCPoint3::new(10.0, 10.0, 10.0)
+        OCPoint3::new(10.0, 10.0, 10.0),
     );
     let box_shape = box_maker.shape();
     return_model(Model::OCShape(box_shape), env)
@@ -314,7 +312,7 @@ fn sandbox(_: &[Arc<Expr>], env: Arc<Mutex<Env>>) -> Result<Arc<Expr>, String> {
 #[lisp_fn]
 fn oc_box(args: &[Arc<Expr>], env: Arc<Mutex<Env>>) -> Result<Arc<Expr>, String> {
     assert_arg_count(args, 6)?;
-    
+
     // Extract parameters
     let x = extract::number(args[0].as_ref())?;
     let y = extract::number(args[1].as_ref())?;
@@ -322,16 +320,16 @@ fn oc_box(args: &[Arc<Expr>], env: Arc<Mutex<Env>>) -> Result<Arc<Expr>, String>
     let width = extract::number(args[3].as_ref())?;
     let height = extract::number(args[4].as_ref())?;
     let depth = extract::number(args[5].as_ref())?;
-    
+
     // Create a box using OpenCascade
     let box_maker = BRepPrimAPI_MakeBox::new(
         OCPoint3::new(x, y, z),
-        OCPoint3::new(x + width, y + height, z + depth)
+        OCPoint3::new(x + width, y + height, z + depth),
     );
-    
+
     // Get the resulting solid shape
     let box_shape = box_maker.shape();
-    
+
     // Return as a shape model
     return_model(Model::OCShape(box_shape), env)
 }
@@ -349,15 +347,15 @@ fn oc_box(args: &[Arc<Expr>], env: Arc<Mutex<Env>>) -> Result<Arc<Expr>, String>
 #[lisp_fn]
 fn oc_point(args: &[Arc<Expr>], env: Arc<Mutex<Env>>) -> Result<Arc<Expr>, String> {
     assert_arg_count(args, 3)?;
-    
+
     // Extract coordinates
     let x = extract::number(args[0].as_ref())?;
     let y = extract::number(args[1].as_ref())?;
     let z = extract::number(args[2].as_ref())?;
-    
+
     // Create an OpenCascade point
     let point = OCPoint3::new(x, y, z);
-    
+
     // Return as a point model
     return_model(Model::OCPoint3(point), env)
 }
@@ -375,15 +373,15 @@ fn oc_point(args: &[Arc<Expr>], env: Arc<Mutex<Env>>) -> Result<Arc<Expr>, Strin
 #[lisp_fn]
 fn oc_fuse(args: &[Arc<Expr>], env: Arc<Mutex<Env>>) -> Result<Arc<Expr>, String> {
     assert_arg_count(args, 2)?;
-    
+
     // Extract the shapes from arguments
     let shape1 = extract::oc_shape(args[0].as_ref(), &env)?;
     let shape2 = extract::oc_shape(args[1].as_ref(), &env)?;
-    
+
     // Perform the boolean union operation
     let fuse = BRepAlgoAPI_Fuse::new(&shape1, &shape2);
     let result = fuse.shape();
-    
+
     // Return the resulting shape
     return_model(Model::OCShape(result), env)
 }
@@ -401,15 +399,15 @@ fn oc_fuse(args: &[Arc<Expr>], env: Arc<Mutex<Env>>) -> Result<Arc<Expr>, String
 #[lisp_fn]
 fn oc_common(args: &[Arc<Expr>], env: Arc<Mutex<Env>>) -> Result<Arc<Expr>, String> {
     assert_arg_count(args, 2)?;
-    
+
     // Extract the shapes from arguments
     let shape1 = extract::oc_shape(args[0].as_ref(), &env)?;
     let shape2 = extract::oc_shape(args[1].as_ref(), &env)?;
-    
+
     // Perform the boolean intersection operation
     let common = BRepAlgoAPI_Common::new(&shape1, &shape2);
     let result = common.shape();
-    
+
     // Return the resulting shape
     return_model(Model::OCShape(result), env)
 }
@@ -427,15 +425,15 @@ fn oc_common(args: &[Arc<Expr>], env: Arc<Mutex<Env>>) -> Result<Arc<Expr>, Stri
 #[lisp_fn]
 fn oc_cut(args: &[Arc<Expr>], env: Arc<Mutex<Env>>) -> Result<Arc<Expr>, String> {
     assert_arg_count(args, 2)?;
-    
+
     // Extract the shapes from arguments
     let shape1 = extract::oc_shape(args[0].as_ref(), &env)?;
     let shape2 = extract::oc_shape(args[1].as_ref(), &env)?;
-    
+
     // Perform the boolean subtraction operation
     let cut = BRepAlgoAPI_Cut::new(&shape1, &shape2);
     let result = cut.shape();
-    
+
     // Return the resulting shape
     return_model(Model::OCShape(result), env)
 }
@@ -550,15 +548,15 @@ fn not(args: &[Arc<Expr>], env: Arc<Mutex<Env>>) -> Result<Arc<Expr>, String> {
 #[lisp_fn]
 fn oc_common(args: &[Arc<Expr>], env: Arc<Mutex<Env>>) -> Result<Arc<Expr>, String> {
     assert_arg_count(args, 2)?;
-    
+
     // Extract the shapes from arguments
     let shape1 = extract::oc_shape(args[0].as_ref(), &env)?;
     let shape2 = extract::oc_shape(args[1].as_ref(), &env)?;
-    
+
     // Perform the boolean intersection operation
     let common = BRepAlgoAPI_Common::new(&shape1, &shape2);
     let result = common.shape();
-    
+
     // Return the resulting shape
     return_model(Model::OCShape(result), env)
 }
@@ -573,15 +571,15 @@ fn oc_common(args: &[Arc<Expr>], env: Arc<Mutex<Env>>) -> Result<Arc<Expr>, Stri
 #[lisp_fn]
 fn oc_cut(args: &[Arc<Expr>], env: Arc<Mutex<Env>>) -> Result<Arc<Expr>, String> {
     assert_arg_count(args, 2)?;
-    
+
     // Extract the shapes from arguments
     let shape1 = extract::oc_shape(args[0].as_ref(), &env)?;
     let shape2 = extract::oc_shape(args[1].as_ref(), &env)?;
-    
+
     // Perform the boolean subtraction operation
     let cut = BRepAlgoAPI_Cut::new(&shape1, &shape2);
     let result = cut.shape();
-    
+
     // Return the resulting shape
     return_model(Model::OCShape(result), env)
 }
@@ -623,7 +621,10 @@ fn translate(args: &[Arc<Expr>], env: Arc<Mutex<Env>>) -> Result<Arc<Expr>, Stri
         Model::Face(f) => Ok(Model::Face(Arc::new(translated(f.as_ref(), translation)))),
         Model::Solid(s) => Ok(Model::Solid(Arc::new(translated(s.as_ref(), translation)))),
         Model::Mesh(_) => Err("nothing can be done on mesh".to_string()),
-        _ => Err("translate: Expected a Truck model. Use oc-translate for OpenCascade models.".to_string()),
+        _ => Err(
+            "translate: Expected a Truck model. Use oc-translate for OpenCascade models."
+                .to_string(),
+        ),
     }?;
     return_model(translated_model, env)
 }
@@ -641,21 +642,21 @@ fn translate(args: &[Arc<Expr>], env: Arc<Mutex<Env>>) -> Result<Arc<Expr>, Stri
 #[lisp_fn]
 fn oc_translate(args: &[Arc<Expr>], env: Arc<Mutex<Env>>) -> Result<Arc<Expr>, String> {
     assert_arg_count(args, 4)?;
-    
+
     // Extract the shape and translation values
     let shape = extract::oc_shape(args[0].as_ref(), &env)?;
     let dx = extract::number(eval(args[1].clone(), env.clone())?.as_ref())?;
     let dy = extract::number(eval(args[2].clone(), env.clone())?.as_ref())?;
     let dz = extract::number(eval(args[3].clone(), env.clone())?.as_ref())?;
-    
+
     // Create a transformation
     let mut transform = gp_Trsf::new();
     transform.set_translation(OCPoint3::new(0.0, 0.0, 0.0), OCPoint3::new(dx, dy, dz));
-    
+
     // Apply the transformation to the shape
     let transformation = BRepBuilderAPI_Transform::new(&shape, &transform, true);
     let result = transformation.shape();
-    
+
     // Return the transformed shape
     return_model(Model::OCShape(result), env)
 }
@@ -673,38 +674,40 @@ fn oc_translate(args: &[Arc<Expr>], env: Arc<Mutex<Env>>) -> Result<Arc<Expr>, S
 #[lisp_fn]
 fn oc_rotate(args: &[Arc<Expr>], env: Arc<Mutex<Env>>) -> Result<Arc<Expr>, String> {
     assert_arg_count(args, 8)?;
-    
+
     // Extract the shape
     let shape = extract::oc_shape(args[0].as_ref(), &env)?;
-    
+
     // Extract center point
     let center_x = extract::number(args[1].as_ref())?;
     let center_y = extract::number(args[2].as_ref())?;
     let center_z = extract::number(args[3].as_ref())?;
-    
+
     // Extract axis of rotation
     let axis_x = extract::number(args[4].as_ref())?;
     let axis_y = extract::number(args[5].as_ref())?;
     let axis_z = extract::number(args[6].as_ref())?;
-    
+
     // Extract angle in degrees
     let angle_degrees = extract::number(args[7].as_ref())?;
-    
+
     // Create a rotation transformation
     let mut transform = gp_Trsf::new();
     let center_point = OCPoint3::new(center_x, center_y, center_z);
-    let axis_direction = Direction::new(axis_x, axis_y, axis_z);
-    
+    // Using Direction constructor with correct method name for opencascade-sys
+    let axis_direction = Direction::create(axis_x, axis_y, axis_z);
+
     // Convert angle to radians
     let angle_radians = angle_degrees * std::f64::consts::PI / 180.0;
-    
+
     // Set up rotation
-    transform.set_rotation(Pnt::from(center_point), axis_direction, angle_radians);
-    
+    // Using OCPoint3 directly as it is already gp_Pnt
+    transform.set_rotation(center_point, axis_direction, angle_radians);
+
     // Apply the transformation to the shape
     let transformation = BRepBuilderAPI_Transform::new(&shape, &transform, true);
     let result = transformation.shape();
-    
+
     // Return the rotated shape
     return_model(Model::OCShape(result), env)
 }
@@ -773,7 +776,9 @@ fn rotate(args: &[Arc<Expr>], env: Arc<Mutex<Env>>) -> Result<Arc<Expr>, String>
             angle_deg.into(),
         )))),
         Model::Mesh(_) => Err("nothing can be done on mesh".to_string()),
-        _ => Err("rotate: Expected a Truck model. Use oc-rotate for OpenCascade models.".to_string()),
+        _ => {
+            Err("rotate: Expected a Truck model. Use oc-rotate for OpenCascade models.".to_string())
+        }
     }?;
 
     return_model(rotated_model, env)
@@ -794,38 +799,40 @@ fn rotate(args: &[Arc<Expr>], env: Arc<Mutex<Env>>) -> Result<Arc<Expr>, String>
 #[lisp_fn]
 fn oc_rotate(args: &[Arc<Expr>], env: Arc<Mutex<Env>>) -> Result<Arc<Expr>, String> {
     assert_arg_count(args, 8)?;
-    
+
     // Extract the shape
     let shape = extract::oc_shape(args[0].as_ref(), &env)?;
-    
+
     // Extract center point
     let center_x = extract::number(args[1].as_ref())?;
     let center_y = extract::number(args[2].as_ref())?;
     let center_z = extract::number(args[3].as_ref())?;
-    
+
     // Extract axis of rotation
     let axis_x = extract::number(args[4].as_ref())?;
     let axis_y = extract::number(args[5].as_ref())?;
     let axis_z = extract::number(args[6].as_ref())?;
-    
+
     // Extract angle in degrees
     let angle_degrees = extract::number(args[7].as_ref())?;
-    
+
     // Create a rotation transformation
     let mut transform = gp_Trsf::new();
     let center_point = OCPoint3::new(center_x, center_y, center_z);
-    let axis_direction = Direction::new(axis_x, axis_y, axis_z);
-    
+    // Using Direction constructor with correct method name for opencascade-sys
+    let axis_direction = Direction::create(axis_x, axis_y, axis_z);
+
     // Convert angle to radians
     let angle_radians = angle_degrees * std::f64::consts::PI / 180.0;
-    
+
     // Set up rotation
-    transform.set_rotation(Pnt::from(center_point), axis_direction, angle_radians);
-    
+    // Using OCPoint3 directly as it is already gp_Pnt
+    transform.set_rotation(center_point, axis_direction, angle_radians);
+
     // Apply the transformation to the shape
     let transformation = BRepBuilderAPI_Transform::new(&shape, &transform, true);
     let result = transformation.shape();
-    
+
     // Return the rotated shape
     return_model(Model::OCShape(result), env)
 }
