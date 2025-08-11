@@ -4,8 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
+    "dev": "npm run build:wasm && vite",
+    "build": "npm run build:wasm && tsc && vite build",
+    "build:wasm": "cd wasm-lisp && wasm-pack build --target web --out-dir ../pkg",
     "preview": "vite preview",
     "tauri": "tauri"
   },
@@ -16,6 +17,7 @@
     "@tauri-apps/plugin-shell": "~2",
     "elm": "^0.19.1-6",
     "elm-format": "^0.8.7",
+    "manifold-3d": "^3.2.1",
     "setem": "^0.6.1"
   },
   "devDependencies": {

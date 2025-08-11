@@ -3,18 +3,32 @@ import elmPlugin from "vite-plugin-elm";
 
 // https://vitejs.dev/config/
 export default defineConfig(async () => ({
-  // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
-  //
-  // 1. prevent vite from obscuring rust errors
+  // Configuration for WASM-based CAD application
   clearScreen: false,
-  // 2. tauri expects a fixed port, fail if that port is not available
   plugins: [elmPlugin({ debug: false })],
   server: {
     port: 1420,
-    strictPort: true,
-    watch: {
-      // 3. tell vite to ignore watching `src-tauri`
-      ignored: ["**/tauri/**"],
+    strictPort: false, // Allow fallback to other ports
+    fs: {
+      // Allow serving files from the pkg directory (WASM build output)
+      allow: ['..', './pkg']
     },
+    headers: {
+      // Required headers for WASM and SharedArrayBuffer support
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Embedder-Policy': 'require-corp'
+    }
+  },
+  build: {
+    target: 'es2020',
+    rollupOptions: {
+      external: [],
+    },
+  },
+  optimizeDeps: {
+    exclude: ['manifold-3d'], // Don't pre-bundle manifold-3d as it contains WASM
+  },
+  worker: {
+    format: 'es',
   },
 }));

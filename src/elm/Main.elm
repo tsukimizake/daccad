@@ -1,27 +1,23 @@
 module Main exposing (main)
 
 import Angle
-import Basics.Extra exposing (noCmd, withCmd)
-import Bindings exposing (FromTauriCmdType(..), ToTauriCmdType(..))
+import Basics.Extra exposing (noCmd, withCmd, withCmds)
 import Browser
 import Color
-import Css exposing (absolute, backgroundColor, border, borderColor, borderRadius, borderStyle, borderWidth, bottom, color, cursor, fontFamily, height, hover, left, monospace, padding, padding2, pct, pointer, position, preWrap, px, relative, rgb, right, solid, top, whiteSpace, zero)
+import Css
 import Css.Extra exposing (..)
+import Generated exposing (FromElmMessage(..), ModelId(..), ToElmMessage(..), ValueInner)
 import Html.Styled exposing (..)
-import Html.Styled.Attributes exposing (css)
+import Html.Styled.Attributes exposing (css, value)
 import Html.Styled.Events exposing (..)
-import Html.Styled.Lazy exposing (lazy)
 import Input exposing (textInput)
-import Length exposing (Meters)
-import Point3d exposing (Point3d)
-import RecordSetter exposing (..)
+import Point3d
 import Scene
 import Scene3d
 import Scene3d.Material as Material
-import StlDecoder exposing (Stl, Vec)
-import Task
-import TauriCmd
-import Triangle3d exposing (Triangle3d)
+import StlDecoder exposing (Stl)
+import Triangle3d
+import WasmLisp
 
 
 
@@ -47,6 +43,7 @@ type alias Model =
     , sourceCode : String
     , console : List String
     , previews : List PreviewConfig
+    , wasmInitialized : Bool
     }
 
 
@@ -64,8 +61,9 @@ init _ =
     , sourceCode = ""
     , console = []
     , previews = []
+    , wasmInitialized = False
     }
-        |> withCmd (emit <| ToTauri (RequestCode "../hoge.lisp"))
+        |> noCmd
 
 
 createPreviewConfig : Int -> Stl -> PreviewConfig
@@ -98,82 +96,105 @@ createPreviewConfig id stl =
     }
 
 
-emit : Msg -> Cmd Msg
-emit msg =
-    Task.perform identity (Task.succeed msg)
-
-
 
 -- UPDATE
 
 
 type Msg
-    = FromTauri Bindings.FromTauriCmdType
-    | ToTauri Bindings.ToTauriCmdType
+    = FromWasm ToElmMessage
+    | EvaluateLisp String
+    | LoadLispFile String
     | SetSourceFilePath String
     | SceneMsg Int Scene.Msg
     | ShowSaveDialog Int
+    | Nop
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg mPrev =
     case msg of
-        FromTauri cmd ->
-            case cmd of
-                Code code ->
-                    mPrev
-                        |> s_sourceCode code
+        FromWasm toElmMessage ->
+            case toElmMessage of
+                EvaluationResult { result } ->
+                    case result of
+                        Ok res ->
+                            let
+                                -- Request STL bytes for each model
+                                requestStlBytesCommands =
+                                    res.previewList
+                                        |> List.map (\(ModelId id) -> WasmLisp.toWasm <| GetStlBytes { modelId = id })
+
+                                successMsg =
+                                    "Evaluation successful: " ++ valueToString res.value
+                            in
+                            { mPrev
+                                | console = successMsg :: mPrev.console
+                            }
+                                |> withCmds requestStlBytesCommands
+
+                        Err err ->
+                            { mPrev | console = err :: mPrev.console }
+                                |> noCmd
+
+                StlBytes { modelId, bytes } ->
+                    case StlDecoder.run bytes of
+                        Just stl ->
+                            let
+                                newPreviewConfig =
+                                    createPreviewConfig modelId stl
+
+                                updatedPreviews =
+                                    newPreviewConfig :: mPrev.previews
+
+                                consoleMsg =
+                                    "Added preview for model " ++ String.fromInt modelId
+                            in
+                            { mPrev
+                                | previews = updatedPreviews
+                                , console = consoleMsg :: mPrev.console
+                            }
+                                |> noCmd
+
+                        Nothing ->
+                            { mPrev
+                                | console = ("Failed to decode STL for model " ++ String.fromInt modelId) :: mPrev.console
+                            }
+                                |> noCmd
+
+                FileLoaded { path, content } ->
+                    { mPrev
+                        | sourceCode = content
+                        , sourceFilePath = path
+                        , console = ("Loaded file: " ++ path) :: mPrev.console
+                    }
                         |> noCmd
 
-                EvalOk res ->
-                    mPrev
-                        |> s_previews
-                            (res.previews
-                                |> List.concatMap
-                                    (\id ->
-                                        case
-                                            res.polys
-                                                |> List.filter (\( stlId, _ ) -> stlId == id)
-                                                |> List.head
-                                                |> Maybe.map Tuple.second
-                                                |> Maybe.map TauriCmd.decodeStl
-                                        of
-                                            Just stl ->
-                                                [ createPreviewConfig id stl ]
-
-                                            Nothing ->
-                                                []
-                                    )
-                            )
+                FileLoadError { error } ->
+                    { mPrev
+                        | console = ("File load error: " ++ error) :: mPrev.console
+                    }
                         |> noCmd
 
-                EvalError err ->
-                    mPrev
-                        |> s_console (err :: mPrev.console)
+                Error { message } ->
+                    { mPrev
+                        | console = ("Error: " ++ message) :: mPrev.console
+                    }
                         |> noCmd
 
-                SaveStlFileOk message ->
-                    mPrev
-                        |> s_console (message :: mPrev.console)
-                        |> noCmd
-
-                SaveStlFileError error ->
-                    mPrev
-                        |> s_console (error :: mPrev.console)
-                        |> noCmd
-
-        ToTauri cmd ->
+        EvaluateLisp code ->
             mPrev
-                |> withCmd (TauriCmd.toTauri cmd)
+                |> withCmd (WasmLisp.toWasm (EvalLisp { code = code }))
+
+        LoadLispFile path ->
+            mPrev
+                |> withCmd (WasmLisp.toWasm (LoadFile { filePath = path }))
 
         SetSourceFilePath path ->
-            mPrev
-                |> s_sourceFilePath path
+            { mPrev | sourceFilePath = path }
                 |> noCmd
 
         SceneMsg previewId sceneMsg ->
             let
-                -- Update the isDragging field and sceneModel of the specified preview
                 updatedPreviews =
                     List.map
                         (\preview ->
@@ -181,8 +202,6 @@ update msg mPrev =
                                 let
                                     ( updatedSceneModel, isDragging ) =
                                         Scene.update sceneMsg preview.sceneModel
-
-                                    -- Remove debug log since everything is working now
                                 in
                                 { preview
                                     | isDragging = isDragging
@@ -194,15 +213,41 @@ update msg mPrev =
                         )
                         mPrev.previews
             in
-            mPrev
-                |> s_previews updatedPreviews
+            { mPrev | previews = updatedPreviews }
                 |> noCmd
 
-        ShowSaveDialog stlId ->
-            -- For simplicity, just use a hardcoded filename
-            -- In a real implementation, you would use a file dialog here
-            mPrev
-                |> withCmd (TauriCmd.toTauri (Bindings.SaveStlFile stlId "output.stl"))
+        ShowSaveDialog previewId ->
+            { mPrev | console = ("Save dialog for preview " ++ String.fromInt previewId) :: mPrev.console }
+                |> noCmd
+
+        Nop ->
+            mPrev |> noCmd
+
+
+
+-- Helper function to convert ValueInner to string for display
+
+
+valueToString : ValueInner -> String
+valueToString value =
+    case value of
+        Generated.Integer n ->
+            String.fromInt n
+
+        Generated.Double f ->
+            String.fromFloat f
+
+        Generated.String s ->
+            "\"" ++ s ++ "\""
+
+        Generated.Symbol s ->
+            s
+
+        Generated.Stl (Generated.ModelId id) ->
+            "<stl:" ++ String.fromInt id ++ ">"
+
+        Generated.List vals ->
+            "(" ++ String.join " " (List.map valueToString vals) ++ ")"
 
 
 
@@ -212,7 +257,6 @@ update msg mPrev =
 subscriptions : Model -> Sub Msg
 subscriptions model =
     let
-        -- For any preview that is currently being dragged, we need mouse move and mouse up events
         draggingSubs =
             model.previews
                 |> List.filter .isDragging
@@ -221,10 +265,8 @@ subscriptions model =
                         Sub.map (SceneMsg preview.stlId) (Scene.subscriptions True)
                     )
 
-        -- For all other previews, we need mouse down events to start dragging
         nonDraggingSubs =
             if List.any .isDragging model.previews then
-                -- If any preview is being dragged, don't listen for mouseDown on others
                 []
 
             else
@@ -234,8 +276,18 @@ subscriptions model =
                             Sub.map (SceneMsg preview.stlId) (Scene.subscriptions False)
                         )
     in
-    Sub.batch
-        (TauriCmd.fromTauri FromTauri :: (draggingSubs ++ nonDraggingSubs))
+    Sub.batch <|
+        WasmLisp.fromWasm
+            (\mmsg ->
+                case mmsg of
+                    Just msg ->
+                        FromWasm msg
+
+                    Nothing ->
+                        Nop
+            )
+            :: draggingSubs
+            ++ nonDraggingSubs
 
 
 
@@ -244,91 +296,184 @@ subscriptions model =
 
 view : Model -> Html Msg
 view model =
-    let
-        point : Vec -> Point3d Meters Vec
-        point ( x, y, z ) =
-            Point3d.meters x y z
+    div
+        [ css
+            [ Css.displayFlex
+            , Css.height (Css.vh 100)
+            ]
+        ]
+        [ -- Left panel for code editor and console
+          div
+            [ css
+                [ Css.width (Css.pct 30)
+                , Css.displayFlex
+                , Css.flexDirection Css.column
+                , Css.borderRight3 (Css.px 1) Css.solid (Css.rgb 200 200 200)
+                ]
+            ]
+            [ -- File path input
+              div
+                [ css [ Css.padding (Css.px 10) ] ]
+                [ div [ css [ Css.width (Css.pct 100) ] ]
+                    [ textInput model.sourceFilePath SetSourceFilePath ]
+                ]
 
-        entity : ( Vec, Vec, Vec ) -> Scene3d.Entity Vec
-        entity ( a, b, c ) =
-            let
-                tri : ( Vec, Vec, Vec ) -> Triangle3d Meters Vec
-                tri ( p, q, r ) =
-                    Triangle3d.from (point p) (point q) (point r)
-            in
-            Scene3d.facet (Material.matte Color.lightBlue) (tri ( a, b, c ))
-
-        -- Create a preview with a save button for each STL model
-        viewPreview : PreviewConfig -> Html Msg
-        viewPreview preview =
-            let
-                { stlId, stl, sceneModel } =
-                    preview
-
-                previewLabel =
-                    "Model Id" ++ String.fromInt stlId
-            in
-            div [ css [ position relative ] ]
-                [ div [ css [ position absolute, top (px 10), left (px 10), color (rgb 255 255 255) ] ]
-                    [ text previewLabel ]
-                , Html.Styled.map (SceneMsg stlId) (Scene.preview sceneModel entity stl)
-                , div
-                    [ css
-                        [ position absolute
-                        , bottom (px 10)
-                        , right (px 10)
+            -- Load and evaluate buttons
+            , div
+                [ css [ Css.padding (Css.px 10), Css.displayFlex, Css.property "gap" "10px" ] ]
+                [ button
+                    [ onClick (LoadLispFile model.sourceFilePath)
+                    , css
+                        [ Css.padding2 (Css.px 8) (Css.px 16)
+                        , Css.backgroundColor (Css.rgb 70 130 180)
+                        , Css.color (Css.rgb 255 255 255)
+                        , Css.border Css.zero
+                        , Css.borderRadius (Css.px 4)
+                        , Css.cursor Css.pointer
                         ]
                     ]
-                    [ button
-                        [ onClick (ShowSaveDialog stlId)
-                        , css
-                            [ backgroundColor (rgb 70 130 180)
-                            , color (rgb 255 255 255)
-                            , padding2 (px 8) (px 12)
-                            , borderRadius (px 4)
-                            , border zero
-                            , cursor pointer
-                            , hover [ backgroundColor (rgb 50 110 160) ]
-                            ]
+                    [ text "Load" ]
+                , button
+                    [ onClick (EvaluateLisp model.sourceCode)
+                    , css
+                        [ Css.padding2 (Css.px 8) (Css.px 16)
+                        , Css.backgroundColor (Css.rgb 34 139 34)
+                        , Css.color (Css.rgb 255 255 255)
+                        , Css.border Css.zero
+                        , Css.borderRadius (Css.px 4)
+                        , Css.cursor Css.pointer
                         ]
-                        [ text "Save as STL" ]
                     ]
+                    [ text "Evaluate" ]
                 ]
-    in
-    div [ css [ displayGrid, gridTemplateColumns "repeat(2, 1fr)", gridColumnGap "10px", height (pct 100) ] ]
-        [ div [ css [ height (pct 100) ] ]
-            (model.previews |> List.map (\preview -> lazy viewPreview preview))
-        , div []
-            [ text "file path"
-            , textInput model.sourceFilePath SetSourceFilePath
-            , button [ onClick (ToTauri (RequestCode model.sourceFilePath)) ] [ text "read file" ]
-            , button [ onClick (ToTauri RequestEval) ] [ text "eval" ]
-            , p
-                [ css
-                    [ fontFamily monospace
-                    , whiteSpace preWrap
-                    , borderStyle solid
-                    , borderWidth (px 1)
-                    ]
-                ]
-                [ text model.sourceCode ]
 
-            -- console
+            -- Code editor
             , div
                 [ css
-                    [ fontFamily monospace
-                    , borderStyle solid
-                    , borderColor black
-                    , borderWidth (px 2)
+                    [ Css.flexGrow (Css.int 1)
+                    , Css.padding (Css.px 10)
                     ]
                 ]
-                (model.console
-                    |> List.map (\line -> Html.Styled.div [ css [ padding (px 5) ] ] [ text line ])
-                )
+                [ textarea
+                    [ css
+                        [ Css.width (Css.pct 100)
+                        , Css.height (Css.pct 60)
+                        , Css.fontFamily Css.monospace
+                        , Css.fontSize (Css.px 14)
+                        , Css.border3 (Css.px 1) Css.solid (Css.rgb 200 200 200)
+                        , Css.borderRadius (Css.px 4)
+                        , Css.padding (Css.px 8)
+                        , Css.resize Css.none
+                        ]
+                    , onInput EvaluateLisp
+                    , value model.sourceCode
+                    ]
+                    []
+
+                -- Console
+                , div
+                    [ css
+                        [ Css.height (Css.pct 40)
+                        , Css.marginTop (Css.px 10)
+                        , Css.border3 (Css.px 1) Css.solid (Css.rgb 200 200 200)
+                        , Css.borderRadius (Css.px 4)
+                        , Css.padding (Css.px 8)
+                        , Css.backgroundColor (Css.rgb 248 248 248)
+                        , Css.overflowY Css.auto
+                        , Css.fontFamily Css.monospace
+                        , Css.fontSize (Css.px 12)
+                        ]
+                    ]
+                    (model.console
+                        |> List.reverse
+                        |> List.map (\msg -> div [] [ text msg ])
+                    )
+                ]
+            ]
+
+        -- Right panel for 3D previews
+        , div
+            [ css
+                [ Css.width (Css.pct 70)
+                , Css.displayFlex
+                , Css.flexDirection Css.column
+                , Css.padding (Css.px 10)
+                , Css.property "gap" "10px"
+                , Css.overflowY Css.auto
+                ]
+            ]
+            (if List.isEmpty model.previews then
+                [ div
+                    [ css
+                        [ Css.textAlign Css.center
+                        , Css.marginTop (Css.px 50)
+                        , Css.color (Css.rgb 128 128 128)
+                        ]
+                    ]
+                    [ text "No previews to display. Evaluate some Lisp code to see results." ]
+                ]
+
+             else
+                List.map viewPreview model.previews
+            )
+        ]
+
+
+viewPreview : PreviewConfig -> Html Msg
+viewPreview config =
+    div
+        [ css
+            [ Css.border3 (Css.px 1) Css.solid (Css.rgb 200 200 200)
+            , Css.borderRadius (Css.px 8)
+            , Css.padding (Css.px 15)
+            , Css.backgroundColor (Css.rgb 255 255 255)
+            ]
+        ]
+        [ -- Preview header
+          div
+            [ css
+                [ Css.displayFlex
+                , Css.justifyContent Css.spaceBetween
+                , Css.alignItems Css.center
+                , Css.marginBottom (Css.px 10)
+                ]
+            ]
+            [ h3
+                [ css [ Css.margin Css.zero, Css.fontSize (Css.px 16) ] ]
+                [ text ("Preview " ++ String.fromInt config.stlId) ]
+            , button
+                [ onClick (ShowSaveDialog config.stlId)
+                , css
+                    [ Css.padding2 (Css.px 6) (Css.px 12)
+                    , Css.backgroundColor (Css.rgb 220 220 220)
+                    , Css.border Css.zero
+                    , Css.borderRadius (Css.px 4)
+                    , Css.cursor Css.pointer
+                    , Css.fontSize (Css.px 12)
+                    ]
+                ]
+                [ text "Save STL" ]
+            ]
+
+        -- 3D Scene
+        , div
+            [ css
+                [ Css.height (Css.px 300)
+                , Css.border3 (Css.px 1) Css.solid (Css.rgb 230 230 230)
+                , Css.borderRadius (Css.px 4)
+                , Css.overflow Css.hidden
+                ]
+            ]
+            [ Html.Styled.map (SceneMsg config.stlId) <|
+                Scene.preview config.sceneModel triangleToEntity config.stl
             ]
         ]
 
 
-black : Css.Color
-black =
-    rgb 0 0 0
+triangleToEntity : ( ( Float, Float, Float ), ( Float, Float, Float ), ( Float, Float, Float ) ) -> Scene3d.Entity coordinates
+triangleToEntity ( ( x1, y1, z1 ), ( x2, y2, z2 ), ( x3, y3, z3 ) ) =
+    Scene3d.triangle (Material.color Color.lightBlue) <|
+        Triangle3d.from
+            (Point3d.meters x1 y1 z1)
+            (Point3d.meters x2 y2 z2)
+            (Point3d.meters x3 y3 z3)

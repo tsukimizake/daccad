@@ -1,4 +1,4 @@
-module Basics.Extra exposing (noCmd, withCmd)
+module Basics.Extra exposing (noCmd, withCmd, withCmds)
 
 
 noCmd : model -> ( model, Cmd msg )
@@ -9,3 +9,8 @@ noCmd m =
 withCmd : Cmd msg -> model -> ( model, Cmd msg )
 withCmd cmd m =
     ( m, cmd )
+
+
+withCmds : List (Cmd msg) -> model -> ( model, Cmd msg )
+withCmds cmds m =
+    ( m, Cmd.batch cmds )
