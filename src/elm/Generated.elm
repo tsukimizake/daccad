@@ -77,7 +77,7 @@ evaledEncoder struct =
 
 
 type FromElmMessage
-    = EvalLisp { code : String }
+    = EvalCode { code : String }
     | GetStlBytes { modelId : Int }
     | LoadFile { filePath : String }
 
@@ -85,8 +85,8 @@ type FromElmMessage
 fromElmMessageEncoder : FromElmMessage -> Json.Encode.Value
 fromElmMessageEncoder enum =
     case enum of
-        EvalLisp { code } ->
-            Json.Encode.object [ ( "type", Json.Encode.string "EvalLisp" ), ( "code", (Json.Encode.string) code ) ]
+        EvalCode { code } ->
+            Json.Encode.object [ ( "type", Json.Encode.string "EvalCode" ), ( "code", (Json.Encode.string) code ) ]
         GetStlBytes { modelId } ->
             Json.Encode.object [ ( "type", Json.Encode.string "GetStlBytes" ), ( "model_id", (Json.Encode.int) modelId ) ]
         LoadFile { filePath } ->
@@ -151,8 +151,8 @@ evaledDecoder =
 fromElmMessageDecoder : Json.Decode.Decoder FromElmMessage
 fromElmMessageDecoder = 
         let
-            elmRsConstructEvalLisp code =
-                        EvalLisp { code = code }
+            elmRsConstructEvalCode code =
+                        EvalCode { code = code }
             elmRsConstructGetStlBytes modelId =
                         GetStlBytes { modelId = modelId }
             elmRsConstructLoadFile filePath =
@@ -162,8 +162,8 @@ fromElmMessageDecoder =
         |> Json.Decode.andThen
             (\tag ->
                 case tag of
-                    "EvalLisp" ->
-                        Json.Decode.succeed elmRsConstructEvalLisp |> Json.Decode.andThen (\x -> Json.Decode.map x (Json.Decode.field "code" (Json.Decode.string)))
+                    "EvalCode" ->
+                        Json.Decode.succeed elmRsConstructEvalCode |> Json.Decode.andThen (\x -> Json.Decode.map x (Json.Decode.field "code" (Json.Decode.string)))
                     "GetStlBytes" ->
                         Json.Decode.succeed elmRsConstructGetStlBytes |> Json.Decode.andThen (\x -> Json.Decode.map x (Json.Decode.field "model_id" (Json.Decode.int)))
                     "LoadFile" ->

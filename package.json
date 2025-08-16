@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "npm run build:wasm && vite",
     "build": "npm run build:wasm && tsc && vite build",
-    "build:wasm": "cd wasm-lisp && wasm-pack build --target web --out-dir ../pkg",
+    "build:wasm": "cd wasm-daccad-engine && wasm-pack build --target web --out-dir ../pkg",
     "preview": "vite preview",
     "tauri": "tauri"
   },

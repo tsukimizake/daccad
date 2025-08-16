@@ -1,4 +1,4 @@
-port module WasmLisp exposing (fromWasm, getStlBytes, toWasm)
+port module WasmBridge exposing (fromWasm, getStlBytes, toWasm)
 
 import Generated exposing (FromElmMessage(..), ModelId(..), ToElmMessage(..), fromElmMessageEncoder, toElmMessageDecoder)
 import Json.Decode as Decode exposing (decodeValue)

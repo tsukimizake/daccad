@@ -319,7 +319,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "wasm-lisp"
+name = "wasm-daccad-engine"
 version = "0.1.0"
 dependencies = [
  "elm_rs",

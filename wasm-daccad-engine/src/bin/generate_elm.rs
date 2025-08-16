@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::Write;
 
 // Import types from the lib crate
-use wasm_lisp::*;
+use wasm_daccad_engine::*;
 
 fn main() {
     let mut target = Vec::new();

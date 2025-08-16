@@ -17,7 +17,7 @@ import Scene3d
 import Scene3d.Material as Material
 import StlDecoder exposing (Stl)
 import Triangle3d
-import WasmLisp
+import WasmBridge
 
 
 
@@ -57,7 +57,7 @@ type alias PreviewConfig =
 
 init : () -> ( Model, Cmd Msg )
 init _ =
-    { sourceFilePath = "../hoge.lisp"
+    { sourceFilePath = "../hoge.pl"
     , sourceCode = ""
     , console = []
     , previews = []
@@ -102,8 +102,7 @@ createPreviewConfig id stl =
 
 type Msg
     = FromWasm ToElmMessage
-    | EvaluateLisp String
-    | LoadLispFile String
+    | ToWasm FromElmMessage
     | SetSourceFilePath String
     | SceneMsg Int Scene.Msg
     | ShowSaveDialog Int
@@ -122,7 +121,7 @@ update msg mPrev =
                                 -- Request STL bytes for each model
                                 requestStlBytesCommands =
                                     res.previewList
-                                        |> List.map (\(ModelId id) -> WasmLisp.toWasm <| GetStlBytes { modelId = id })
+                                        |> List.map (\(ModelId id) -> WasmBridge.toWasm <| GetStlBytes { modelId = id })
 
                                 successMsg =
                                     "Evaluation successful: " ++ valueToString res.value
@@ -181,13 +180,8 @@ update msg mPrev =
                     }
                         |> noCmd
 
-        EvaluateLisp code ->
-            mPrev
-                |> withCmd (WasmLisp.toWasm (EvalLisp { code = code }))
-
-        LoadLispFile path ->
-            mPrev
-                |> withCmd (WasmLisp.toWasm (LoadFile { filePath = path }))
+        ToWasm fromElmMessage ->
+            mPrev |> withCmd (WasmBridge.toWasm <| fromElmMessage)
 
         SetSourceFilePath path ->
             { mPrev | sourceFilePath = path }
@@ -277,7 +271,7 @@ subscriptions model =
                         )
     in
     Sub.batch <|
-        WasmLisp.fromWasm
+        WasmBridge.fromWasm
             (\mmsg ->
                 case mmsg of
                     Just msg ->
@@ -322,7 +316,7 @@ view model =
             , div
                 [ css [ Css.padding (Css.px 10), Css.displayFlex, Css.property "gap" "10px" ] ]
                 [ button
-                    [ onClick (LoadLispFile model.sourceFilePath)
+                    [ onClick (ToWasm <| LoadFile { filePath = model.sourceFilePath })
                     , css
                         [ Css.padding2 (Css.px 8) (Css.px 16)
                         , Css.backgroundColor (Css.rgb 70 130 180)
@@ -334,7 +328,7 @@ view model =
                     ]
                     [ text "Load" ]
                 , button
-                    [ onClick (EvaluateLisp model.sourceCode)
+                    [ onClick (ToWasm <| EvalCode { code = model.sourceCode })
                     , css
                         [ Css.padding2 (Css.px 8) (Css.px 16)
                         , Css.backgroundColor (Css.rgb 34 139 34)
@@ -365,7 +359,7 @@ view model =
                         , Css.padding (Css.px 8)
                         , Css.resize Css.none
                         ]
-                    , onInput EvaluateLisp
+                    , onInput SetSourceFilePath
                     , value model.sourceCode
                     ]
                     []
@@ -410,7 +404,7 @@ view model =
                         , Css.color (Css.rgb 128 128 128)
                         ]
                     ]
-                    [ text "No previews to display. Evaluate some Lisp code to see results." ]
+                    [ text "No previews to display. Evaluate some code to see results." ]
                 ]
 
              else

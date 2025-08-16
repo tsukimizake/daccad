@@ -19,7 +19,7 @@ pub use parser::*;
 #[tsify(into_wasm_abi, from_wasm_abi)]
 #[serde(tag = "type")]
 pub enum FromElmMessage {
-    EvalLisp { code: String },
+    EvalCode { code: String },
     GetStlBytes { model_id: u64 },
     LoadFile { file_path: String },
 }
@@ -47,38 +47,29 @@ pub enum ToElmMessage {
     },
 }
 
-// Import the `console.log` function from the browser console
 #[wasm_bindgen]
-extern "C" {
-    #[wasm_bindgen(js_namespace = console)]
-    fn log(s: &str);
-}
-
-// Define a macro for easier console logging
-macro_rules! console_log {
-    ($($t:tt)*) => (log(&format_args!($($t)*).to_string()))
-}
-
-#[wasm_bindgen]
-pub struct WasmLispEnv {
+pub struct DaccadEngine {
     env: env::Env,
 }
 
 #[wasm_bindgen]
-impl WasmLispEnv {
+impl DaccadEngine {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> WasmLispEnv {
-        WasmLispEnv {
+    pub fn new() -> DaccadEngine {
+        DaccadEngine {
             env: eval::default_env(),
         }
     }
 
     #[wasm_bindgen]
-    pub fn eval_lisp(&mut self, code: &str) -> Result<JsValue, String> {
-        match eval::run_file(code, &mut self.env) {
-            Ok(result) => Ok(serde_wasm_bindgen::to_value(&result).unwrap()),
-            Err(err) => Err(err),
-        }
+    pub fn eval_code(&mut self, code: &str) -> Result<JsValue, String> {
+        // Dummy implementation for future Prolog integration
+        let _ = code;
+        let dummy_result = eval::Evaled {
+            value: ValueInner::String("Dummy response - Prolog integration pending".to_string()),
+            preview_list: vec![],
+        };
+        Ok(serde_wasm_bindgen::to_value(&dummy_result).unwrap())
     }
 
     #[wasm_bindgen]
@@ -92,12 +83,15 @@ impl WasmLispEnv {
         match serde_json::from_str::<FromElmMessage>(message_json) {
             Ok(message) => {
                 let response = match message {
-                    FromElmMessage::EvalLisp { code } => {
-                        match eval::run_file(&code, &mut self.env) {
-                            Ok(evaled_result) => ToElmMessage::EvaluationResult {
-                                result: Ok(evaled_result),
-                            },
-                            Err(err) => ToElmMessage::EvaluationResult { result: Err(err) },
+                    FromElmMessage::EvalCode { code: _ } => {
+                        // Dummy response for future Prolog integration
+                        ToElmMessage::EvaluationResult {
+                            result: Ok(eval::Evaled {
+                                value: ValueInner::String(
+                                    "Dummy response - Prolog integration pending".to_string(),
+                                ),
+                                preview_list: vec![],
+                            }),
                         }
                     }
                     FromElmMessage::GetStlBytes { model_id } => {
@@ -200,4 +194,3 @@ impl WasmLispEnv {
         bytes
     }
 }
-

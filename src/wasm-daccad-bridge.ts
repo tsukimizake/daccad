@@ -1,5 +1,5 @@
-import init, { WasmLispEnv } from '../pkg/wasm_lisp.js';
-import type { FromElmMessage, ToElmMessage, ModelId } from '../pkg/wasm_lisp.js';
+import init, { DaccadEngine } from '../pkg/wasm_daccad_engine.js';
+import type { FromElmMessage, ToElmMessage, ModelId } from '../pkg/wasm_daccad_engine.js';
 import * as Manifold from 'manifold-3d';
 import type { Manifold as ManifoldType } from 'manifold-3d';
 
@@ -31,23 +31,23 @@ declare global {
   }
 }
 
-type WasmLispBridgeState =
+type DaccadBridgeState =
   | { status: 'uninitialized' }
   | {
     status: 'initialized';
-    lispEnv: WasmLispEnv;
+    engine: DaccadEngine;
     manifold: Manifold.ManifoldToplevel;
     elmApp: ElmApp | null;
   };
 
-let state: WasmLispBridgeState = { status: 'uninitialized' };
+let state: DaccadBridgeState = { status: 'uninitialized' };
 
 
-export const initWasmLispBridge = async (): Promise<void> => {
+export const initDaccadBridge = async (): Promise<void> => {
   if (state.status === 'initialized') return;
 
   await init();
-  const lispEnv = new WasmLispEnv();
+  const engine = new DaccadEngine();
 
   const Module = await Manifold.default();
 
@@ -81,11 +81,11 @@ export const initWasmLispBridge = async (): Promise<void> => {
 
   state = {
     status: 'initialized',
-    lispEnv,
+    engine,
     manifold: Module,
     elmApp: null
   };
-  console.log('WASM Lisp Bridge initialized successfully');
+  console.log('Daccad Bridge initialized successfully');
 };
 
 
@@ -93,7 +93,7 @@ export const clearEnv = (): void => {
   if (state.status !== 'initialized') {
     throw new Error('Bridge not initialized');
   }
-  state.lispEnv.clear_env();
+  state.engine.clear_env();
 };
 
 export const getManifold = (): Manifold.ManifoldToplevel | null => {
@@ -156,7 +156,7 @@ export const getStlBytes = (modelId: ModelId): Uint8Array | null => {
     return null;
   }
 
-  const bytes = state.lispEnv.get_mesh_stl_bytes(modelId);
+  const bytes = state.engine.get_mesh_stl_bytes(modelId);
   return bytes ? new Uint8Array(bytes) : null;
 };
 
@@ -198,7 +198,7 @@ const handleFromElmMessage = async (message: FromElmMessage): Promise<void> => {
 
   // Pass other messages directly to rust for processing
   try {
-    const result = state.lispEnv.handle_message(JSON.stringify(message));
+    const result = state.engine.handle_message(JSON.stringify(message));
     sendToElm(JSON.parse(result) as ToElmMessage);
   } catch (error) {
     console.error('Message handling failed:', error);
@@ -219,7 +219,7 @@ export const initWasmElmIntegration = async (elmApp: ElmApp): Promise<void> => {
   setupPorts(elmApp);
 
   try {
-    await initWasmLispBridge();
+    await initDaccadBridge();
     if (state.status === 'initialized') {
       state.elmApp = elmApp;
     }

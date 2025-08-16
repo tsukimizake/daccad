@@ -1,5 +1,5 @@
 import { Elm } from "./elm/Main.elm";
-import { initWasmElmIntegration, type ElmApp } from "./wasm-lisp-bridge.ts";
+import { initWasmElmIntegration, type ElmApp } from "./wasm-daccad-bridge.ts";
 
 // Initialize the Elm app
 const app = Elm.Main.init({
@@ -10,4 +10,4 @@ const app = Elm.Main.init({
 initWasmElmIntegration(app).catch(console.error);
 
 
-console.log("Application initialized with WASM Lisp integration");
+console.log("Application initialized with wasm integration");
