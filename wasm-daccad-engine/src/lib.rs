@@ -63,10 +63,15 @@ impl DaccadEngine {
 
     #[wasm_bindgen]
     pub fn eval_code(&mut self, code: &str) -> Result<JsValue, String> {
+        let cub = manifold_primitives::js_create_cube(1.0, 1.0, 1.0); // Example call to JS function
+        let manifold_object = manifold_primitives::get_and_parse_mesh_data(&cub)?;
         // Dummy implementation for future Prolog integration
         let _ = code;
         let dummy_result = eval::Evaled {
-            value: ValueInner::String("Dummy response - Prolog integration pending".to_string()),
+            value: ValueInner::String(format!(
+                "Dummy evaluation result for code: {:?}",
+                manifold_object
+            )),
             preview_list: vec![],
         };
         Ok(serde_wasm_bindgen::to_value(&dummy_result).unwrap())
@@ -83,15 +88,15 @@ impl DaccadEngine {
         match serde_json::from_str::<FromElmMessage>(message_json) {
             Ok(message) => {
                 let response = match message {
-                    FromElmMessage::EvalCode { code: _ } => {
-                        // Dummy response for future Prolog integration
+                    FromElmMessage::EvalCode { code } => {
+                        let eval_result = self.eval_code(&code);
                         ToElmMessage::EvaluationResult {
-                            result: Ok(eval::Evaled {
-                                value: ValueInner::String(
-                                    "Dummy response - Prolog integration pending".to_string(),
-                                ),
-                                preview_list: vec![],
-                            }),
+                            result: eval_result
+                                .map_err(|e| e.to_string())
+                                .map(|v| eval::Evaled {
+                                    value: ValueInner::String(format!("Evaled result: {:?}", v)),
+                                    preview_list: vec![],
+                                }),
                         }
                     }
                     FromElmMessage::GetStlBytes { model_id } => {

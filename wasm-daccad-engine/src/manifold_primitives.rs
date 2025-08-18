@@ -1,6 +1,7 @@
+use serde_wasm_bindgen;
 use wasm_bindgen::prelude::*;
 
-use crate::env::{Env, ManifoldObject, Model, Point3, extract, gen_id};
+use crate::env::{Env, ManifoldMeshData, ManifoldObject, Model, Point3, extract, gen_id};
 use crate::eval::assert_arg_count;
 use crate::parser::Expr;
 
@@ -8,7 +9,7 @@ use crate::parser::Expr;
 #[wasm_bindgen]
 extern "C" {
     #[wasm_bindgen(js_namespace = ["window", "manifoldBridge"], js_name = "createCube")]
-    fn js_create_cube(width: f64, height: f64, depth: f64) -> JsValue;
+    pub fn js_create_cube(width: f64, height: f64, depth: f64) -> JsValue;
 
     #[wasm_bindgen(js_namespace = ["window", "manifoldBridge"], js_name = "getMeshData")]
     fn js_get_mesh_data(manifold: &JsValue) -> JsValue;
@@ -21,60 +22,38 @@ fn return_model<T: Into<Model>>(model_into: T, env: &mut Env) -> Result<Expr, St
     Ok(Expr::model(id))
 }
 
-// Helper to parse mesh data from JavaScript and create ManifoldObject
-fn parse_mesh_data(mesh_data_js: JsValue) -> Result<ManifoldObject, String> {
-    use wasm_bindgen::JsCast;
+// Helper to get mesh data from manifold and parse it into ManifoldObject
+pub fn get_and_parse_mesh_data(manifold: &JsValue) -> Result<ManifoldObject, String> {
+    // Get mesh data from JavaScript
+    let mesh_data_js = js_get_mesh_data(manifold);
 
-    // Try to cast to object and extract vertices/faces arrays
-    let obj = mesh_data_js
-        .dyn_into::<js_sys::Object>()
-        .map_err(|_| "Failed to convert mesh data to object")?;
+    // Use serde-wasm-bindgen to deserialize the JavaScript object
+    let mesh_data: ManifoldMeshData = serde_wasm_bindgen::from_value(mesh_data_js)
+        .map_err(|e| format!("Failed to deserialize mesh data: {}", e))?;
 
-    // Get vertices array
-    let vertices_val = js_sys::Reflect::get(&obj, &JsValue::from_str("vertices"))
-        .map_err(|_| "Failed to get vertices from mesh data")?;
-    let vertices_array = vertices_val
-        .dyn_into::<js_sys::Array>()
-        .map_err(|_| "Vertices is not an array")?;
-
-    // Get faces array
-    let faces_val = js_sys::Reflect::get(&obj, &JsValue::from_str("faces"))
-        .map_err(|_| "Failed to get faces from mesh data")?;
-    let faces_array = faces_val
-        .dyn_into::<js_sys::Array>()
-        .map_err(|_| "Faces is not an array")?;
-
-    // Parse vertices (assuming they come as [x, y, z, x, y, z, ...])
+    // Convert interleaved vertex properties to Point3 structures
     let mut vertices = Vec::new();
-    for i in (0..vertices_array.length()).step_by(3) {
-        let x = vertices_array
-            .get(i)
-            .as_f64()
-            .ok_or("Invalid vertex x coordinate")?;
-        let y = vertices_array
-            .get(i + 1)
-            .as_f64()
-            .ok_or("Invalid vertex y coordinate")?;
-        let z = vertices_array
-            .get(i + 2)
-            .as_f64()
-            .ok_or("Invalid vertex z coordinate")?;
-        vertices.push(Point3::new(x, y, z));
+    let num_prop = mesh_data.num_prop as usize;
+    if num_prop < 3 {
+        return Err("Number of properties per vertex must be at least 3".to_string());
+    }
+    if mesh_data.vert_properties.len() % num_prop != 0 {
+        return Err("Vertex properties array length must be divisible by numProp".to_string());
     }
 
-    // Parse faces (assuming they come as [i1, i2, i3, i1, i2, i3, ...])
+    for chunk in mesh_data.vert_properties.chunks(num_prop) {
+        // First 3 properties are always x, y, z position
+        vertices.push(Point3::new(chunk[0], chunk[1], chunk[2]));
+    }
+
+    // Convert flat triangle vertex indices array to triangle faces
     let mut faces = Vec::new();
-    for i in (0..faces_array.length()).step_by(3) {
-        let i1 = faces_array.get(i).as_f64().ok_or("Invalid face index 1")? as usize;
-        let i2 = faces_array
-            .get(i + 1)
-            .as_f64()
-            .ok_or("Invalid face index 2")? as usize;
-        let i3 = faces_array
-            .get(i + 2)
-            .as_f64()
-            .ok_or("Invalid face index 3")? as usize;
-        faces.push([i1, i2, i3]);
+    if mesh_data.tri_verts.len() % 3 != 0 {
+        return Err("Triangle vertex indices array length must be divisible by 3".to_string());
+    }
+
+    for chunk in mesh_data.tri_verts.chunks(3) {
+        faces.push([chunk[0] as usize, chunk[1] as usize, chunk[2] as usize]);
     }
 
     Ok(ManifoldObject {
@@ -111,12 +90,9 @@ pub fn cube(args: &[Expr], env: &mut Env) -> Result<Expr, String> {
     let height = extract::number(&args[1])?;
     let depth = extract::number(&args[2])?;
 
-    // Call JavaScript function to create cube and get mesh data
+    // Create cube and get mesh data in one step
     let manifold_js = js_create_cube(width, height, depth);
-    let mesh_data = js_get_mesh_data(&manifold_js);
-
-    // Parse the mesh data from JavaScript to create ManifoldObject
-    let manifold_object = parse_mesh_data(mesh_data)?;
+    let manifold_object = get_and_parse_mesh_data(&manifold_js)?;
 
     return_model(manifold_object, env)
 }
