@@ -68,12 +68,13 @@ impl DaccadEngine {
         // Dummy implementation for future Prolog integration
         let _ = code;
         let dummy_result = eval::Evaled {
-            value: ValueInner::String(format!(
+            value: eval::Value::String(format!(
                 "Dummy evaluation result for code: {:?}",
                 manifold_object
             )),
-            preview_list: vec![],
+            env: vec![],
         };
+
         Ok(serde_wasm_bindgen::to_value(&dummy_result).unwrap())
     }
 
@@ -94,8 +95,8 @@ impl DaccadEngine {
                             result: eval_result
                                 .map_err(|e| e.to_string())
                                 .map(|v| eval::Evaled {
-                                    value: ValueInner::String(format!("Evaled result: {:?}", v)),
-                                    preview_list: vec![],
+                                    value: eval::Value::String(format!("Evaled result: {:?}", v)),
+                                    env: vec![],
                                 }),
                         }
                     }
