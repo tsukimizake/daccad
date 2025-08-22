@@ -11,6 +11,7 @@ mod parser;
 pub use env::*;
 pub use eval::*;
 pub use parser::*;
+pub use manifold_primitives::*;
 
 // Message types defined below will be automatically exported
 
@@ -122,6 +123,17 @@ impl DaccadEngine {
             }
             Err(err) => Err(format!("Invalid JSON: {}", err)),
         }
+    }
+
+    /// Test function to create a cube using manifold types
+    #[wasm_bindgen]
+    pub fn test_manifold_cube(&self, width: f64, height: f64, depth: f64) -> Result<JsValue, String> {
+        let size = [width, height, depth];
+        let mesh_data = manifold_primitives::create_manifold_cube(size)?;
+        
+        // Convert to JsValue for JavaScript interop
+        serde_wasm_bindgen::to_value(&mesh_data)
+            .map_err(|e| format!("Failed to serialize mesh data: {}", e))
     }
 
     #[wasm_bindgen]

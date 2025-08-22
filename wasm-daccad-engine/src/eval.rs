@@ -2,10 +2,13 @@ use elm_rs::{Elm, ElmDecode, ElmEncode};
 use serde::{Deserialize, Serialize};
 use tsify::Tsify;
 
-use crate::ModelId;
+use crate::{ModelId, env};
 
-#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
-pub struct Env {}
+pub use env::Env;
+
+pub fn default_env() -> Env {
+    Env::new()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Elm, ElmDecode, ElmEncode, Tsify)]
 pub struct Evaled {
