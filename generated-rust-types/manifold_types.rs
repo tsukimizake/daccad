@@ -1,9 +1,11 @@
 // Auto-generated Rust types from manifold-3d TypeScript definitions
 
+use wasm_bindgen::prelude::*;
+use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 use std::fmt::Debug;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MeshOptions {
     pub num_prop: f64,
     pub vert_properties: Vec<f32>,
@@ -17,21 +19,20 @@ pub struct MeshOptions {
     pub halfedge_tangent: Option<Float32Array >,
 }
 
-pub type CrossSection = CrossSection;
+// CrossSection from manifold-encapsulated-types - represented as JSValue
+pub type CrossSection = wasm_bindgen::JsValue;
 
-pub type Manifold = Manifold;
+// Manifold from manifold-encapsulated-types - represented as JSValue
+pub type Manifold = wasm_bindgen::JsValue;
 
-pub type Mesh = Mesh;
+// Mesh from manifold-encapsulated-types - represented as JSValue
+pub type Mesh = wasm_bindgen::JsValue;
 
-#[derive(Debug, Clone)]
-pub struct SealedUint32Array {
-    pub length: N,
-}
+// Fixed-size array type for SealedUint32Array
+pub type SealedUint32Array<const N: usize> = [u32; N];
 
-#[derive(Debug, Clone)]
-pub struct SealedFloat32Array {
-    pub length: N,
-}
+// Fixed-size array type for SealedFloat32Array
+pub type SealedFloat32Array<const N: usize> = [f32; N];
 
 pub type Vec2 = [f64; 2];
 
@@ -45,19 +46,7 @@ pub type SimplePolygon = Vec<Vec2>;
 
 pub type Polygons = Vec<SimplePolygon>;
 
-pub type Rect = Rect;
-
-pub type Box = Box;
-
-pub type Smoothness = Smoothness;
-
-pub type FillRule = FillRule;
-
-pub type JoinType = JoinType;
-
-pub type ErrorStatus = ErrorStatus;
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManifoldToplevel {
     pub cross_section: CrossSection,
     pub manifold: Manifold,

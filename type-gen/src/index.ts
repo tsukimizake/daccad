@@ -98,7 +98,7 @@ function processInterface(interfaceDecl: InterfaceDeclaration, generatedTypes: M
     return;
   }
 
-  let rustStruct = `#[derive(Debug, Clone)]\npub struct ${name} {\n`;
+  let rustStruct = `#[derive(Debug, Clone, Serialize, Deserialize)]\npub struct ${name} {\n`;
 
   // Process properties
   for (const prop of properties) {
@@ -195,11 +195,23 @@ function processClass(classDecl: ClassDeclaration, generatedTypes: Map<string, R
   const staticMethods = classDecl.getStaticMethods();
   const properties = classDecl.getProperties();
 
+  // Check if this is an encapsulated type (from manifold-encapsulated-types.d.ts)
+  const sourceFile = classDecl.getSourceFile();
+  const isEncapsulatedType = sourceFile.getFilePath().includes('manifold-encapsulated-types.d.ts');
+
   // Generate struct with properties if any
   let rustStruct: string;
   
-  if (properties.length > 0) {
-    rustStruct = `#[derive(Debug, Clone)]\npub struct ${name} {\n`;
+  if (isEncapsulatedType) {
+    // For encapsulated types like CrossSection, Manifold, Mesh - use JSValue
+    rustStruct = `// ${name} from manifold-encapsulated-types - represented as JSValue\n`;
+    rustStruct += `pub type ${name} = wasm_bindgen::JsValue;\n\n`;
+    
+    // For JSValue types, we don't generate impl blocks
+    generatedTypes.set(name, { name, rustCode: rustStruct });
+    return;
+  } else if (properties.length > 0) {
+    rustStruct = `#[derive(Debug, Clone, Serialize, Deserialize)]\npub struct ${name} {\n`;
     
     for (const prop of properties) {
       const propName = prop.getName();
@@ -209,10 +221,10 @@ function processClass(classDecl: ClassDeclaration, generatedTypes: Map<string, R
     
     rustStruct += "}\n\n";
   } else {
-    // For classes like CrossSection, Manifold that are more like opaque handles
-    rustStruct = `// ${name} is an opaque type representing a manifold-3d object\n`;
-    rustStruct += `#[derive(Debug)]\npub struct ${name} {\n`;
-    rustStruct += `    // This is an opaque handle to the underlying manifold-3d object\n`;
+    // For other classes that are more like opaque handles
+    rustStruct = `// ${name} is an opaque type\n`;
+    rustStruct += `#[derive(Debug, Serialize, Deserialize)]\npub struct ${name} {\n`;
+    rustStruct += `    // This is an opaque handle\n`;
     rustStruct += `    _private: std::marker::PhantomData<()>,\n`;
     rustStruct += "}\n\n";
   }
@@ -314,7 +326,7 @@ function processEnum(enumDecl: EnumDeclaration, generatedTypes: Map<string, Rust
   const name = enumDecl.getName();
   const members = enumDecl.getMembers();
 
-  let rustEnum = `#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum ${name} {\n`;
+  let rustEnum = `#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]\npub enum ${name} {\n`;
 
   for (const member of members) {
     const memberName = member.getName();
@@ -490,8 +502,29 @@ function generateRustOutput(generatedTypes: Map<string, RustType>): void {
 
   let rustOutput = "// Auto-generated Rust types from manifold-3d TypeScript definitions\n\n";
   
-  // Add common imports and type definitions
-  rustOutput += `use std::collections::HashMap;\nuse std::fmt::Debug;\n\n`;
+  // Check what imports we need based on generated types
+  const needsWasmBindgen = Array.from(generatedTypes.values()).some(
+    type => type.rustCode.includes("wasm_bindgen::JsValue")
+  );
+  
+  const needsSerde = Array.from(generatedTypes.values()).some(
+    type => type.rustCode.includes("Serialize") || type.rustCode.includes("Deserialize")
+  );
+
+  // Add necessary imports
+  if (needsWasmBindgen) {
+    rustOutput += `use wasm_bindgen::prelude::*;\n`;
+  }
+  
+  if (needsSerde) {
+    rustOutput += `use serde::{Serialize, Deserialize};\n`;
+  }
+  
+  // Add common imports
+  rustOutput += `use std::collections::HashMap;\n`;
+  rustOutput += `use std::fmt::Debug;\n`;
+  
+  rustOutput += "\n";
 
   // Add all generated types
   for (const [_, rustType] of generatedTypes) {
