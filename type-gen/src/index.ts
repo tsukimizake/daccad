@@ -7,6 +7,13 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Type for wasm_bindgen method signatures
+type Func = {
+  name: string;
+  args: { name: string; type: string; }[];
+  ret: string;
+};
+
 // Union type for different kinds of Rust types
 type RustType =
   | { kind: "struct"; name: string; rustCode: string; }
@@ -18,7 +25,8 @@ type RustType =
   | { kind: "vec3"; name: string; rustCode: string; }
   | { kind: "matrix"; name: string; rustCode: string; }
   | { kind: "sealed_array"; name: string; rustCode: string; }
-  | { kind: "polygon"; name: string; rustCode: string; };
+  | { kind: "polygon"; name: string; rustCode: string; }
+  | { kind: "class"; name: string; methods: Func[]; rustCode: string; };
 
 function createProject(): Project {
   return new Project({
@@ -28,6 +36,20 @@ function createProject(): Project {
       strict: true,
     },
   });
+}
+
+type FilePrefix = 'Global' | 'Encapsulated' | 'Manifold';
+
+function getFilePrefix(filePath: string): FilePrefix {
+  const fileName = path.basename(filePath, '.d.ts');
+  if (fileName.includes('manifold-global-types')) {
+    return 'Global';
+  } else if (fileName.includes('manifold-encapsulated-types')) {
+    return 'Encapsulated';
+  } else if (fileName.includes('manifold')) {
+    return 'Manifold';
+  }
+  throw new Error(`Unknown file: ${filePath}`);
 }
 
 async function generateRustTypes(): Promise<void> {
@@ -64,7 +86,8 @@ async function generateRustTypes(): Promise<void> {
     for (const interfaceDecl of interfaces) {
       const rustType = processInterface(interfaceDecl);
       if (rustType) {
-        generatedTypes.set(rustType.name, rustType);
+        const key = `${sourceFile.getBaseName()}-${rustType.name}`;
+        generatedTypes.set(key, rustType);
       }
     }
 
@@ -74,7 +97,8 @@ async function generateRustTypes(): Promise<void> {
     for (const typeAlias of typeAliases) {
       const rustType = processTypeAlias(typeAlias);
       if (rustType) {
-        generatedTypes.set(rustType.name, rustType);
+        const key = `${sourceFile.getBaseName()}-${rustType.name}`;
+        generatedTypes.set(key, rustType);
       }
     }
 
@@ -84,7 +108,11 @@ async function generateRustTypes(): Promise<void> {
     for (const classDecl of classes) {
       const rustType = processClass(classDecl);
       if (rustType) {
-        generatedTypes.set(rustType.name, rustType);
+        console.log(`Generated class type: ${rustType.name}, kind: ${rustType.kind}`);
+        const key = `${sourceFile.getBaseName()}-${rustType.name}`;
+        generatedTypes.set(key, rustType);
+      } else {
+        console.log(`Failed to process class: ${classDecl.getName()}`);
       }
     }
 
@@ -94,7 +122,8 @@ async function generateRustTypes(): Promise<void> {
     for (const enumDecl of enums) {
       const rustType = processEnum(enumDecl);
       if (rustType) {
-        generatedTypes.set(rustType.name, rustType);
+        const key = `${sourceFile.getBaseName()}-${rustType.name}`;
+        generatedTypes.set(key, rustType);
       }
     }
   }
@@ -105,6 +134,9 @@ async function generateRustTypes(): Promise<void> {
 
 function processInterface(interfaceDecl: InterfaceDeclaration): RustType | null {
   const name = interfaceDecl.getName();
+  const sourceFile = interfaceDecl.getSourceFile();
+  const fileName = getFilePrefix(sourceFile.getFilePath());
+  const prefixedName = `${fileName}${name}`;
   const properties = interfaceDecl.getProperties();
   const methods = interfaceDecl.getMethods();
 
@@ -112,16 +144,16 @@ function processInterface(interfaceDecl: InterfaceDeclaration): RustType | null 
   if (name === "SealedUint32Array") {
     const rustStruct = `// Fixed-size array type for ${name}\n` +
       `pub type ${name}<const N: usize> = [u32; N];\n\n`;
-    return { kind: "sealed_array", name, rustCode: rustStruct };
+    return { kind: "sealed_array", name: prefixedName, rustCode: rustStruct };
   }
 
   if (name === "SealedFloat32Array") {
     const rustStruct = `// Fixed-size array type for ${name}\n` +
       `pub type ${name}<const N: usize> = [f32; N];\n\n`;
-    return { kind: "sealed_array", name, rustCode: rustStruct };
+    return { kind: "sealed_array", name: prefixedName, rustCode: rustStruct };
   }
 
-  let rustStruct = `#[derive(Debug, Clone, Serialize, Deserialize)]\npub struct ${name} {\n`;
+  let rustStruct = `#[derive(Debug, Clone, Serialize, Deserialize)]\npub struct ${prefixedName} {\n`;
 
   // Process properties
   for (const prop of properties) {
@@ -140,7 +172,7 @@ function processInterface(interfaceDecl: InterfaceDeclaration): RustType | null 
 
   // Generate implementation with methods
   if (methods.length > 0) {
-    rustStruct += `impl ${name} {\n`;
+    rustStruct += `impl ${prefixedName} {\n`;
 
     for (const method of methods) {
       const methodName = method.getName();
@@ -172,55 +204,66 @@ function processInterface(interfaceDecl: InterfaceDeclaration): RustType | null 
     rustStruct += "}\n\n";
   }
 
-  return { kind: "struct", name, rustCode: rustStruct };
+  return { kind: "struct", name: prefixedName, rustCode: rustStruct };
 }
 
 function processTypeAlias(typeAlias: TypeAliasDeclaration): RustType | null {
   const name = typeAlias.getName();
+  const sourceFile = typeAlias.getSourceFile();
+  const fileName = getFilePrefix(sourceFile.getFilePath());
+  const prefixedName = `${fileName}${name}`;
   const aliasType = typeAlias.getType();
 
-  let rustType: string;
-  let kind: RustType["kind"];
 
-  // Handle tuple types like Vec2, Vec3
+  // Handle special types like Vec2, Vec3 - these should not be prefixed
   if (name === "Vec2") {
-    rustType = "pub type Vec2 = [f64; 2];\n\n";
-    kind = "vec2";
+    const rustType = "pub type Vec2 = [f64; 2];\n\n";
+    const kind = "vec2";
+    return { kind, name, rustCode: rustType };
   } else if (name === "Vec3") {
-    rustType = "pub type Vec3 = [f64; 3];\n\n";
-    kind = "vec3";
+    const rustType = "pub type Vec3 = [f64; 3];\n\n";
+    const kind = "vec3";
+    return { kind, name, rustCode: rustType };
   } else if (name === "Mat3") {
-    rustType = "pub type Mat3 = [f64; 9];\n\n";
-    kind = "matrix";
+    const rustType = "pub type Mat3 = [f64; 9];\n\n";
+    const kind = "matrix";
+    return { kind, name, rustCode: rustType };
   } else if (name === "Mat4") {
-    rustType = "pub type Mat4 = [f64; 16];\n\n";
-    kind = "matrix";
+    const rustType = "pub type Mat4 = [f64; 16];\n\n";
+    const kind = "matrix";
+    return { kind, name, rustCode: rustType };
   } else if (name === "SimplePolygon") {
-    rustType = "pub type SimplePolygon = Vec<Vec2>;\n\n";
-    kind = "polygon";
+    const rustType = "pub type SimplePolygon = Vec<Vec2>;\n\n";
+    const kind = "polygon";
+    return { kind, name, rustCode: rustType };
   } else if (name === "Polygons") {
-    rustType = "pub type Polygons = Vec<SimplePolygon>;\n\n";
-    kind = "polygon";
+    const rustType = "pub type Polygons = Vec<SimplePolygon>;\n\n";
+    const kind = "polygon";
+    return { kind, name, rustCode: rustType };
   } else {
     const convertedType = convertTypeToRust(aliasType);
 
-    // Handle self-referencing are likely encapsulated types
-    if (convertedType === name) {
-      console.log(`Converting self-referencing type alias to JSValue: ${name}`);
-      rustType = `// ${name} - encapsulated type represented as JSValue\npub type ${name} = wasm_bindgen::JsValue;\n\n`;
-      kind = "encapsulated";
+    // Only encapsulated types should be converted to JSValue
+    if (fileName === "Manifold" && convertedType === name) {
+      console.log(`Converting manifold.d.ts type alias to JSValue: ${name}`);
+      const rustType = `// ${name} - encapsulated type represented as JSValue\npub type ${name} = wasm_bindgen::JsValue;\n\n`;
+      const kind = "encapsulated";
+      return { kind, name, rustCode: rustType };
     } else {
-      rustType = `pub type ${name} = ${convertedType};\n\n`;
-      kind = "type_alias";
+      const rustType = `pub type ${prefixedName} = ${convertedType};\n\n`;
+      const kind = "type_alias";
+      return { kind, name: prefixedName, rustCode: rustType };
     }
   }
-
-  return { kind, name, rustCode: rustType };
 }
 
 function processClass(classDecl: ClassDeclaration): RustType | null {
   const name = classDecl.getName();
   if (!name) return null;
+
+  const sourceFile = classDecl.getSourceFile();
+  const fileName = getFilePrefix(sourceFile.getFilePath());
+  const prefixedName = `${fileName}${name}`;
 
   const constructors = classDecl.getConstructors();
   const methods = classDecl.getMethods();
@@ -228,21 +271,133 @@ function processClass(classDecl: ClassDeclaration): RustType | null {
   const properties = classDecl.getProperties();
 
   // Check if this is an encapsulated type (from manifold-encapsulated-types.d.ts)
-  const sourceFile = classDecl.getSourceFile();
-  const isEncapsulatedType = sourceFile.getFilePath().includes('manifold-encapsulated-types.d.ts');
-
-  // Generate struct with properties if any
-  let rustStruct: string;
+  const isEncapsulatedType = fileName === 'Encapsulated';
 
   if (isEncapsulatedType) {
-    // For encapsulated types like CrossSection, Manifold, Mesh - use JSValue
-    rustStruct = `// ${name} from manifold-encapsulated-types - represented as JSValue\n`;
-    rustStruct += `pub type ${name} = wasm_bindgen::JsValue;\n\n`;
+    // For encapsulated types, generate wasm_bindgen extern "C" blocks
+    const funcs: Func[] = [];
 
-    // For JSValue types, we don't generate impl blocks
-    return { kind: "encapsulated", name, rustCode: rustStruct };
+    // Process constructors as static methods
+    for (const constructor of constructors) {
+      const params = constructor.getParameters();
+      const args = params.map(param => {
+        const paramType = convertTypeToRust(param.getType());
+        console.log(`Constructor parameter ${param.getName()}: ${param.getType().getText()} -> ${paramType}`);
+        return {
+          name: convertToSnakeCase(param.getName()),
+          type: paramType
+        };
+      });
+
+      funcs.push({
+        name: "new",
+        args,
+        ret: name
+      });
+    }
+
+    // Process static methods
+    for (const method of staticMethods) {
+      const methodName = convertToSnakeCase(method.getName());
+      const params = method.getParameters();
+      const returnType = convertTypeToRust(method.getReturnType());
+
+      const args = params.map(param => ({
+        name: convertToSnakeCase(param.getName()),
+        type: convertTypeToRust(param.getType())
+      }));
+
+      funcs.push({
+        name: methodName,
+        args,
+        ret: returnType
+      });
+    }
+
+    // Process instance methods
+    for (const method of methods) {
+      const methodName = convertToSnakeCase(method.getName());
+      const params = method.getParameters();
+      const returnType = convertTypeToRust(method.getReturnType());
+
+      const args = params.map(param => ({
+        name: convertToSnakeCase(param.getName()),
+        type: convertTypeToRust(param.getType())
+      }));
+
+      funcs.push({
+        name: methodName,
+        args,
+        ret: returnType
+      });
+    }
+
+    // Generate wasm_bindgen extern "C" block
+    let rustCode = `#[wasm_bindgen]\nextern "C" {\n`;
+    rustCode += `    type ${name};\n\n`;
+
+    // Use a Set to avoid duplicate method signatures
+    const processedSignatures = new Set<string>();
+
+    for (const func of funcs) {
+      console.log(`Processing function: ${func.name}, args: ${JSON.stringify(func.args)}, ret: ${func.ret}`);
+
+      if (func.name === "new") {
+        // Constructor
+        const signature = `constructor_${func.args.map(arg => `${arg.name}:${arg.type}`).join("_")}`;
+        if (!processedSignatures.has(signature)) {
+          processedSignatures.add(signature);
+          rustCode += `    #[wasm_bindgen(constructor)]\n`;
+          rustCode += `    fn new(`;
+          rustCode += func.args.map(arg => `${arg.name}: ${arg.type}`).join(", ");
+          rustCode += `) -> ${name};\n\n`;
+        }
+      } else {
+        // Check if this is an instance method or static method
+        const isStaticMethod = staticMethods.some(m => convertToSnakeCase(m.getName()) === func.name);
+        const isInstanceMethod = methods.some(m => convertToSnakeCase(m.getName()) === func.name);
+        console.log(`Method ${func.name} isInstanceMethod: ${isInstanceMethod}, isStaticMethod: ${isStaticMethod}`);
+
+        const signature = `${isStaticMethod ? 'static' : 'method'}_${func.name}_${func.args.map(arg => `${arg.name}:${arg.type}`).join("_")}_${func.ret}`;
+
+        if (!processedSignatures.has(signature)) {
+          processedSignatures.add(signature);
+
+          if (isStaticMethod) {
+            // Static method
+            rustCode += `    #[wasm_bindgen(static_method_of = ${name}, js_name = ${func.name})]\n`;
+            rustCode += `    fn ${func.name}(`;
+            rustCode += func.args.map(arg => `${arg.name}: ${arg.type}`).join(", ");
+            rustCode += `) -> ${func.ret};\n\n`;
+          } else if (isInstanceMethod) {
+            // Instance method
+            rustCode += `    #[wasm_bindgen(method)]\n`;
+            rustCode += `    fn ${func.name}(this: &${name}`;
+            if (func.args.length > 0) {
+              rustCode += ", " + func.args.map(arg => `${arg.name}: ${arg.type}`).join(", ");
+            }
+            rustCode += `) -> ${func.ret};\n\n`;
+          } else {
+            // Unknown method type - default to instance method
+            console.warn(`Unknown method type for ${func.name}, defaulting to instance method`);
+            rustCode += `    #[wasm_bindgen(method)]\n`;
+            rustCode += `    fn ${func.name}(this: &${name}`;
+            if (func.args.length > 0) {
+              rustCode += ", " + func.args.map(arg => `${arg.name}: ${arg.type}`).join(", ");
+            }
+            rustCode += `) -> ${func.ret};\n\n`;
+          }
+        } else {
+          console.log(`Skipping duplicate method: ${func.name}`);
+        }
+      }
+    }
+
+    rustCode += "}\n\n";
+
+    return { kind: "class", name, methods: funcs, rustCode };
   } else if (properties.length > 0) {
-    rustStruct = `#[derive(Debug, Clone, Serialize, Deserialize)]\npub struct ${name} {\n`;
+    let rustStruct = `#[derive(Debug, Clone, Serialize, Deserialize)]\npub struct ${prefixedName} {\n`;
 
     for (const prop of properties) {
       const propName = prop.getName();
@@ -252,117 +407,117 @@ function processClass(classDecl: ClassDeclaration): RustType | null {
 
     rustStruct += "}\n\n";
 
-    // For structs with properties, we generate impl blocks later
-    // Generate implementation - this will be followed by impl block generation
+    // Generate implementation
+    rustStruct += `impl ${prefixedName} {\n`;
+
+    // Process constructors
+    for (const constructor of constructors) {
+      const params = constructor.getParameters();
+      let constructorSignature = "    pub fn new(";
+
+      for (let i = 0; i < params.length; i++) {
+        const param = params[i];
+        const paramName = param.getName();
+        const paramType = convertTypeToRust(param.getType());
+        const isOptional = param.hasQuestionToken();
+
+        if (i > 0) constructorSignature += ", ";
+
+        if (isOptional) {
+          constructorSignature += `${convertToSnakeCase(paramName)}: Option<${paramType}>`;
+        } else {
+          constructorSignature += `${convertToSnakeCase(paramName)}: ${paramType}`;
+        }
+      }
+
+      constructorSignature += `) -> Self {\n`;
+      constructorSignature += `        todo!("Implement constructor")\n`;
+      constructorSignature += "    }\n\n";
+
+      rustStruct += constructorSignature;
+    }
+
+    // Process static methods
+    for (const method of staticMethods) {
+      const methodName = method.getName();
+      const params = method.getParameters();
+      const returnType = convertTypeToRust(method.getReturnType());
+
+      let methodSignature = `    pub fn ${convertToSnakeCase(methodName)}(`;
+
+      for (let i = 0; i < params.length; i++) {
+        const param = params[i];
+        const paramName = param.getName();
+        const paramType = convertTypeToRust(param.getType());
+        const isOptional = param.hasQuestionToken();
+
+        if (i > 0) methodSignature += ", ";
+
+        if (isOptional) {
+          methodSignature += `${convertToSnakeCase(paramName)}: Option<${paramType}>`;
+        } else {
+          methodSignature += `${convertToSnakeCase(paramName)}: ${paramType}`;
+        }
+      }
+
+      methodSignature += `) -> ${returnType} {\n`;
+      methodSignature += `        todo!("Implement ${methodName}")\n`;
+      methodSignature += "    }\n\n";
+
+      rustStruct += methodSignature;
+    }
+
+    // Process instance methods
+    for (const method of methods) {
+      const methodName = method.getName();
+      const params = method.getParameters();
+      const returnType = convertTypeToRust(method.getReturnType());
+
+      let methodSignature = `    pub fn ${convertToSnakeCase(methodName)}(`;
+      methodSignature += "&self";
+
+      for (const param of params) {
+        const paramName = param.getName();
+        const paramType = convertTypeToRust(param.getType());
+        const isOptional = param.hasQuestionToken();
+
+        if (isOptional) {
+          methodSignature += `, ${convertToSnakeCase(paramName)}: Option<${paramType}>`;
+        } else {
+          methodSignature += `, ${convertToSnakeCase(paramName)}: ${paramType}`;
+        }
+      }
+
+      methodSignature += `) -> ${returnType} {\n`;
+      methodSignature += `        todo!("Implement ${methodName}")\n`;
+      methodSignature += "    }\n\n";
+
+      rustStruct += methodSignature;
+    }
+
+    rustStruct += "}\n\n";
+
+    return { kind: "struct", name: prefixedName, rustCode: rustStruct };
   } else {
     // For other classes that are more like opaque handles
-    rustStruct = `// ${name} is an opaque type\n`;
-    rustStruct += `#[derive(Debug, Serialize, Deserialize)]\npub struct ${name} {\n`;
+    let rustStruct = `// ${prefixedName} is an opaque type\n`;
+    rustStruct += `#[derive(Debug, Serialize, Deserialize)]\npub struct ${prefixedName} {\n`;
     rustStruct += `    // This is an opaque handle\n`;
     rustStruct += `    _private: std::marker::PhantomData<()>,\n`;
     rustStruct += "}\n\n";
+
+    return { kind: "opaque", name: prefixedName, rustCode: rustStruct };
   }
-
-  // Generate implementation
-  rustStruct += `impl ${name} {\n`;
-
-  // Process constructors
-  for (const constructor of constructors) {
-    const params = constructor.getParameters();
-    let constructorSignature = "    pub fn new(";
-
-    for (let i = 0; i < params.length; i++) {
-      const param = params[i];
-      const paramName = param.getName();
-      const paramType = convertTypeToRust(param.getType());
-      const isOptional = param.hasQuestionToken();
-
-      if (i > 0) constructorSignature += ", ";
-
-      if (isOptional) {
-        constructorSignature += `${convertToSnakeCase(paramName)}: Option<${paramType}>`;
-      } else {
-        constructorSignature += `${convertToSnakeCase(paramName)}: ${paramType}`;
-      }
-    }
-
-    constructorSignature += `) -> Self {\n`;
-    constructorSignature += `        todo!("Implement constructor")\n`;
-    constructorSignature += "    }\n\n";
-
-    rustStruct += constructorSignature;
-  }
-
-  // Process static methods
-  for (const method of staticMethods) {
-    const methodName = method.getName();
-    const params = method.getParameters();
-    const returnType = convertTypeToRust(method.getReturnType());
-
-    let methodSignature = `    pub fn ${convertToSnakeCase(methodName)}(`;
-
-    for (let i = 0; i < params.length; i++) {
-      const param = params[i];
-      const paramName = param.getName();
-      const paramType = convertTypeToRust(param.getType());
-      const isOptional = param.hasQuestionToken();
-
-      if (i > 0) methodSignature += ", ";
-
-      if (isOptional) {
-        methodSignature += `${convertToSnakeCase(paramName)}: Option<${paramType}>`;
-      } else {
-        methodSignature += `${convertToSnakeCase(paramName)}: ${paramType}`;
-      }
-    }
-
-    methodSignature += `) -> ${returnType} {\n`;
-    methodSignature += `        todo!("Implement ${methodName}")\n`;
-    methodSignature += "    }\n\n";
-
-    rustStruct += methodSignature;
-  }
-
-  // Process instance methods
-  for (const method of methods) {
-    const methodName = method.getName();
-    const params = method.getParameters();
-    const returnType = convertTypeToRust(method.getReturnType());
-
-    let methodSignature = `    pub fn ${convertToSnakeCase(methodName)}(`;
-    methodSignature += "&self";
-
-    for (const param of params) {
-      const paramName = param.getName();
-      const paramType = convertTypeToRust(param.getType());
-      const isOptional = param.hasQuestionToken();
-
-      if (isOptional) {
-        methodSignature += `, ${convertToSnakeCase(paramName)}: Option<${paramType}>`;
-      } else {
-        methodSignature += `, ${convertToSnakeCase(paramName)}: ${paramType}`;
-      }
-    }
-
-    methodSignature += `) -> ${returnType} {\n`;
-    methodSignature += `        todo!("Implement ${methodName}")\n`;
-    methodSignature += "    }\n\n";
-
-    rustStruct += methodSignature;
-  }
-
-  rustStruct += "}\n\n";
-
-  // Determine if this is a struct or opaque type
-  const kind = properties.length > 0 ? "struct" : "opaque";
-  return { kind, name, rustCode: rustStruct };
 }
 
 function processEnum(enumDecl: EnumDeclaration): RustType | null {
   const name = enumDecl.getName();
+  const sourceFile = enumDecl.getSourceFile();
+  const fileName = getFilePrefix(sourceFile.getFilePath());
+  const prefixedName = `${fileName}${name}`;
   const members = enumDecl.getMembers();
 
-  let rustEnum = `#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]\npub enum ${name} {\n`;
+  let rustEnum = `#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]\npub enum ${prefixedName} {\n`;
 
   for (const member of members) {
     const memberName = member.getName();
@@ -371,7 +526,7 @@ function processEnum(enumDecl: EnumDeclaration): RustType | null {
 
   rustEnum += "}\n\n";
 
-  return { kind: "enum", name, rustCode: rustEnum };
+  return { kind: "enum", name: prefixedName, rustCode: rustEnum };
 }
 
 // ==== TYPE CONVERSION FUNCTIONS ====
@@ -382,8 +537,8 @@ function convertTypeToRust(type: Type | undefined): string {
   let typeText = type.getText();
   if (!typeText) return "()";
 
-  // Clean up the type text to remove import paths
-  typeText = typeText.replace(/import\([^)]*\)\./g, '');
+  // Clean up the type text to remove import paths and extra spaces
+  typeText = typeText.replace(/import\([^)]*\)\./g, '').trim();
 
   // Handle primitive types (exact conversion)
   const primitiveResult = convertPrimitiveTypes(typeText);
@@ -425,7 +580,8 @@ function convertTypeToRust(type: Type | undefined): string {
 // ==== EXACT CONVERSION FUNCTIONS ====
 
 function convertPrimitiveTypes(typeText: string): string | null {
-  switch (typeText) {
+  const trimmed = typeText.trim();
+  switch (trimmed) {
     case "string": return "String";
     case "number": return "f64";
     case "boolean": return "bool";
