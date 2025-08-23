@@ -9,7 +9,7 @@ extern "C" {
     type CrossSection;
 
     #[wasm_bindgen(constructor)]
-    fn new(contours: /* Union: Vec<[f64; 2]> | Vec<Vec<[f64; 2]>> */ String, fill_rule: /* Union: () | "EvenOdd" | "NonZero" | "Positive" | "Negative" */ String) -> CrossSection;
+    fn new(contours: /* Union: Polygons */ String, fill_rule: Option<FillRule>) -> CrossSection;
 
     #[wasm_bindgen(static_method_of = CrossSection, js_name = square)]
     fn square(size: /* Union: () | f64 | [f64; 2] */ String, center: /* Union: () | false | true */ String) -> CrossSection;
@@ -18,31 +18,31 @@ extern "C" {
     fn circle(radius: f64, circular_segments: Option<f64>) -> CrossSection;
 
     #[wasm_bindgen(static_method_of = CrossSection, js_name = union)]
-    fn union(a: /* Union: Vec<[f64; 2]> | Vec<Vec<[f64; 2]>> | CrossSection */ String, b: /* Union: Vec<[f64; 2]> | Vec<Vec<[f64; 2]>> | CrossSection */ String) -> CrossSection;
+    fn union(a: /* Union: Polygons | CrossSection */ String, b: /* Union: Polygons | CrossSection */ String) -> CrossSection;
 
     #[wasm_bindgen(static_method_of = CrossSection, js_name = difference)]
-    fn difference(a: /* Union: Vec<[f64; 2]> | Vec<Vec<[f64; 2]>> | CrossSection */ String, b: /* Union: Vec<[f64; 2]> | Vec<Vec<[f64; 2]>> | CrossSection */ String) -> CrossSection;
+    fn difference(a: /* Union: Polygons | CrossSection */ String, b: /* Union: Polygons | CrossSection */ String) -> CrossSection;
 
     #[wasm_bindgen(static_method_of = CrossSection, js_name = intersection)]
-    fn intersection(a: /* Union: Vec<[f64; 2]> | Vec<Vec<[f64; 2]>> | CrossSection */ String, b: /* Union: Vec<[f64; 2]> | Vec<Vec<[f64; 2]>> | CrossSection */ String) -> CrossSection;
+    fn intersection(a: /* Union: Polygons | CrossSection */ String, b: /* Union: Polygons | CrossSection */ String) -> CrossSection;
 
     #[wasm_bindgen(static_method_of = CrossSection, js_name = union)]
-    fn union(polygons: Vec</* Union: Vec<[f64; 2]> | Vec<Vec<[f64; 2]>> | CrossSection */ String>) -> CrossSection;
+    fn union(polygons: Vec</* Union: Polygons | CrossSection */ String>) -> CrossSection;
 
     #[wasm_bindgen(static_method_of = CrossSection, js_name = difference)]
-    fn difference(polygons: Vec</* Union: Vec<[f64; 2]> | Vec<Vec<[f64; 2]>> | CrossSection */ String>) -> CrossSection;
+    fn difference(polygons: Vec</* Union: Polygons | CrossSection */ String>) -> CrossSection;
 
     #[wasm_bindgen(static_method_of = CrossSection, js_name = intersection)]
-    fn intersection(polygons: Vec</* Union: Vec<[f64; 2]> | Vec<Vec<[f64; 2]>> | CrossSection */ String>) -> CrossSection;
+    fn intersection(polygons: Vec</* Union: Polygons | CrossSection */ String>) -> CrossSection;
 
     #[wasm_bindgen(static_method_of = CrossSection, js_name = hull)]
-    fn hull(polygons: Vec</* Union: Vec<[f64; 2]> | Vec<Vec<[f64; 2]>> | CrossSection */ String>) -> CrossSection;
+    fn hull(polygons: Vec</* Union: Polygons | CrossSection */ String>) -> CrossSection;
 
     #[wasm_bindgen(static_method_of = CrossSection, js_name = compose)]
-    fn compose(polygons: Vec</* Union: Vec<[f64; 2]> | Vec<Vec<[f64; 2]>> | CrossSection */ String>) -> CrossSection;
+    fn compose(polygons: Vec</* Union: Polygons | CrossSection */ String>) -> CrossSection;
 
     #[wasm_bindgen(static_method_of = CrossSection, js_name = of_polygons)]
-    fn of_polygons(contours: /* Union: Vec<[f64; 2]> | Vec<Vec<[f64; 2]>> */ String, fill_rule: /* Union: () | "EvenOdd" | "NonZero" | "Positive" | "Negative" */ String) -> CrossSection;
+    fn of_polygons(contours: /* Union: Polygons */ String, fill_rule: Option<FillRule>) -> CrossSection;
 
     #[wasm_bindgen(method)]
     fn square(this: &CrossSection, size: /* Union: () | f64 | [f64; 2] */ String, center: /* Union: () | false | true */ String) -> CrossSection;
@@ -78,52 +78,52 @@ extern "C" {
     fn warp(this: &CrossSection, warp_func: (vert: Vec2) => void) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn offset(this: &CrossSection, delta: f64, join_type: /* Union: () | "Square" | "Round" | "Miter" */ String, miter_limit: Option<f64>, circular_segments: Option<f64>) -> CrossSection;
+    fn offset(this: &CrossSection, delta: f64, join_type: Option<JoinType>, miter_limit: Option<f64>, circular_segments: Option<f64>) -> CrossSection;
 
     #[wasm_bindgen(method)]
     fn simplify(this: &CrossSection, epsilon: Option<f64>) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn add(this: &CrossSection, other: /* Union: Vec<[f64; 2]> | Vec<Vec<[f64; 2]>> | CrossSection */ String) -> CrossSection;
+    fn add(this: &CrossSection, other: /* Union: Polygons | CrossSection */ String) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn subtract(this: &CrossSection, other: /* Union: Vec<[f64; 2]> | Vec<Vec<[f64; 2]>> | CrossSection */ String) -> CrossSection;
+    fn subtract(this: &CrossSection, other: /* Union: Polygons | CrossSection */ String) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn intersect(this: &CrossSection, other: /* Union: Vec<[f64; 2]> | Vec<Vec<[f64; 2]>> | CrossSection */ String) -> CrossSection;
+    fn intersect(this: &CrossSection, other: /* Union: Polygons | CrossSection */ String) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn union(this: &CrossSection, a: /* Union: Vec<[f64; 2]> | Vec<Vec<[f64; 2]>> | CrossSection */ String, b: /* Union: Vec<[f64; 2]> | Vec<Vec<[f64; 2]>> | CrossSection */ String) -> CrossSection;
+    fn union(this: &CrossSection, a: /* Union: Polygons | CrossSection */ String, b: /* Union: Polygons | CrossSection */ String) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn difference(this: &CrossSection, a: /* Union: Vec<[f64; 2]> | Vec<Vec<[f64; 2]>> | CrossSection */ String, b: /* Union: Vec<[f64; 2]> | Vec<Vec<[f64; 2]>> | CrossSection */ String) -> CrossSection;
+    fn difference(this: &CrossSection, a: /* Union: Polygons | CrossSection */ String, b: /* Union: Polygons | CrossSection */ String) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn intersection(this: &CrossSection, a: /* Union: Vec<[f64; 2]> | Vec<Vec<[f64; 2]>> | CrossSection */ String, b: /* Union: Vec<[f64; 2]> | Vec<Vec<[f64; 2]>> | CrossSection */ String) -> CrossSection;
+    fn intersection(this: &CrossSection, a: /* Union: Polygons | CrossSection */ String, b: /* Union: Polygons | CrossSection */ String) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn union(this: &CrossSection, polygons: Vec</* Union: Vec<[f64; 2]> | Vec<Vec<[f64; 2]>> | CrossSection */ String>) -> CrossSection;
+    fn union(this: &CrossSection, polygons: Vec</* Union: Polygons | CrossSection */ String>) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn difference(this: &CrossSection, polygons: Vec</* Union: Vec<[f64; 2]> | Vec<Vec<[f64; 2]>> | CrossSection */ String>) -> CrossSection;
+    fn difference(this: &CrossSection, polygons: Vec</* Union: Polygons | CrossSection */ String>) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn intersection(this: &CrossSection, polygons: Vec</* Union: Vec<[f64; 2]> | Vec<Vec<[f64; 2]>> | CrossSection */ String>) -> CrossSection;
+    fn intersection(this: &CrossSection, polygons: Vec</* Union: Polygons | CrossSection */ String>) -> CrossSection;
 
     #[wasm_bindgen(method)]
     fn hull(this: &CrossSection) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn hull(this: &CrossSection, polygons: Vec</* Union: Vec<[f64; 2]> | Vec<Vec<[f64; 2]>> | CrossSection */ String>) -> CrossSection;
+    fn hull(this: &CrossSection, polygons: Vec</* Union: Polygons | CrossSection */ String>) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn compose(this: &CrossSection, polygons: Vec</* Union: Vec<[f64; 2]> | Vec<Vec<[f64; 2]>> | CrossSection */ String>) -> CrossSection;
+    fn compose(this: &CrossSection, polygons: Vec</* Union: Polygons | CrossSection */ String>) -> CrossSection;
 
     #[wasm_bindgen(method)]
     fn decompose(this: &CrossSection) -> Vec<CrossSection>;
 
     #[wasm_bindgen(method)]
-    fn of_polygons(this: &CrossSection, contours: /* Union: Vec<[f64; 2]> | Vec<Vec<[f64; 2]>> */ String, fill_rule: /* Union: () | "EvenOdd" | "NonZero" | "Positive" | "Negative" */ String) -> CrossSection;
+    fn of_polygons(this: &CrossSection, contours: /* Union: Polygons */ String, fill_rule: Option<FillRule>) -> CrossSection;
 
     #[wasm_bindgen(method)]
     fn to_polygons(this: &CrossSection) -> Vec<Vec<[f64; 2]>>;
@@ -168,10 +168,10 @@ extern "C" {
     fn sphere(radius: f64, circular_segments: Option<f64>) -> Manifold;
 
     #[wasm_bindgen(static_method_of = Manifold, js_name = extrude)]
-    fn extrude(polygons: /* Union: Vec<[f64; 2]> | Vec<Vec<[f64; 2]>> | CrossSection */ String, height: f64, n_divisions: Option<f64>, twist_degrees: Option<f64>, scale_top: /* Union: () | f64 | [f64; 2] */ String, center: /* Union: () | false | true */ String) -> Manifold;
+    fn extrude(polygons: /* Union: Polygons | CrossSection */ String, height: f64, n_divisions: Option<f64>, twist_degrees: Option<f64>, scale_top: /* Union: () | f64 | [f64; 2] */ String, center: /* Union: () | false | true */ String) -> Manifold;
 
     #[wasm_bindgen(static_method_of = Manifold, js_name = revolve)]
-    fn revolve(polygons: /* Union: Vec<[f64; 2]> | Vec<Vec<[f64; 2]>> | CrossSection */ String, circular_segments: Option<f64>, revolve_degrees: Option<f64>) -> Manifold;
+    fn revolve(polygons: /* Union: Polygons | CrossSection */ String, circular_segments: Option<f64>, revolve_degrees: Option<f64>) -> Manifold;
 
     #[wasm_bindgen(static_method_of = Manifold, js_name = of_mesh)]
     fn of_mesh(mesh: Mesh) -> Manifold;
@@ -201,7 +201,7 @@ extern "C" {
     fn intersection(manifolds: Vec<Manifold>) -> Manifold;
 
     #[wasm_bindgen(static_method_of = Manifold, js_name = hull)]
-    fn hull(points: Vec</* Union: Manifold | [f64; 3] */ String>) -> Manifold;
+    fn hull(points: Vec</* Union: Manifold | Vec3 */ String>) -> Manifold;
 
     #[wasm_bindgen(static_method_of = Manifold, js_name = compose)]
     fn compose(manifolds: Vec<Manifold>) -> Manifold;
@@ -222,10 +222,10 @@ extern "C" {
     fn sphere(this: &Manifold, radius: f64, circular_segments: Option<f64>) -> Manifold;
 
     #[wasm_bindgen(method)]
-    fn extrude(this: &Manifold, polygons: /* Union: Vec<[f64; 2]> | Vec<Vec<[f64; 2]>> | CrossSection */ String, height: f64, n_divisions: Option<f64>, twist_degrees: Option<f64>, scale_top: /* Union: () | f64 | [f64; 2] */ String, center: /* Union: () | false | true */ String) -> Manifold;
+    fn extrude(this: &Manifold, polygons: /* Union: Polygons | CrossSection */ String, height: f64, n_divisions: Option<f64>, twist_degrees: Option<f64>, scale_top: /* Union: () | f64 | [f64; 2] */ String, center: /* Union: () | false | true */ String) -> Manifold;
 
     #[wasm_bindgen(method)]
-    fn revolve(this: &Manifold, polygons: /* Union: Vec<[f64; 2]> | Vec<Vec<[f64; 2]>> | CrossSection */ String, circular_segments: Option<f64>, revolve_degrees: Option<f64>) -> Manifold;
+    fn revolve(this: &Manifold, polygons: /* Union: Polygons | CrossSection */ String, circular_segments: Option<f64>, revolve_degrees: Option<f64>) -> Manifold;
 
     #[wasm_bindgen(method)]
     fn of_mesh(this: &Manifold, mesh: Mesh) -> Manifold;
@@ -330,7 +330,7 @@ extern "C" {
     fn hull(this: &Manifold) -> Manifold;
 
     #[wasm_bindgen(method)]
-    fn hull(this: &Manifold, points: Vec</* Union: Manifold | [f64; 3] */ String>) -> Manifold;
+    fn hull(this: &Manifold, points: Vec</* Union: Manifold | Vec3 */ String>) -> Manifold;
 
     #[wasm_bindgen(method)]
     fn compose(this: &Manifold, manifolds: Vec<Manifold>) -> Manifold;
@@ -381,7 +381,7 @@ extern "C" {
     fn min_gap(this: &Manifold, other: Manifold, search_length: f64) -> f64;
 
     #[wasm_bindgen(method)]
-    fn status(this: &Manifold) -> /* Union: "NoError" | "NonFiniteVertex" | "NotManifold" | "VertexOutOfBounds" | "PropertiesWrongLength" | "MissingPositionProperties" | "MergeVectorsDifferentLengths" | "MergeIndexOutOfBounds" | "TransformWrongLength" | "RunIndexWrongLength" | "FaceIDWrongLength" | "InvalidConstruction" */ String;
+    fn status(this: &Manifold) -> /* Union: ErrorStatus */ String;
 
     #[wasm_bindgen(method)]
     fn get_mesh(this: &Manifold, normal_idx: Option<f64>) -> Mesh;

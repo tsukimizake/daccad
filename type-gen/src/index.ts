@@ -82,7 +82,12 @@ async function generateRustTypes(): Promise<void> {
     }
   }
 
-  // Process all source files
+  // First pass: Register all type aliases from all files
+  for (const sourceFile of project.getSourceFiles()) {
+    registerTypeAliases(sourceFile);
+  }
+
+  // Second pass: Process all source files
   for (const sourceFile of project.getSourceFiles()) {
     console.log(`Processing file: ${sourceFile.getFilePath()}`);
 
@@ -518,6 +523,39 @@ function convertTypeToRustIR(type: Type | undefined): RustTypeIR {
 
   // Handle union types
   if (type.isUnion()) {
+    // Try to preserve original type names from the text representation
+    const originalText = typeText;
+    
+    // Check if the union contains known type alias names
+    const unionParts = originalText.split('|').map(part => part.trim().replace(/import\([^)]*\)\./g, ''));
+    const hasKnownAliases = unionParts.some(part => typeAliasRegistry.has(part));
+    
+    if (hasKnownAliases) {
+      // Use original names for better readability
+      const variants = unionParts.map(part => {
+        if (typeAliasRegistry.has(part)) {
+          return { kind: "named" as const, name: part };
+        }
+        // Try to convert the part
+        const trimmedPart = part.trim();
+        const primitiveResult = convertPrimitiveToIR(trimmedPart);
+        if (primitiveResult) return primitiveResult;
+        return { kind: "named" as const, name: trimmedPart };
+      });
+      
+      // Check for Option<T> pattern (T | undefined)
+      const undefinedVariant = variants.find(v => v.kind === "primitive" && v.name === "()");
+      if (undefinedVariant && variants.length === 2) {
+        const innerType = variants.find(v => v !== undefinedVariant);
+        if (innerType) {
+          return { kind: "option", inner: innerType };
+        }
+      }
+      
+      return { kind: "union", variants };
+    }
+    
+    // Fallback to type-based analysis
     const variants = type.getUnionTypes().map(t => convertTypeToRustIR(t));
     
     // Check for Option<T> pattern (T | undefined)
@@ -534,6 +572,14 @@ function convertTypeToRustIR(type: Type | undefined): RustTypeIR {
 
   // Handle named types
   const cleanedName = typeText.replace(/import\([^)]*\)\./g, '').trim();
+  
+  // Check if this is a known type alias name
+  for (const [aliasName, aliasDefinition] of typeAliasRegistry) {
+    if (cleanedName === aliasName || cleanedName.endsWith(`.${aliasName}`)) {
+      return { kind: "named", name: aliasName };
+    }
+  }
+  
   return { kind: "named", name: cleanedName };
 }
 
@@ -545,6 +591,20 @@ function convertPrimitiveToIR(typeText: string): RustTypeIR | null {
     case "void": return { kind: "primitive", name: "()" };
     case "undefined": return { kind: "primitive", name: "()" };
     default: return null;
+  }
+}
+
+// Global type alias registry
+const typeAliasRegistry = new Map<string, string>();
+
+function registerTypeAliases(sourceFile: SourceFile) {
+  const typeAliases = sourceFile.getTypeAliases();
+  for (const alias of typeAliases) {
+    const name = alias.getName();
+    const typeText = alias.getTypeNode()?.getText();
+    if (typeText) {
+      typeAliasRegistry.set(name, typeText);
+    }
   }
 }
 
