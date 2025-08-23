@@ -57,28 +57,40 @@ async function generateRustTypes(): Promise<void> {
     const interfaces = sourceFile.getInterfaces();
     console.log(`Found ${interfaces.length} interfaces`);
     for (const interfaceDecl of interfaces) {
-      processInterface(interfaceDecl, generatedTypes);
+      const rustType = processInterface(interfaceDecl);
+      if (rustType) {
+        generatedTypes.set(rustType.name, rustType);
+      }
     }
 
     // Process type aliases
     const typeAliases = sourceFile.getTypeAliases();
     console.log(`Found ${typeAliases.length} type aliases`);
     for (const typeAlias of typeAliases) {
-      processTypeAlias(typeAlias, generatedTypes);
+      const rustType = processTypeAlias(typeAlias);
+      if (rustType) {
+        generatedTypes.set(rustType.name, rustType);
+      }
     }
 
     // Process classes
     const classes = sourceFile.getClasses();
     console.log(`Found ${classes.length} classes`);
     for (const classDecl of classes) {
-      processClass(classDecl, generatedTypes);
+      const rustType = processClass(classDecl);
+      if (rustType) {
+        generatedTypes.set(rustType.name, rustType);
+      }
     }
 
     // Process enums
     const enums = sourceFile.getEnums();
     console.log(`Found ${enums.length} enums`);
     for (const enumDecl of enums) {
-      processEnum(enumDecl, generatedTypes);
+      const rustType = processEnum(enumDecl);
+      if (rustType) {
+        generatedTypes.set(rustType.name, rustType);
+      }
     }
   }
 
@@ -86,7 +98,7 @@ async function generateRustTypes(): Promise<void> {
   generateRustOutput(generatedTypes);
 }
 
-function processInterface(interfaceDecl: InterfaceDeclaration, generatedTypes: Map<string, RustType>): void {
+function processInterface(interfaceDecl: InterfaceDeclaration): RustType | null {
   const name = interfaceDecl.getName();
   const properties = interfaceDecl.getProperties();
   const methods = interfaceDecl.getMethods();
@@ -95,15 +107,13 @@ function processInterface(interfaceDecl: InterfaceDeclaration, generatedTypes: M
   if (name === "SealedUint32Array") {
     const rustStruct = `// Fixed-size array type for ${name}\n` +
       `pub type ${name}<const N: usize> = [u32; N];\n\n`;
-    generatedTypes.set(name, { kind: "sealed_array", name, rustCode: rustStruct });
-    return;
+    return { kind: "sealed_array", name, rustCode: rustStruct };
   }
 
   if (name === "SealedFloat32Array") {
     const rustStruct = `// Fixed-size array type for ${name}\n` +
       `pub type ${name}<const N: usize> = [f32; N];\n\n`;
-    generatedTypes.set(name, { kind: "sealed_array", name, rustCode: rustStruct });
-    return;
+    return { kind: "sealed_array", name, rustCode: rustStruct };
   }
 
   let rustStruct = `#[derive(Debug, Clone, Serialize, Deserialize)]\npub struct ${name} {\n`;
@@ -157,10 +167,10 @@ function processInterface(interfaceDecl: InterfaceDeclaration, generatedTypes: M
     rustStruct += "}\n\n";
   }
 
-  generatedTypes.set(name, { kind: "struct", name, rustCode: rustStruct });
+  return { kind: "struct", name, rustCode: rustStruct };
 }
 
-function processTypeAlias(typeAlias: TypeAliasDeclaration, generatedTypes: Map<string, RustType>): void {
+function processTypeAlias(typeAlias: TypeAliasDeclaration): RustType | null {
   const name = typeAlias.getName();
   const aliasType = typeAlias.getType();
 
@@ -192,19 +202,19 @@ function processTypeAlias(typeAlias: TypeAliasDeclaration, generatedTypes: Map<s
     // Skip self-referencing types like "pub type CrossSection = CrossSection;"
     if (convertedType === name) {
       console.log(`Skipping self-referencing type alias: ${name}`);
-      return;
+      return null;
     }
 
     rustType = `pub type ${name} = ${convertedType};\n\n`;
     kind = "type_alias";
   }
 
-  generatedTypes.set(name, { kind, name, rustCode: rustType });
+  return { kind, name, rustCode: rustType };
 }
 
-function processClass(classDecl: ClassDeclaration, generatedTypes: Map<string, RustType>): void {
+function processClass(classDecl: ClassDeclaration): RustType | null {
   const name = classDecl.getName();
-  if (!name) return;
+  if (!name) return null;
 
   const constructors = classDecl.getConstructors();
   const methods = classDecl.getMethods();
@@ -224,8 +234,7 @@ function processClass(classDecl: ClassDeclaration, generatedTypes: Map<string, R
     rustStruct += `pub type ${name} = wasm_bindgen::JsValue;\n\n`;
 
     // For JSValue types, we don't generate impl blocks
-    generatedTypes.set(name, { kind: "encapsulated", name, rustCode: rustStruct });
-    return;
+    return { kind: "encapsulated", name, rustCode: rustStruct };
   } else if (properties.length > 0) {
     rustStruct = `#[derive(Debug, Clone, Serialize, Deserialize)]\npub struct ${name} {\n`;
 
@@ -340,10 +349,10 @@ function processClass(classDecl: ClassDeclaration, generatedTypes: Map<string, R
 
   // Determine if this is a struct or opaque type
   const kind = properties.length > 0 ? "struct" : "opaque";
-  generatedTypes.set(name, { kind, name, rustCode: rustStruct });
+  return { kind, name, rustCode: rustStruct };
 }
 
-function processEnum(enumDecl: EnumDeclaration, generatedTypes: Map<string, RustType>): void {
+function processEnum(enumDecl: EnumDeclaration): RustType | null {
   const name = enumDecl.getName();
   const members = enumDecl.getMembers();
 
@@ -356,7 +365,7 @@ function processEnum(enumDecl: EnumDeclaration, generatedTypes: Map<string, Rust
 
   rustEnum += "}\n\n";
 
-  generatedTypes.set(name, { kind: "enum", name, rustCode: rustEnum });
+  return { kind: "enum", name, rustCode: rustEnum };
 }
 
 // ==== TYPE CONVERSION FUNCTIONS ====
