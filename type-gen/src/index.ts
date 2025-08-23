@@ -7,26 +7,32 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Type for wasm_bindgen method signatures
-type Func = {
+// Intermediate representation for Rust types
+type RustTypeIR = 
+  | { kind: "primitive"; name: "i32" | "f64" | "bool" | "String" | "()" }
+  | { kind: "array"; element: RustTypeIR; size?: number } // [T; N] or Vec<T>
+  | { kind: "tuple"; elements: RustTypeIR[] }
+  | { kind: "union"; variants: RustTypeIR[] }
+  | { kind: "named"; name: string }
+  | { kind: "generic"; base: string; args: RustTypeIR[] }
+  | { kind: "option"; inner: RustTypeIR }
+  | { kind: "js_value" };
+
+// Method signature for wasm_bindgen
+type Method = {
   name: string;
-  args: { name: string; type: string; }[];
-  ret: string;
+  args: Array<{ name: string; type: RustTypeIR; optional?: boolean }>;
+  ret: RustTypeIR;
+  is_static?: boolean;
+  is_constructor?: boolean;
 };
 
-// Union type for different kinds of Rust types
-type RustType =
-  | { kind: "struct"; name: string; rustCode: string; }
-  | { kind: "enum"; name: string; rustCode: string; }
-  | { kind: "encapsulated"; name: string; rustCode: string; }
-  | { kind: "type_alias"; name: string; rustCode: string; }
-  | { kind: "opaque"; name: string; rustCode: string; }
-  | { kind: "vec2"; name: string; rustCode: string; }
-  | { kind: "vec3"; name: string; rustCode: string; }
-  | { kind: "matrix"; name: string; rustCode: string; }
-  | { kind: "sealed_array"; name: string; rustCode: string; }
-  | { kind: "polygon"; name: string; rustCode: string; }
-  | { kind: "class"; name: string; methods: Func[]; rustCode: string; };
+// Intermediate representation for Rust items
+type RustItem = 
+  | { kind: "struct"; name: string; fields: Array<{ name: string, type: RustTypeIR, optional?: boolean }>; derives?: string[] }
+  | { kind: "enum"; name: string; variants: string[]; derives?: string[] }
+  | { kind: "extern_block"; name: string; methods: Method[] }
+  | { kind: "type_alias"; name: string; target: RustTypeIR };
 
 function createProject(): Project {
   return new Project({
@@ -54,7 +60,7 @@ function getFilePrefix(filePath: string): FilePrefix {
 
 async function generateRustTypes(): Promise<void> {
   const project = createProject();
-  const generatedTypes = new Map<string, RustType>();
+  const generatedItems = new Map<string, RustItem>();
 
   // Load manifold-3d type definition files with absolute paths
   const manifoldPath = path.resolve(__dirname, "../../node_modules/manifold-3d");
@@ -83,53 +89,58 @@ async function generateRustTypes(): Promise<void> {
     // Process interfaces
     const interfaces = sourceFile.getInterfaces();
     console.log(`Found ${interfaces.length} interfaces`);
-    for (const interfaceDecl of interfaces) {
-      const rustType = processInterface(interfaceDecl);
-      if (rustType) {
-        const key = `${sourceFile.getBaseName()}-${rustType.name}`;
-        generatedTypes.set(key, rustType);
-      }
-    }
+    // TODO: Convert to IR approach
+    // For now, skip interfaces to focus on classes
+    // for (const interfaceDecl of interfaces) {
+    //   const rustType = processInterface(interfaceDecl);
+    //   if (rustType) {
+    //     const key = `${sourceFile.getBaseName()}-${rustType.name}`;
+    //     generatedItems.set(key, rustType);
+    //   }
+    // }
 
     // Process type aliases
     const typeAliases = sourceFile.getTypeAliases();
     console.log(`Found ${typeAliases.length} type aliases`);
-    for (const typeAlias of typeAliases) {
-      const rustType = processTypeAlias(typeAlias);
-      if (rustType) {
-        const key = `${sourceFile.getBaseName()}-${rustType.name}`;
-        generatedTypes.set(key, rustType);
-      }
-    }
+    // TODO: Convert to IR approach
+    // For now, skip type aliases to focus on classes
+    // for (const typeAlias of typeAliases) {
+    //   const rustType = processTypeAlias(typeAlias);
+    //   if (rustType) {
+    //     const key = `${sourceFile.getBaseName()}-${rustType.name}`;
+    //     generatedItems.set(key, rustType);
+    //   }
+    // }
 
     // Process classes
     const classes = sourceFile.getClasses();
     console.log(`Found ${classes.length} classes`);
     for (const classDecl of classes) {
-      const rustType = processClass(classDecl);
-      if (rustType) {
-        console.log(`Generated class type: ${rustType.name}, kind: ${rustType.kind}`);
-        const key = `${sourceFile.getBaseName()}-${rustType.name}`;
-        generatedTypes.set(key, rustType);
+      const rustItem = processClass(classDecl);
+      if (rustItem) {
+        console.log(`Generated class item: ${rustItem.name}, kind: ${rustItem.kind}`);
+        const key = `${sourceFile.getBaseName()}-${rustItem.name}`;
+        generatedItems.set(key, rustItem);
       } else {
         console.log(`Failed to process class: ${classDecl.getName()}`);
       }
     }
 
+    // TODO: Convert to IR approach  
     // Process enums
     const enums = sourceFile.getEnums();
     console.log(`Found ${enums.length} enums`);
-    for (const enumDecl of enums) {
-      const rustType = processEnum(enumDecl);
-      if (rustType) {
-        const key = `${sourceFile.getBaseName()}-${rustType.name}`;
-        generatedTypes.set(key, rustType);
-      }
-    }
+    // for (const enumDecl of enums) {
+    //   const rustType = processEnum(enumDecl);
+    //   if (rustType) {
+    //     const key = `${sourceFile.getBaseName()}-${rustType.name}`;
+    //     generatedItems.set(key, rustType);
+    //   }
+    // }
   }
 
   // Generate Rust output file
-  generateRustOutput(generatedTypes);
+  generateRustOutput(generatedItems);
 }
 
 function processInterface(interfaceDecl: InterfaceDeclaration): RustType | null {
@@ -257,7 +268,7 @@ function processTypeAlias(typeAlias: TypeAliasDeclaration): RustType | null {
   }
 }
 
-function processClass(classDecl: ClassDeclaration): RustType | null {
+function processClass(classDecl: ClassDeclaration): RustItem | null {
   const name = classDecl.getName();
   if (!name) return null;
 
@@ -274,25 +285,26 @@ function processClass(classDecl: ClassDeclaration): RustType | null {
   const isEncapsulatedType = fileName === 'Encapsulated';
 
   if (isEncapsulatedType) {
-    // For encapsulated types, generate wasm_bindgen extern "C" blocks
-    const funcs: Func[] = [];
+    // For encapsulated types, generate wasm_bindgen extern "C" blocks using IR
+    const methodsIR: Method[] = [];
 
-    // Process constructors as static methods
+    // Process constructors
     for (const constructor of constructors) {
       const params = constructor.getParameters();
       const args = params.map(param => {
-        const paramType = convertTypeToRust(param.getType());
-        console.log(`Constructor parameter ${param.getName()}: ${param.getType().getText()} -> ${paramType}`);
+        const paramTypeIR = convertTypeToRustIR(param.getType());
+        console.log(`Constructor parameter ${param.getName()}: ${param.getType().getText()} -> ${rustTypeIRToString(paramTypeIR)}`);
         return {
           name: convertToSnakeCase(param.getName()),
-          type: paramType
+          type: paramTypeIR
         };
       });
 
-      funcs.push({
+      methodsIR.push({
         name: "new",
         args,
-        ret: name
+        returnType: { kind: "named", name },
+        methodType: "constructor"
       });
     }
 
@@ -300,17 +312,18 @@ function processClass(classDecl: ClassDeclaration): RustType | null {
     for (const method of staticMethods) {
       const methodName = convertToSnakeCase(method.getName());
       const params = method.getParameters();
-      const returnType = convertTypeToRust(method.getReturnType());
+      const returnTypeIR = convertTypeToRustIR(method.getReturnType());
 
       const args = params.map(param => ({
         name: convertToSnakeCase(param.getName()),
-        type: convertTypeToRust(param.getType())
+        type: convertTypeToRustIR(param.getType())
       }));
 
-      funcs.push({
+      methodsIR.push({
         name: methodName,
         args,
-        ret: returnType
+        returnType: returnTypeIR,
+        methodType: "static"
       });
     }
 
@@ -318,84 +331,22 @@ function processClass(classDecl: ClassDeclaration): RustType | null {
     for (const method of methods) {
       const methodName = convertToSnakeCase(method.getName());
       const params = method.getParameters();
-      const returnType = convertTypeToRust(method.getReturnType());
+      const returnTypeIR = convertTypeToRustIR(method.getReturnType());
 
       const args = params.map(param => ({
         name: convertToSnakeCase(param.getName()),
-        type: convertTypeToRust(param.getType())
+        type: convertTypeToRustIR(param.getType())
       }));
 
-      funcs.push({
+      methodsIR.push({
         name: methodName,
         args,
-        ret: returnType
+        returnType: returnTypeIR,
+        methodType: "instance"
       });
     }
 
-    // Generate wasm_bindgen extern "C" block
-    let rustCode = `#[wasm_bindgen]\nextern "C" {\n`;
-    rustCode += `    type ${name};\n\n`;
-
-    // Use a Set to avoid duplicate method signatures
-    const processedSignatures = new Set<string>();
-
-    for (const func of funcs) {
-      console.log(`Processing function: ${func.name}, args: ${JSON.stringify(func.args)}, ret: ${func.ret}`);
-
-      if (func.name === "new") {
-        // Constructor
-        const signature = `constructor_${func.args.map(arg => `${arg.name}:${arg.type}`).join("_")}`;
-        if (!processedSignatures.has(signature)) {
-          processedSignatures.add(signature);
-          rustCode += `    #[wasm_bindgen(constructor)]\n`;
-          rustCode += `    fn new(`;
-          rustCode += func.args.map(arg => `${arg.name}: ${arg.type}`).join(", ");
-          rustCode += `) -> ${name};\n\n`;
-        }
-      } else {
-        // Check if this is an instance method or static method
-        const isStaticMethod = staticMethods.some(m => convertToSnakeCase(m.getName()) === func.name);
-        const isInstanceMethod = methods.some(m => convertToSnakeCase(m.getName()) === func.name);
-        console.log(`Method ${func.name} isInstanceMethod: ${isInstanceMethod}, isStaticMethod: ${isStaticMethod}`);
-
-        const signature = `${isStaticMethod ? 'static' : 'method'}_${func.name}_${func.args.map(arg => `${arg.name}:${arg.type}`).join("_")}_${func.ret}`;
-
-        if (!processedSignatures.has(signature)) {
-          processedSignatures.add(signature);
-
-          if (isStaticMethod) {
-            // Static method
-            rustCode += `    #[wasm_bindgen(static_method_of = ${name}, js_name = ${func.name})]\n`;
-            rustCode += `    fn ${func.name}(`;
-            rustCode += func.args.map(arg => `${arg.name}: ${arg.type}`).join(", ");
-            rustCode += `) -> ${func.ret};\n\n`;
-          } else if (isInstanceMethod) {
-            // Instance method
-            rustCode += `    #[wasm_bindgen(method)]\n`;
-            rustCode += `    fn ${func.name}(this: &${name}`;
-            if (func.args.length > 0) {
-              rustCode += ", " + func.args.map(arg => `${arg.name}: ${arg.type}`).join(", ");
-            }
-            rustCode += `) -> ${func.ret};\n\n`;
-          } else {
-            // Unknown method type - default to instance method
-            console.warn(`Unknown method type for ${func.name}, defaulting to instance method`);
-            rustCode += `    #[wasm_bindgen(method)]\n`;
-            rustCode += `    fn ${func.name}(this: &${name}`;
-            if (func.args.length > 0) {
-              rustCode += ", " + func.args.map(arg => `${arg.name}: ${arg.type}`).join(", ");
-            }
-            rustCode += `) -> ${func.ret};\n\n`;
-          }
-        } else {
-          console.log(`Skipping duplicate method: ${func.name}`);
-        }
-      }
-    }
-
-    rustCode += "}\n\n";
-
-    return { kind: "class", name, methods: funcs, rustCode };
+    return { kind: "extern_block", name, methods: methodsIR };
   } else if (properties.length > 0) {
     let rustStruct = `#[derive(Debug, Clone, Serialize, Deserialize)]\npub struct ${prefixedName} {\n`;
 
@@ -531,6 +482,73 @@ function processEnum(enumDecl: EnumDeclaration): RustType | null {
 
 // ==== TYPE CONVERSION FUNCTIONS ====
 
+// Convert TypeScript Type to Rust IR
+function convertTypeToRustIR(type: Type | undefined): RustTypeIR {
+  if (!type) return { kind: "primitive", name: "()" };
+
+  const typeText = type.getText().trim();
+  
+  // Handle primitive types
+  const primitiveResult = convertPrimitiveToIR(typeText);
+  if (primitiveResult) return primitiveResult;
+
+  // Handle arrays and tuples
+  if (type.isArray()) {
+    const elementType = type.getArrayElementType();
+    if (elementType) {
+      return { kind: "array", element: convertTypeToRustIR(elementType) };
+    }
+  }
+
+  // Handle tuple types like [number, number, number]
+  if (type.isTuple()) {
+    const elements = type.getTupleElements();
+    const rustElements = elements.map(el => convertTypeToRustIR(el));
+    
+    // Check if all elements are the same primitive type
+    if (rustElements.length > 0 && rustElements.every(el => 
+      el.kind === "primitive" && el.name === rustElements[0].name && rustElements[0].kind === "primitive"
+    )) {
+      // Convert to fixed-size array [T; N]
+      return { kind: "array", element: rustElements[0], size: rustElements.length };
+    }
+    
+    return { kind: "tuple", elements: rustElements };
+  }
+
+  // Handle union types
+  if (type.isUnion()) {
+    const variants = type.getUnionTypes().map(t => convertTypeToRustIR(t));
+    
+    // Check for Option<T> pattern (T | undefined)
+    const undefinedVariant = variants.find(v => v.kind === "primitive" && v.name === "()");
+    if (undefinedVariant && variants.length === 2) {
+      const innerType = variants.find(v => v !== undefinedVariant);
+      if (innerType) {
+        return { kind: "option", inner: innerType };
+      }
+    }
+    
+    return { kind: "union", variants };
+  }
+
+  // Handle named types
+  const cleanedName = typeText.replace(/import\([^)]*\)\./g, '').trim();
+  return { kind: "named", name: cleanedName };
+}
+
+function convertPrimitiveToIR(typeText: string): RustTypeIR | null {
+  switch (typeText) {
+    case "string": return { kind: "primitive", name: "String" };
+    case "number": return { kind: "primitive", name: "f64" };
+    case "boolean": return { kind: "primitive", name: "bool" };
+    case "void": return { kind: "primitive", name: "()" };
+    case "undefined": return { kind: "primitive", name: "()" };
+    default: return null;
+  }
+}
+
+// Legacy function for backward compatibility during refactoring
 function convertTypeToRust(type: Type | undefined): string {
   if (!type) return "()";
 
@@ -546,7 +564,10 @@ function convertTypeToRust(type: Type | undefined): string {
 
   // Handle arrays (exact conversion)
   const arrayResult = convertArrayTypes(type, typeText);
-  if (arrayResult) return arrayResult;
+  if (arrayResult) {
+    console.log(`Array conversion: ${typeText} -> ${arrayResult}`);
+    return arrayResult;
+  }
 
   // Handle specific manifold types (exact conversion)
   const manifoldResult = convertManifoldTypes(typeText);
@@ -591,6 +612,7 @@ function convertPrimitiveTypes(typeText: string): string | null {
 }
 
 function convertArrayTypes(type: Type, typeText: string): string | null {
+  // Handle normal arrays like string[], number[]
   if (typeText.includes("[]")) {
     const elementType = type.getArrayElementType();
     if (elementType) {
@@ -598,6 +620,29 @@ function convertArrayTypes(type: Type, typeText: string): string | null {
     }
     return "Vec<()>";
   }
+  
+  // Handle tuple/fixed arrays like [number, number] or [number, number, number]
+  if (typeText.startsWith("[") && typeText.endsWith("]")) {
+    const inner = typeText.slice(1, -1);
+    const elements = inner.split(",").map(s => s.trim());
+    
+    // Check if all elements are the same type
+    const firstElementType = elements[0];
+    const allSameType = elements.every(el => el === firstElementType);
+    
+    if (allSameType) {
+      // Convert to fixed-size array [T; N] - recursively convert the element type
+      const convertedElementType = convertPrimitiveTypes(firstElementType);
+      if (convertedElementType) {
+        return `[${convertedElementType}; ${elements.length}]`;
+      }
+    }
+    
+    // For mixed types or unknown types, fall back to Vec - recursively convert first element type
+    const convertedFirstType = convertPrimitiveTypes(firstElementType) || "String";
+    return `Vec<${convertedFirstType}>`;
+  }
+  
   return null;
 }
 
@@ -686,7 +731,103 @@ function convertToPascalCase(str: string): string {
   return str.charAt(0).toUpperCase() + str.slice(1);
 }
 
-function generateRustOutput(generatedTypes: Map<string, RustType>): void {
+// ==== CODE GENERATION FUNCTIONS ====
+
+// Convert RustTypeIR to string
+function rustTypeIRToString(typeIR: RustTypeIR): string {
+  switch (typeIR.kind) {
+    case "primitive":
+      return typeIR.name;
+    case "array":
+      const elementStr = rustTypeIRToString(typeIR.element);
+      return typeIR.size 
+        ? `[${elementStr}; ${typeIR.size}]`
+        : `Vec<${elementStr}>`;
+    case "tuple":
+      const elementsStr = typeIR.elements.map(rustTypeIRToString).join(", ");
+      return `(${elementsStr})`;
+    case "union":
+      // For now, represent as comments. TODO: implement proper sum types
+      const variantsStr = typeIR.variants.map(rustTypeIRToString).join(" | ");
+      return `/* Union: ${variantsStr} */ String`;
+    case "named":
+      return typeIR.name;
+    case "generic":
+      const argsStr = typeIR.args.map(rustTypeIRToString).join(", ");
+      return `${typeIR.base}<${argsStr}>`;
+    case "option":
+      return `Option<${rustTypeIRToString(typeIR.inner)}>`;
+    case "js_value":
+      return "wasm_bindgen::JsValue";
+    default:
+      return "()";
+  }
+}
+
+// Generate Rust code for RustItem
+function rustItemToString(item: RustItem): string {
+  switch (item.kind) {
+    case "struct":
+      const derives = item.derives ? `#[derive(${item.derives.join(", ")})]\n` : "";
+      let structCode = `${derives}pub struct ${item.name} {\n`;
+      for (const field of item.fields) {
+        const fieldType = field.optional 
+          ? `Option<${rustTypeIRToString(field.type)}>`
+          : rustTypeIRToString(field.type);
+        structCode += `    pub ${field.name}: ${fieldType},\n`;
+      }
+      structCode += "}\n\n";
+      return structCode;
+
+    case "enum":
+      const enumDerives = item.derives ? `#[derive(${item.derives.join(", ")})]\n` : "";
+      let enumCode = `${enumDerives}pub enum ${item.name} {\n`;
+      for (const variant of item.variants) {
+        enumCode += `    ${variant},\n`;
+      }
+      enumCode += "}\n\n";
+      return enumCode;
+
+    case "extern_block":
+      let externCode = `#[wasm_bindgen]\nextern "C" {\n`;
+      externCode += `    type ${item.name};\n\n`;
+      
+      for (const method of item.methods) {
+        if (method.methodType === "constructor") {
+          externCode += `    #[wasm_bindgen(constructor)]\n`;
+          externCode += `    fn new(`;
+        } else if (method.methodType === "static") {
+          externCode += `    #[wasm_bindgen(static_method_of = ${item.name}, js_name = ${method.name})]\n`;
+          externCode += `    fn ${method.name}(`;
+        } else {
+          externCode += `    #[wasm_bindgen(method)]\n`;
+          externCode += `    fn ${method.name}(this: &${item.name}`;
+          if (method.args.length > 0) externCode += ", ";
+        }
+        
+        const argStrings = method.args.map(arg => {
+          const argType = arg.optional 
+            ? `Option<${rustTypeIRToString(arg.type)}>`
+            : rustTypeIRToString(arg.type);
+          return `${arg.name}: ${argType}`;
+        });
+        
+        externCode += argStrings.join(", ");
+        externCode += `) -> ${rustTypeIRToString(method.returnType)};\n\n`;
+      }
+      
+      externCode += "}\n\n";
+      return externCode;
+
+    case "type_alias":
+      return `pub type ${item.name} = ${rustTypeIRToString(item.target)};\n\n`;
+
+    default:
+      return "";
+  }
+}
+
+function generateRustOutput(generatedItems: Map<string, RustItem>): void {
   const outputDir = path.resolve(__dirname, "../../generated-rust-types");
   if (!fs.existsSync(outputDir)) {
     fs.mkdirSync(outputDir, { recursive: true });
@@ -694,14 +835,10 @@ function generateRustOutput(generatedTypes: Map<string, RustType>): void {
 
   let rustOutput = "// Auto-generated Rust types from manifold-3d TypeScript definitions\n\n";
 
-  // Check what imports we need based on generated types
-  const needsWasmBindgen = Array.from(generatedTypes.values()).some(
-    type => type.rustCode.includes("wasm_bindgen::JsValue")
-  );
-
-  const needsSerde = Array.from(generatedTypes.values()).some(
-    type => type.rustCode.includes("Serialize") || type.rustCode.includes("Deserialize")
-  );
+  // Check what imports we need based on generated items
+  const allCode = Array.from(generatedItems.values()).map(rustItemToString).join("");
+  const needsWasmBindgen = allCode.includes("wasm_bindgen");
+  const needsSerde = allCode.includes("Serialize") || allCode.includes("Deserialize");
 
   // Add necessary imports
   if (needsWasmBindgen) {
@@ -718,16 +855,16 @@ function generateRustOutput(generatedTypes: Map<string, RustType>): void {
 
   rustOutput += "\n";
 
-  // Add all generated types
-  for (const [_, rustType] of generatedTypes) {
-    rustOutput += rustType.rustCode;
+  // Add all generated items
+  for (const [_, rustItem] of generatedItems) {
+    rustOutput += rustItemToString(rustItem);
   }
 
   const outputPath = path.join(outputDir, "manifold_types.rs");
   fs.writeFileSync(outputPath, rustOutput);
 
   console.log(`Generated Rust types written to: ${outputPath}`);
-  console.log(`Generated ${generatedTypes.size} types`);
+  console.log(`Generated ${generatedItems.size} items`);
 }
 
 // Main execution
