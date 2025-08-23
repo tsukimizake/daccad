@@ -1,11 +1,19 @@
-import { Project, InterfaceDeclaration, TypeAliasDeclaration, ClassDeclaration, EnumDeclaration, PropertySignature, MethodSignature, ParameterDeclaration, Type } from "ts-morph";
+import { Project, InterfaceDeclaration, TypeAliasDeclaration, ClassDeclaration, EnumDeclaration, Type } from "ts-morph";
 import * as fs from "fs";
 import * as path from "path";
 
-interface RustType {
-  name: string;
-  rustCode: string;
-}
+// Union type for different kinds of Rust types
+type RustType =
+  | { kind: "struct"; name: string; rustCode: string; }
+  | { kind: "enum"; name: string; rustCode: string; }
+  | { kind: "encapsulated"; name: string; rustCode: string; }
+  | { kind: "type_alias"; name: string; rustCode: string; }
+  | { kind: "opaque"; name: string; rustCode: string; }
+  | { kind: "vec2"; name: string; rustCode: string; }
+  | { kind: "vec3"; name: string; rustCode: string; }
+  | { kind: "matrix"; name: string; rustCode: string; }
+  | { kind: "sealed_array"; name: string; rustCode: string; }
+  | { kind: "polygon"; name: string; rustCode: string; };
 
 function createProject(): Project {
   return new Project({
@@ -44,7 +52,7 @@ async function generateRustTypes(): Promise<void> {
   // Process all source files
   for (const sourceFile of project.getSourceFiles()) {
     console.log(`Processing file: ${sourceFile.getFilePath()}`);
-    
+
     // Process interfaces
     const interfaces = sourceFile.getInterfaces();
     console.log(`Found ${interfaces.length} interfaces`);
@@ -86,15 +94,15 @@ function processInterface(interfaceDecl: InterfaceDeclaration, generatedTypes: M
   // Special handling for SealedUint32Array and SealedFloat32Array
   if (name === "SealedUint32Array") {
     const rustStruct = `// Fixed-size array type for ${name}\n` +
-                      `pub type ${name}<const N: usize> = [u32; N];\n\n`;
-    generatedTypes.set(name, { name, rustCode: rustStruct });
+      `pub type ${name}<const N: usize> = [u32; N];\n\n`;
+    generatedTypes.set(name, { kind: "sealed_array", name, rustCode: rustStruct });
     return;
   }
-  
+
   if (name === "SealedFloat32Array") {
     const rustStruct = `// Fixed-size array type for ${name}\n` +
-                      `pub type ${name}<const N: usize> = [f32; N];\n\n`;
-    generatedTypes.set(name, { name, rustCode: rustStruct });
+      `pub type ${name}<const N: usize> = [f32; N];\n\n`;
+    generatedTypes.set(name, { kind: "sealed_array", name, rustCode: rustStruct });
     return;
   }
 
@@ -105,7 +113,7 @@ function processInterface(interfaceDecl: InterfaceDeclaration, generatedTypes: M
     const propName = prop.getName();
     const propType = convertTypeToRust(prop.getType());
     const isOptional = prop.hasQuestionToken();
-    
+
     if (isOptional) {
       rustStruct += `    pub ${convertToSnakeCase(propName)}: Option<${propType}>,\n`;
     } else {
@@ -118,72 +126,80 @@ function processInterface(interfaceDecl: InterfaceDeclaration, generatedTypes: M
   // Generate implementation with methods
   if (methods.length > 0) {
     rustStruct += `impl ${name} {\n`;
-    
+
     for (const method of methods) {
       const methodName = method.getName();
       const params = method.getParameters();
       const returnType = convertTypeToRust(method.getReturnType());
-      
+
       let methodSignature = `    pub fn ${convertToSnakeCase(methodName)}(`;
       methodSignature += "&self";
-      
+
       for (const param of params) {
         const paramName = param.getName();
         const paramType = convertTypeToRust(param.getType());
         const isOptional = param.hasQuestionToken();
-        
+
         if (isOptional) {
           methodSignature += `, ${convertToSnakeCase(paramName)}: Option<${paramType}>`;
         } else {
           methodSignature += `, ${convertToSnakeCase(paramName)}: ${paramType}`;
         }
       }
-      
+
       methodSignature += `) -> ${returnType} {\n`;
       methodSignature += `        todo!("Implement ${methodName}")\n`;
       methodSignature += "    }\n\n";
-      
+
       rustStruct += methodSignature;
     }
-    
+
     rustStruct += "}\n\n";
   }
 
-  generatedTypes.set(name, { name, rustCode: rustStruct });
+  generatedTypes.set(name, { kind: "struct", name, rustCode: rustStruct });
 }
 
 function processTypeAlias(typeAlias: TypeAliasDeclaration, generatedTypes: Map<string, RustType>): void {
   const name = typeAlias.getName();
   const aliasType = typeAlias.getType();
-  
+
   let rustType: string;
-  
+  let kind: RustType["kind"];
+
   // Handle tuple types like Vec2, Vec3
   if (name === "Vec2") {
     rustType = "pub type Vec2 = [f64; 2];\n\n";
+    kind = "vec2";
   } else if (name === "Vec3") {
     rustType = "pub type Vec3 = [f64; 3];\n\n";
+    kind = "vec3";
   } else if (name === "Mat3") {
     rustType = "pub type Mat3 = [f64; 9];\n\n";
+    kind = "matrix";
   } else if (name === "Mat4") {
     rustType = "pub type Mat4 = [f64; 16];\n\n";
+    kind = "matrix";
   } else if (name === "SimplePolygon") {
     rustType = "pub type SimplePolygon = Vec<Vec2>;\n\n";
+    kind = "polygon";
   } else if (name === "Polygons") {
     rustType = "pub type Polygons = Vec<SimplePolygon>;\n\n";
+    kind = "polygon";
   } else {
     const convertedType = convertTypeToRust(aliasType);
-    
+
     // Skip self-referencing types like "pub type CrossSection = CrossSection;"
     if (convertedType === name) {
       console.log(`Skipping self-referencing type alias: ${name}`);
       return;
     }
-    
+
     rustType = `pub type ${name} = ${convertedType};\n\n`;
+    kind = "type_alias";
   }
 
-  generatedTypes.set(name, { name, rustCode: rustType });
+  generatedTypes.set(name, { kind, name, rustCode: rustType });
 }
 
 function processClass(classDecl: ClassDeclaration, generatedTypes: Map<string, RustType>): void {
@@ -201,25 +217,28 @@ function processClass(classDecl: ClassDeclaration, generatedTypes: Map<string, R
 
   // Generate struct with properties if any
   let rustStruct: string;
-  
+
   if (isEncapsulatedType) {
     // For encapsulated types like CrossSection, Manifold, Mesh - use JSValue
     rustStruct = `// ${name} from manifold-encapsulated-types - represented as JSValue\n`;
     rustStruct += `pub type ${name} = wasm_bindgen::JsValue;\n\n`;
-    
+
     // For JSValue types, we don't generate impl blocks
-    generatedTypes.set(name, { name, rustCode: rustStruct });
+    generatedTypes.set(name, { kind: "encapsulated", name, rustCode: rustStruct });
     return;
   } else if (properties.length > 0) {
     rustStruct = `#[derive(Debug, Clone, Serialize, Deserialize)]\npub struct ${name} {\n`;
-    
+
     for (const prop of properties) {
       const propName = prop.getName();
       const propType = convertTypeToRust(prop.getType());
       rustStruct += `    pub ${convertToSnakeCase(propName)}: ${propType},\n`;
     }
-    
+
     rustStruct += "}\n\n";
+
+    // For structs with properties, we generate impl blocks later
+    // Generate implementation - this will be followed by impl block generation
   } else {
     // For other classes that are more like opaque handles
     rustStruct = `// ${name} is an opaque type\n`;
@@ -236,26 +255,26 @@ function processClass(classDecl: ClassDeclaration, generatedTypes: Map<string, R
   for (const constructor of constructors) {
     const params = constructor.getParameters();
     let constructorSignature = "    pub fn new(";
-    
+
     for (let i = 0; i < params.length; i++) {
       const param = params[i];
       const paramName = param.getName();
       const paramType = convertTypeToRust(param.getType());
       const isOptional = param.hasQuestionToken();
-      
+
       if (i > 0) constructorSignature += ", ";
-      
+
       if (isOptional) {
         constructorSignature += `${convertToSnakeCase(paramName)}: Option<${paramType}>`;
       } else {
         constructorSignature += `${convertToSnakeCase(paramName)}: ${paramType}`;
       }
     }
-    
+
     constructorSignature += `) -> Self {\n`;
     constructorSignature += `        todo!("Implement constructor")\n`;
     constructorSignature += "    }\n\n";
-    
+
     rustStruct += constructorSignature;
   }
 
@@ -264,28 +283,28 @@ function processClass(classDecl: ClassDeclaration, generatedTypes: Map<string, R
     const methodName = method.getName();
     const params = method.getParameters();
     const returnType = convertTypeToRust(method.getReturnType());
-    
+
     let methodSignature = `    pub fn ${convertToSnakeCase(methodName)}(`;
-    
+
     for (let i = 0; i < params.length; i++) {
       const param = params[i];
       const paramName = param.getName();
       const paramType = convertTypeToRust(param.getType());
       const isOptional = param.hasQuestionToken();
-      
+
       if (i > 0) methodSignature += ", ";
-      
+
       if (isOptional) {
         methodSignature += `${convertToSnakeCase(paramName)}: Option<${paramType}>`;
       } else {
         methodSignature += `${convertToSnakeCase(paramName)}: ${paramType}`;
       }
     }
-    
+
     methodSignature += `) -> ${returnType} {\n`;
     methodSignature += `        todo!("Implement ${methodName}")\n`;
     methodSignature += "    }\n\n";
-    
+
     rustStruct += methodSignature;
   }
 
@@ -294,32 +313,34 @@ function processClass(classDecl: ClassDeclaration, generatedTypes: Map<string, R
     const methodName = method.getName();
     const params = method.getParameters();
     const returnType = convertTypeToRust(method.getReturnType());
-    
+
     let methodSignature = `    pub fn ${convertToSnakeCase(methodName)}(`;
     methodSignature += "&self";
-    
+
     for (const param of params) {
       const paramName = param.getName();
       const paramType = convertTypeToRust(param.getType());
       const isOptional = param.hasQuestionToken();
-      
+
       if (isOptional) {
         methodSignature += `, ${convertToSnakeCase(paramName)}: Option<${paramType}>`;
       } else {
         methodSignature += `, ${convertToSnakeCase(paramName)}: ${paramType}`;
       }
     }
-    
+
     methodSignature += `) -> ${returnType} {\n`;
     methodSignature += `        todo!("Implement ${methodName}")\n`;
     methodSignature += "    }\n\n";
-    
+
     rustStruct += methodSignature;
   }
-  
+
   rustStruct += "}\n\n";
 
-  generatedTypes.set(name, { name, rustCode: rustStruct });
+  // Determine if this is a struct or opaque type
+  const kind = properties.length > 0 ? "struct" : "opaque";
+  generatedTypes.set(name, { kind, name, rustCode: rustStruct });
 }
 
 function processEnum(enumDecl: EnumDeclaration, generatedTypes: Map<string, RustType>): void {
@@ -335,53 +356,53 @@ function processEnum(enumDecl: EnumDeclaration, generatedTypes: Map<string, Rust
 
   rustEnum += "}\n\n";
 
-  generatedTypes.set(name, { name, rustCode: rustEnum });
+  generatedTypes.set(name, { kind: "enum", name, rustCode: rustEnum });
 }
 
 // ==== TYPE CONVERSION FUNCTIONS ====
 
 function convertTypeToRust(type: Type | undefined): string {
   if (!type) return "()";
-  
+
   let typeText = type.getText();
   if (!typeText) return "()";
-  
+
   // Clean up the type text to remove import paths
   typeText = typeText.replace(/import\([^)]*\)\./g, '');
-  
+
   // Handle primitive types (exact conversion)
   const primitiveResult = convertPrimitiveTypes(typeText);
   if (primitiveResult) return primitiveResult;
-  
+
   // Handle arrays (exact conversion)
   const arrayResult = convertArrayTypes(type, typeText);
   if (arrayResult) return arrayResult;
-  
+
   // Handle specific manifold types (exact conversion)
   const manifoldResult = convertManifoldTypes(typeText);
   if (manifoldResult) return manifoldResult;
-  
+
   // Handle generics (exact conversion where possible)
   const genericResult = convertGenericTypes(typeText);
   if (genericResult) return genericResult;
-  
+
   // Handle typeof expressions (exact conversion)
   const typeofResult = convertTypeofExpressions(typeText);
   if (typeofResult) return typeofResult;
-  
+
   // Clean common TypeScript constructs
   typeText = cleanTypeScriptConstructs(typeText);
-  
+
   // ==== SIMPLIFIED CONVERSIONS (TODO: implement properly) ====
-  
+
   // SIMPLIFIED: Union types
   const unionResult = simplifyUnionTypes(typeText);
   if (unionResult) return unionResult;
-  
+
   // SIMPLIFIED: Function types
   const functionResult = simplifyFunctionTypes(typeText);
   if (functionResult) return functionResult;
-  
+
   // Default to the cleaned type name
   return typeText;
 }
@@ -461,7 +482,7 @@ function simplifyUnionTypes(typeText: string): string | null {
     // TODO: Extract enum-like values and create proper Rust enum
     return "String"; // Simplified for now
   }
-  
+
   // SIMPLIFIED: General union types (e.g., "Polygons | CrossSection")
   if (typeText.includes("|")) {
     const types = typeText.split("|").map(t => t.trim());
@@ -473,7 +494,7 @@ function simplifyUnionTypes(typeText: string): string | null {
     // TODO: For complex types, create proper sum types
     return `/* Union: ${typeText} */ String`; // Placeholder
   }
-  
+
   return null;
 }
 
@@ -501,12 +522,12 @@ function generateRustOutput(generatedTypes: Map<string, RustType>): void {
   }
 
   let rustOutput = "// Auto-generated Rust types from manifold-3d TypeScript definitions\n\n";
-  
+
   // Check what imports we need based on generated types
   const needsWasmBindgen = Array.from(generatedTypes.values()).some(
     type => type.rustCode.includes("wasm_bindgen::JsValue")
   );
-  
+
   const needsSerde = Array.from(generatedTypes.values()).some(
     type => type.rustCode.includes("Serialize") || type.rustCode.includes("Deserialize")
   );
@@ -515,15 +536,15 @@ function generateRustOutput(generatedTypes: Map<string, RustType>): void {
   if (needsWasmBindgen) {
     rustOutput += `use wasm_bindgen::prelude::*;\n`;
   }
-  
+
   if (needsSerde) {
     rustOutput += `use serde::{Serialize, Deserialize};\n`;
   }
-  
+
   // Add common imports
   rustOutput += `use std::collections::HashMap;\n`;
   rustOutput += `use std::fmt::Debug;\n`;
-  
+
   rustOutput += "\n";
 
   // Add all generated types
@@ -533,7 +554,7 @@ function generateRustOutput(generatedTypes: Map<string, RustType>): void {
 
   const outputPath = path.join(outputDir, "manifold_types.rs");
   fs.writeFileSync(outputPath, rustOutput);
-  
+
   console.log(`Generated Rust types written to: ${outputPath}`);
   console.log(`Generated ${generatedTypes.size} types`);
 }
