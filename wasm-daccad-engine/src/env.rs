@@ -1,9 +1,11 @@
 use elm_rs::{Elm, ElmDecode, ElmEncode};
 use serde::{Deserialize, Serialize};
-use tsify::Tsify;
 use std::collections::HashMap;
+use tsify::Tsify;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Elm, ElmDecode, ElmEncode, Tsify, PartialEq, Eq, Hash)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, Elm, ElmDecode, ElmEncode, Tsify, PartialEq, Eq, Hash,
+)]
 pub struct ModelId(pub usize);
 
 impl From<usize> for ModelId {
@@ -31,9 +33,7 @@ impl Point3 {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManifoldObject {
-    pub id: ModelId,
-    pub vertices: Vec<Point3>,
-    pub faces: Vec<[usize; 3]>,
+    // TODO
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,11 +61,11 @@ impl Env {
             next_id: 0,
         }
     }
-    
+
     pub fn get_model(&self, id: ModelId) -> Option<&Model> {
         self.models.get(&id)
     }
-    
+
     pub fn add_model(&mut self, model: Model) -> ModelId {
         let id = ModelId(self.next_id);
         self.next_id += 1;
