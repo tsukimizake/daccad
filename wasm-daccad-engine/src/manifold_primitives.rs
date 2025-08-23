@@ -120,52 +120,5 @@ pub fn get_and_parse_mesh_data(manifold: &JsValue) -> Result<ManifoldObject, Str
 
 // Helper function to create a cube using manifold types
 pub fn create_manifold_cube(size: ManifoldVec3) -> Result<MeshData, String> {
-    // This would typically call into manifold-3d JavaScript bindings
-    // For now, we'll create a simple cube mesh data structure
-    
-    let [width, height, depth] = size;
-    let half_w = (width / 2.0) as f32;
-    let half_h = (height / 2.0) as f32;
-    let half_d = (depth / 2.0) as f32;
-    
-    // Cube vertices (8 corners)
-    let vertices = vec![
-        -half_w, -half_h, -half_d,  // 0: bottom-left-back
-         half_w, -half_h, -half_d,  // 1: bottom-right-back
-         half_w,  half_h, -half_d,  // 2: top-right-back
-        -half_w,  half_h, -half_d,  // 3: top-left-back
-        -half_w, -half_h,  half_d,  // 4: bottom-left-front
-         half_w, -half_h,  half_d,  // 5: bottom-right-front
-         half_w,  half_h,  half_d,  // 6: top-right-front
-        -half_w,  half_h,  half_d,  // 7: top-left-front
-    ];
-    
-    // Cube triangles (12 triangles, 2 per face)
-    let triangles = vec![
-        // Back face
-        0, 1, 2,  0, 2, 3,
-        // Front face
-        4, 6, 5,  4, 7, 6,
-        // Left face
-        0, 3, 7,  0, 7, 4,
-        // Right face
-        1, 5, 6,  1, 6, 2,
-        // Bottom face
-        0, 4, 5,  0, 5, 1,
-        // Top face
-        3, 2, 6,  3, 6, 7,
-    ];
-    
-    Ok(MeshData {
-        num_prop: 3,  // Only position (x, y, z)
-        vert_properties: vertices,
-        tri_verts: triangles,
-        merge_from_vert: None,
-        merge_to_vert: None,
-        run_index: None,
-        run_original_id: None,
-        run_transform: None,
-        face_id: None,
-        halfedge_tangent: None,
-    })
+    todo!()
 }
