@@ -1,6 +1,11 @@
 import { Project, InterfaceDeclaration, TypeAliasDeclaration, ClassDeclaration, EnumDeclaration, Type } from "ts-morph";
 import * as fs from "fs";
 import * as path from "path";
+import { fileURLToPath } from "url";
+
+// ESM equivalent of __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Union type for different kinds of Rust types
 type RustType =
@@ -199,14 +204,15 @@ function processTypeAlias(typeAlias: TypeAliasDeclaration): RustType | null {
   } else {
     const convertedType = convertTypeToRust(aliasType);
 
-    // Skip self-referencing types like "pub type CrossSection = CrossSection;"
+    // Handle self-referencing are likely encapsulated types
     if (convertedType === name) {
-      console.log(`Skipping self-referencing type alias: ${name}`);
-      return null;
+      console.log(`Converting self-referencing type alias to JSValue: ${name}`);
+      rustType = `// ${name} - encapsulated type represented as JSValue\npub type ${name} = wasm_bindgen::JsValue;\n\n`;
+      kind = "encapsulated";
+    } else {
+      rustType = `pub type ${name} = ${convertedType};\n\n`;
+      kind = "type_alias";
     }
-
-    rustType = `pub type ${name} = ${convertedType};\n\n`;
-    kind = "type_alias";
   }
 
   return { kind, name, rustCode: rustType };
@@ -579,6 +585,7 @@ async function main() {
   }
 }
 
-if (require.main === module) {
+// ESM equivalent of require.main === module check
+if (import.meta.url === `file://${process.argv[1]}`) {
   main();
 }

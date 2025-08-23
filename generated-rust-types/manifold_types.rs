@@ -19,13 +19,13 @@ pub struct MeshOptions {
     pub halfedge_tangent: Option<Float32Array >,
 }
 
-// CrossSection from manifold-encapsulated-types - represented as JSValue
+// CrossSection - encapsulated type represented as JSValue
 pub type CrossSection = wasm_bindgen::JsValue;
 
-// Manifold from manifold-encapsulated-types - represented as JSValue
+// Manifold - encapsulated type represented as JSValue
 pub type Manifold = wasm_bindgen::JsValue;
 
-// Mesh from manifold-encapsulated-types - represented as JSValue
+// Mesh - encapsulated type represented as JSValue
 pub type Mesh = wasm_bindgen::JsValue;
 
 // Fixed-size array type for SealedUint32Array
@@ -45,6 +45,24 @@ pub type Mat4 = [f64; 16];
 pub type SimplePolygon = Vec<Vec2>;
 
 pub type Polygons = Vec<SimplePolygon>;
+
+// Rect - encapsulated type represented as JSValue
+pub type Rect = wasm_bindgen::JsValue;
+
+// Box - encapsulated type represented as JSValue
+pub type Box = wasm_bindgen::JsValue;
+
+// Smoothness - encapsulated type represented as JSValue
+pub type Smoothness = wasm_bindgen::JsValue;
+
+// FillRule - encapsulated type represented as JSValue
+pub type FillRule = wasm_bindgen::JsValue;
+
+// JoinType - encapsulated type represented as JSValue
+pub type JoinType = wasm_bindgen::JsValue;
+
+// ErrorStatus - encapsulated type represented as JSValue
+pub type ErrorStatus = wasm_bindgen::JsValue;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManifoldToplevel {
