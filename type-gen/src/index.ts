@@ -1,4 +1,4 @@
-import { Project, InterfaceDeclaration, TypeAliasDeclaration, ClassDeclaration, EnumDeclaration, Type } from "ts-morph";
+import { Project, InterfaceDeclaration, TypeAliasDeclaration, ClassDeclaration, EnumDeclaration, Type, Node, SyntaxKind, StringLiteral, SourceFile } from "ts-morph";
 import * as fs from "fs";
 import * as path from "path";
 import { fileURLToPath } from "url";
@@ -22,9 +22,8 @@ type RustTypeIR =
 type Method = {
   name: string;
   args: Array<{ name: string; type: RustTypeIR; optional?: boolean }>;
-  ret: RustTypeIR;
-  is_static?: boolean;
-  is_constructor?: boolean;
+  returnType: RustTypeIR;
+  methodType: "constructor" | "static" | "instance";
 };
 
 // Intermediate representation for Rust items
@@ -60,7 +59,7 @@ function getFilePrefix(filePath: string): FilePrefix {
 
 async function generateRustTypes(): Promise<void> {
   const project = createProject();
-  const generatedItems = new Map<string, RustItem>();
+  generatedItems = new Map<string, RustItem>();
 
   // Load manifold-3d type definition files with absolute paths
   const manifoldPath = path.resolve(__dirname, "../../node_modules/manifold-3d");
@@ -148,82 +147,48 @@ async function generateRustTypes(): Promise<void> {
   generateRustOutput(generatedItems);
 }
 
-function processInterface(interfaceDecl: InterfaceDeclaration): RustType | null {
+function processInterface(interfaceDecl: InterfaceDeclaration): RustItem | null {
   const name = interfaceDecl.getName();
+  if (!name) return null;
+  
   const sourceFile = interfaceDecl.getSourceFile();
   const fileName = getFilePrefix(sourceFile.getFilePath());
   const prefixedName = `${fileName}${name}`;
   const properties = interfaceDecl.getProperties();
-  const methods = interfaceDecl.getMethods();
 
   // Special handling for SealedUint32Array and SealedFloat32Array
   if (name === "SealedUint32Array") {
-    const rustStruct = `// Fixed-size array type for ${name}\n` +
-      `pub type ${name}<const N: usize> = [u32; N];\n\n`;
-    return { kind: "sealed_array", name: prefixedName, rustCode: rustStruct };
+    return {
+      kind: "type_alias" as const,
+      name: prefixedName,
+      target: { kind: "named" as const, name: "[u32; N]" } // Generic const parameter
+    };
   }
 
   if (name === "SealedFloat32Array") {
-    const rustStruct = `// Fixed-size array type for ${name}\n` +
-      `pub type ${name}<const N: usize> = [f32; N];\n\n`;
-    return { kind: "sealed_array", name: prefixedName, rustCode: rustStruct };
+    return {
+      kind: "type_alias" as const,
+      name: prefixedName,
+      target: { kind: "named" as const, name: "[f32; N]" } // Generic const parameter
+    };
   }
 
-  let rustStruct = `#[derive(Debug, Clone, Serialize, Deserialize)]\npub struct ${prefixedName} {\n`;
+  // Regular interfaces become structs using IR
+  const fields = properties.map(prop => ({
+    name: convertToSnakeCase(prop.getName()),
+    type: convertTypeToRustIR(prop.getType()),
+    optional: prop.hasQuestionToken()
+  }));
 
-  // Process properties
-  for (const prop of properties) {
-    const propName = prop.getName();
-    const propType = convertTypeToRust(prop.getType());
-    const isOptional = prop.hasQuestionToken();
-
-    if (isOptional) {
-      rustStruct += `    pub ${convertToSnakeCase(propName)}: Option<${propType}>,\n`;
-    } else {
-      rustStruct += `    pub ${convertToSnakeCase(propName)}: ${propType},\n`;
-    }
-  }
-
-  rustStruct += "}\n\n";
-
-  // Generate implementation with methods
-  if (methods.length > 0) {
-    rustStruct += `impl ${prefixedName} {\n`;
-
-    for (const method of methods) {
-      const methodName = method.getName();
-      const params = method.getParameters();
-      const returnType = convertTypeToRust(method.getReturnType());
-
-      let methodSignature = `    pub fn ${convertToSnakeCase(methodName)}(`;
-      methodSignature += "&self";
-
-      for (const param of params) {
-        const paramName = param.getName();
-        const paramType = convertTypeToRust(param.getType());
-        const isOptional = param.hasQuestionToken();
-
-        if (isOptional) {
-          methodSignature += `, ${convertToSnakeCase(paramName)}: Option<${paramType}>`;
-        } else {
-          methodSignature += `, ${convertToSnakeCase(paramName)}: ${paramType}`;
-        }
-      }
-
-      methodSignature += `) -> ${returnType} {\n`;
-      methodSignature += `        todo!("Implement ${methodName}")\n`;
-      methodSignature += "    }\n\n";
-
-      rustStruct += methodSignature;
-    }
-
-    rustStruct += "}\n\n";
-  }
-
-  return { kind: "struct", name: prefixedName, rustCode: rustStruct };
+  return {
+    kind: "struct" as const,
+    name: prefixedName,
+    fields,
+    derives: ["Debug", "Clone", "Serialize", "Deserialize"]
+  };
 }
 
-function processTypeAlias(typeAlias: TypeAliasDeclaration): RustType | null {
+function processTypeAlias(typeAlias: TypeAliasDeclaration): RustItem | null {
   const name = typeAlias.getName();
   const sourceFile = typeAlias.getSourceFile();
   const fileName = getFilePrefix(sourceFile.getFilePath());
@@ -353,107 +318,18 @@ function processClass(classDecl: ClassDeclaration): RustItem | null {
 
     return { kind: "extern_block", name, methods: methodsIR };
   } else if (properties.length > 0) {
-    let rustStruct = `#[derive(Debug, Clone, Serialize, Deserialize)]\npub struct ${prefixedName} {\n`;
+    const fields = properties.map(prop => ({
+      name: convertToSnakeCase(prop.getName()),
+      type: convertTypeToRustIR(prop.getType()),
+      optional: prop.hasQuestionToken()
+    }));
 
-    for (const prop of properties) {
-      const propName = prop.getName();
-      const propType = convertTypeToRust(prop.getType());
-      rustStruct += `    pub ${convertToSnakeCase(propName)}: ${propType},\n`;
-    }
-
-    rustStruct += "}\n\n";
-
-    // Generate implementation
-    rustStruct += `impl ${prefixedName} {\n`;
-
-    // Process constructors
-    for (const constructor of constructors) {
-      const params = constructor.getParameters();
-      let constructorSignature = "    pub fn new(";
-
-      for (let i = 0; i < params.length; i++) {
-        const param = params[i];
-        const paramName = param.getName();
-        const paramType = convertTypeToRust(param.getType());
-        const isOptional = param.hasQuestionToken();
-
-        if (i > 0) constructorSignature += ", ";
-
-        if (isOptional) {
-          constructorSignature += `${convertToSnakeCase(paramName)}: Option<${paramType}>`;
-        } else {
-          constructorSignature += `${convertToSnakeCase(paramName)}: ${paramType}`;
-        }
-      }
-
-      constructorSignature += `) -> Self {\n`;
-      constructorSignature += `        todo!("Implement constructor")\n`;
-      constructorSignature += "    }\n\n";
-
-      rustStruct += constructorSignature;
-    }
-
-    // Process static methods
-    for (const method of staticMethods) {
-      const methodName = method.getName();
-      const params = method.getParameters();
-      const returnType = convertTypeToRust(method.getReturnType());
-
-      let methodSignature = `    pub fn ${convertToSnakeCase(methodName)}(`;
-
-      for (let i = 0; i < params.length; i++) {
-        const param = params[i];
-        const paramName = param.getName();
-        const paramType = convertTypeToRust(param.getType());
-        const isOptional = param.hasQuestionToken();
-
-        if (i > 0) methodSignature += ", ";
-
-        if (isOptional) {
-          methodSignature += `${convertToSnakeCase(paramName)}: Option<${paramType}>`;
-        } else {
-          methodSignature += `${convertToSnakeCase(paramName)}: ${paramType}`;
-        }
-      }
-
-      methodSignature += `) -> ${returnType} {\n`;
-      methodSignature += `        todo!("Implement ${methodName}")\n`;
-      methodSignature += "    }\n\n";
-
-      rustStruct += methodSignature;
-    }
-
-    // Process instance methods
-    for (const method of methods) {
-      const methodName = method.getName();
-      const params = method.getParameters();
-      const returnType = convertTypeToRust(method.getReturnType());
-
-      let methodSignature = `    pub fn ${convertToSnakeCase(methodName)}(`;
-      methodSignature += "&self";
-
-      for (const param of params) {
-        const paramName = param.getName();
-        const paramType = convertTypeToRust(param.getType());
-        const isOptional = param.hasQuestionToken();
-
-        if (isOptional) {
-          methodSignature += `, ${convertToSnakeCase(paramName)}: Option<${paramType}>`;
-        } else {
-          methodSignature += `, ${convertToSnakeCase(paramName)}: ${paramType}`;
-        }
-      }
-
-      methodSignature += `) -> ${returnType} {\n`;
-      methodSignature += `        todo!("Implement ${methodName}")\n`;
-      methodSignature += "    }\n\n";
-
-      rustStruct += methodSignature;
-    }
-
-    rustStruct += "}\n\n";
-
-    return { kind: "struct", name: prefixedName, rustCode: rustStruct };
+    return {
+      kind: "struct" as const,
+      name: prefixedName,
+      fields,
+      derives: ["Debug", "Clone", "Serialize", "Deserialize"]
+    };
   } else {
     // For other classes that are more like opaque handles
     let rustStruct = `// ${prefixedName} is an opaque type\n`;
@@ -462,11 +338,15 @@ function processClass(classDecl: ClassDeclaration): RustItem | null {
     rustStruct += `    _private: std::marker::PhantomData<()>,\n`;
     rustStruct += "}\n\n";
 
-    return { kind: "opaque", name: prefixedName, rustCode: rustStruct };
+    return {
+      kind: "type_alias" as const,
+      name: prefixedName,
+      target: { kind: "js_value" as const }
+    };
   }
 }
 
-function processEnum(enumDecl: EnumDeclaration): RustType | null {
+function processEnum(enumDecl: EnumDeclaration): RustItem | null {
   const name = enumDecl.getName();
   const sourceFile = enumDecl.getSourceFile();
   const fileName = getFilePrefix(sourceFile.getFilePath());
@@ -482,7 +362,13 @@ function processEnum(enumDecl: EnumDeclaration): RustType | null {
 
   rustEnum += "}\n\n";
 
-  return { kind: "enum", name: prefixedName, rustCode: rustEnum };
+  const variants = members.map(member => member.getName());
+  return { 
+    kind: "enum" as const, 
+    name: prefixedName, 
+    variants,
+    derives: ["Debug", "Clone", "Copy", "PartialEq", "Eq", "Serialize", "Deserialize"]
+  };
 }
 
 // ==== TYPE CONVERSION FUNCTIONS ====
@@ -511,9 +397,13 @@ function convertTypeToRustIR(type: Type | undefined): RustTypeIR {
     const rustElements = elements.map(el => convertTypeToRustIR(el));
     
     // Check if all elements are the same primitive type
-    if (rustElements.length > 0 && rustElements.every(el => 
-      el.kind === "primitive" && el.name === rustElements[0].name && rustElements[0].kind === "primitive"
-    )) {
+    if (rustElements.length > 0 && 
+        rustElements.every(el => el.kind === "primitive") &&
+        rustElements.every(el => 
+          el.kind === "primitive" && rustElements[0].kind === "primitive" && 
+          el.name === rustElements[0].name
+        )
+    ) {
       // Convert to fixed-size array [T; N]
       return { kind: "array", element: rustElements[0], size: rustElements.length };
     }
@@ -597,15 +487,123 @@ function convertPrimitiveToIR(typeText: string): RustTypeIR | null {
 // Global type alias registry
 const typeAliasRegistry = new Map<string, string>();
 
+// Global generated items registry
+let generatedItems: Map<string, RustItem>;
+
+// Global todo types registry
+const todoTypes = new Map<string, RustTypeIR[]>();
+
 function registerTypeAliases(sourceFile: SourceFile) {
   const typeAliases = sourceFile.getTypeAliases();
   for (const alias of typeAliases) {
     const name = alias.getName();
-    const typeText = alias.getTypeNode()?.getText();
+    const typeNode = alias.getTypeNode();
+    const typeText = typeNode?.getText();
+    
     if (typeText) {
-      typeAliasRegistry.set(name, typeText);
+      // Fix known problematic type definitions
+      if (name === "Polygons" && typeText.includes("SimplePolygon|SimplePolygon[]")) {
+        // Fix Polygons to be just SimplePolygon[] to avoid API confusion
+        typeAliasRegistry.set(name, "SimplePolygon[]");
+        console.log(`Fixed Polygons type definition: ${name} = SimplePolygon[]`);
+      } else {
+        typeAliasRegistry.set(name, typeText);
+      }
+      
+      // Check if this type alias should be converted to enum using AST
+      if (typeNode && Node.isUnionTypeNode(typeNode)) {
+        const unionTypes = typeNode.getTypeNodes();
+        const stringLiterals = unionTypes
+          .filter(t => Node.isLiteralTypeNode(t))
+          .map(t => t.asKindOrThrow(SyntaxKind.LiteralType))
+          .filter(t => Node.isStringLiteral(t.getLiteral()))
+          .map(t => (t.getLiteral() as StringLiteral).getLiteralValue());
+        
+        // If all union types are string literals, create enum
+        if (stringLiterals.length === unionTypes.length && stringLiterals.length > 1) {
+          createEnumFromStringLiterals(sourceFile, name, stringLiterals);
+        }
+      }
     }
   }
+}
+
+function createEnumFromStringLiterals(sourceFile: SourceFile, name: string, stringLiterals: string[]) {
+  // Convert string literals to PascalCase variants
+  const variants = stringLiterals.map(literal => toPascalCase(literal));
+  
+  // Register as enum in our generated items
+  const fileName = getFilePrefix(sourceFile.getFilePath());
+  const prefixedName = `${fileName}${name}`;
+  
+  const enumItem: RustItem = {
+    kind: "enum",
+    name: prefixedName,
+    variants,
+    derives: ["Debug", "Clone", "Serialize", "Deserialize"]
+  };
+  
+  // Add to generated items
+  const key = `${sourceFile.getBaseName()}-${name}`;
+  generatedItems.set(key, enumItem);
+  
+  console.log(`Created enum ${prefixedName} with variants: ${variants.join(', ')}`);
+}
+
+function toPascalCase(str: string): string {
+  // Handle camelCase or compound words like "EvenOdd", "NonZero"
+  // Already in proper PascalCase? Just return it
+  if (/^[A-Z][a-z]*([A-Z][a-z]*)*$/.test(str)) {
+    return str;
+  }
+  
+  // Split on capital letters and common separators
+  return str
+    .replace(/([a-z])([A-Z])/g, '$1 $2') // Insert space before capital letters
+    .split(/[\s_-]+/) // Split on spaces, underscores, hyphens
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join('');
+}
+
+function hashStringToIdentifier(str: string): string {
+  // Simple hash to create a stable identifier
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32-bit integer
+  }
+  return Math.abs(hash).toString(36).toUpperCase().substring(0, 8);
+}
+
+function registerTodoType(typeName: string, variants: RustTypeIR[]) {
+  if (!todoTypes.has(typeName)) {
+    todoTypes.set(typeName, variants);
+    console.log(`Registered todo union type: ${typeName} with ${variants.length} variants`);
+  }
+}
+
+function generateTodoUnionStruct(typeName: string, variants: RustTypeIR[]): string {
+  const variantsComment = variants.map(rustTypeIRToString).join(" | ");
+  
+  let result = `// TODO: Implement proper union type for: ${variantsComment}\n`;
+  result += `// This is a placeholder struct - implement proper sum type or enum\n`;
+  result += `#[derive(Debug, Clone, Serialize, Deserialize)]\n`;
+  result += `pub struct ${typeName} {\n`;
+  result += `    // TODO: Replace with proper union implementation\n`;
+  result += `    // Possible variants: ${variantsComment}\n`;
+  result += `    pub todo_data: String, // Placeholder - implement actual data structure\n`;
+  result += `}\n\n`;
+  
+  result += `impl ${typeName} {\n`;
+  result += `    pub fn todo() -> Self {\n`;
+  result += `        Self {\n`;
+  result += `            todo_data: "TODO: Implement union type".to_string()\n`;
+  result += `        }\n`;
+  result += `    }\n`;
+  result += `}\n\n`;
+  
+  return result;
 }
 
 // Legacy function for backward compatibility during refactoring
@@ -807,9 +805,14 @@ function rustTypeIRToString(typeIR: RustTypeIR): string {
       const elementsStr = typeIR.elements.map(rustTypeIRToString).join(", ");
       return `(${elementsStr})`;
     case "union":
-      // For now, represent as comments. TODO: implement proper sum types
-      const variantsStr = typeIR.variants.map(rustTypeIRToString).join(" | ");
-      return `/* Union: ${variantsStr} */ String`;
+      // Create a meaningful todo type name for complex unions
+      const variantsStr = typeIR.variants.map(rustTypeIRToString).join("");
+      const todoTypeName = `Todo${hashStringToIdentifier(variantsStr)}Union`;
+      
+      // Register this as a todo type to be generated
+      registerTodoType(todoTypeName, typeIR.variants);
+      
+      return todoTypeName;
     case "named":
       return typeIR.name;
     case "generic":
@@ -920,11 +923,16 @@ function generateRustOutput(generatedItems: Map<string, RustItem>): void {
     rustOutput += rustItemToString(rustItem);
   }
 
+  // Add todo union types as structs
+  for (const [typeName, variants] of todoTypes) {
+    rustOutput += generateTodoUnionStruct(typeName, variants);
+  }
+
   const outputPath = path.join(outputDir, "manifold_types.rs");
   fs.writeFileSync(outputPath, rustOutput);
 
   console.log(`Generated Rust types written to: ${outputPath}`);
-  console.log(`Generated ${generatedItems.size} items`);
+  console.log(`Generated ${generatedItems.size} items and ${todoTypes.size} todo union types`);
 }
 
 // Main execution

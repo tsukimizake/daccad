@@ -1,57 +1,89 @@
 // Auto-generated Rust types from manifold-3d TypeScript definitions
 
 use wasm_bindgen::prelude::*;
+use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 use std::fmt::Debug;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum GlobalFillRule {
+    EvenOdd,
+    NonZero,
+    Positive,
+    Negative,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum GlobalJoinType {
+    Square,
+    Round,
+    Miter,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum GlobalErrorStatus {
+    NoError,
+    NonFiniteVertex,
+    NotManifold,
+    VertexOutOfBounds,
+    PropertiesWrongLength,
+    MissingPositionProperties,
+    MergeVectorsDifferentLengths,
+    MergeIndexOutOfBounds,
+    TransformWrongLength,
+    RunIndexWrongLength,
+    FaceIDWrongLength,
+    InvalidConstruction,
+}
 
 #[wasm_bindgen]
 extern "C" {
     type CrossSection;
 
     #[wasm_bindgen(constructor)]
-    fn new(contours: /* Union: Polygons */ String, fill_rule: Option<FillRule>) -> CrossSection;
+    fn new(contours: TodoACYS2HUnion, fill_rule: Option<FillRule>) -> CrossSection;
 
     #[wasm_bindgen(static_method_of = CrossSection, js_name = square)]
-    fn square(size: /* Union: () | f64 | [f64; 2] */ String, center: /* Union: () | false | true */ String) -> CrossSection;
+    fn square(size: TodoB093MSUnion, center: Todo4XK6GGUnion) -> CrossSection;
 
     #[wasm_bindgen(static_method_of = CrossSection, js_name = circle)]
     fn circle(radius: f64, circular_segments: Option<f64>) -> CrossSection;
 
     #[wasm_bindgen(static_method_of = CrossSection, js_name = union)]
-    fn union(a: /* Union: Polygons | CrossSection */ String, b: /* Union: Polygons | CrossSection */ String) -> CrossSection;
+    fn union(a: Todo8BOBPEUnion, b: Todo8BOBPEUnion) -> CrossSection;
 
     #[wasm_bindgen(static_method_of = CrossSection, js_name = difference)]
-    fn difference(a: /* Union: Polygons | CrossSection */ String, b: /* Union: Polygons | CrossSection */ String) -> CrossSection;
+    fn difference(a: Todo8BOBPEUnion, b: Todo8BOBPEUnion) -> CrossSection;
 
     #[wasm_bindgen(static_method_of = CrossSection, js_name = intersection)]
-    fn intersection(a: /* Union: Polygons | CrossSection */ String, b: /* Union: Polygons | CrossSection */ String) -> CrossSection;
+    fn intersection(a: Todo8BOBPEUnion, b: Todo8BOBPEUnion) -> CrossSection;
 
     #[wasm_bindgen(static_method_of = CrossSection, js_name = union)]
-    fn union(polygons: Vec</* Union: Polygons | CrossSection */ String>) -> CrossSection;
+    fn union(polygons: Vec<Todo8BOBPEUnion>) -> CrossSection;
 
     #[wasm_bindgen(static_method_of = CrossSection, js_name = difference)]
-    fn difference(polygons: Vec</* Union: Polygons | CrossSection */ String>) -> CrossSection;
+    fn difference(polygons: Vec<Todo8BOBPEUnion>) -> CrossSection;
 
     #[wasm_bindgen(static_method_of = CrossSection, js_name = intersection)]
-    fn intersection(polygons: Vec</* Union: Polygons | CrossSection */ String>) -> CrossSection;
+    fn intersection(polygons: Vec<Todo8BOBPEUnion>) -> CrossSection;
 
     #[wasm_bindgen(static_method_of = CrossSection, js_name = hull)]
-    fn hull(polygons: Vec</* Union: Polygons | CrossSection */ String>) -> CrossSection;
+    fn hull(polygons: Vec<Todo8BOBPEUnion>) -> CrossSection;
 
     #[wasm_bindgen(static_method_of = CrossSection, js_name = compose)]
-    fn compose(polygons: Vec</* Union: Polygons | CrossSection */ String>) -> CrossSection;
+    fn compose(polygons: Vec<Todo8BOBPEUnion>) -> CrossSection;
 
     #[wasm_bindgen(static_method_of = CrossSection, js_name = of_polygons)]
-    fn of_polygons(contours: /* Union: Polygons */ String, fill_rule: Option<FillRule>) -> CrossSection;
+    fn of_polygons(contours: TodoACYS2HUnion, fill_rule: Option<FillRule>) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn square(this: &CrossSection, size: /* Union: () | f64 | [f64; 2] */ String, center: /* Union: () | false | true */ String) -> CrossSection;
+    fn square(this: &CrossSection, size: TodoB093MSUnion, center: Todo4XK6GGUnion) -> CrossSection;
 
     #[wasm_bindgen(method)]
     fn circle(this: &CrossSection, radius: f64, circular_segments: Option<f64>) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn extrude(this: &CrossSection, height: f64, n_divisions: Option<f64>, twist_degrees: Option<f64>, scale_top: /* Union: () | f64 | [f64; 2] */ String, center: /* Union: () | false | true */ String) -> Manifold;
+    fn extrude(this: &CrossSection, height: f64, n_divisions: Option<f64>, twist_degrees: Option<f64>, scale_top: TodoB093MSUnion, center: Todo4XK6GGUnion) -> Manifold;
 
     #[wasm_bindgen(method)]
     fn revolve(this: &CrossSection, circular_segments: Option<f64>, revolve_degrees: Option<f64>) -> Manifold;
@@ -69,7 +101,7 @@ extern "C" {
     fn rotate(this: &CrossSection, degrees: f64) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn scale(this: &CrossSection, v: /* Union: f64 | [f64; 2] */ String) -> CrossSection;
+    fn scale(this: &CrossSection, v: TodoOJ2BCTUnion) -> CrossSection;
 
     #[wasm_bindgen(method)]
     fn mirror(this: &CrossSection, ax: [f64; 2]) -> CrossSection;
@@ -84,46 +116,46 @@ extern "C" {
     fn simplify(this: &CrossSection, epsilon: Option<f64>) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn add(this: &CrossSection, other: /* Union: Polygons | CrossSection */ String) -> CrossSection;
+    fn add(this: &CrossSection, other: Todo8BOBPEUnion) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn subtract(this: &CrossSection, other: /* Union: Polygons | CrossSection */ String) -> CrossSection;
+    fn subtract(this: &CrossSection, other: Todo8BOBPEUnion) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn intersect(this: &CrossSection, other: /* Union: Polygons | CrossSection */ String) -> CrossSection;
+    fn intersect(this: &CrossSection, other: Todo8BOBPEUnion) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn union(this: &CrossSection, a: /* Union: Polygons | CrossSection */ String, b: /* Union: Polygons | CrossSection */ String) -> CrossSection;
+    fn union(this: &CrossSection, a: Todo8BOBPEUnion, b: Todo8BOBPEUnion) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn difference(this: &CrossSection, a: /* Union: Polygons | CrossSection */ String, b: /* Union: Polygons | CrossSection */ String) -> CrossSection;
+    fn difference(this: &CrossSection, a: Todo8BOBPEUnion, b: Todo8BOBPEUnion) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn intersection(this: &CrossSection, a: /* Union: Polygons | CrossSection */ String, b: /* Union: Polygons | CrossSection */ String) -> CrossSection;
+    fn intersection(this: &CrossSection, a: Todo8BOBPEUnion, b: Todo8BOBPEUnion) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn union(this: &CrossSection, polygons: Vec</* Union: Polygons | CrossSection */ String>) -> CrossSection;
+    fn union(this: &CrossSection, polygons: Vec<Todo8BOBPEUnion>) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn difference(this: &CrossSection, polygons: Vec</* Union: Polygons | CrossSection */ String>) -> CrossSection;
+    fn difference(this: &CrossSection, polygons: Vec<Todo8BOBPEUnion>) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn intersection(this: &CrossSection, polygons: Vec</* Union: Polygons | CrossSection */ String>) -> CrossSection;
+    fn intersection(this: &CrossSection, polygons: Vec<Todo8BOBPEUnion>) -> CrossSection;
 
     #[wasm_bindgen(method)]
     fn hull(this: &CrossSection) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn hull(this: &CrossSection, polygons: Vec</* Union: Polygons | CrossSection */ String>) -> CrossSection;
+    fn hull(this: &CrossSection, polygons: Vec<Todo8BOBPEUnion>) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn compose(this: &CrossSection, polygons: Vec</* Union: Polygons | CrossSection */ String>) -> CrossSection;
+    fn compose(this: &CrossSection, polygons: Vec<Todo8BOBPEUnion>) -> CrossSection;
 
     #[wasm_bindgen(method)]
     fn decompose(this: &CrossSection) -> Vec<CrossSection>;
 
     #[wasm_bindgen(method)]
-    fn of_polygons(this: &CrossSection, contours: /* Union: Polygons */ String, fill_rule: Option<FillRule>) -> CrossSection;
+    fn of_polygons(this: &CrossSection, contours: TodoACYS2HUnion, fill_rule: Option<FillRule>) -> CrossSection;
 
     #[wasm_bindgen(method)]
     fn to_polygons(this: &CrossSection) -> Vec<Vec<[f64; 2]>>;
@@ -159,19 +191,19 @@ extern "C" {
     fn tetrahedron() -> Manifold;
 
     #[wasm_bindgen(static_method_of = Manifold, js_name = cube)]
-    fn cube(size: /* Union: () | f64 | [f64; 3] */ String, center: /* Union: () | false | true */ String) -> Manifold;
+    fn cube(size: TodoB093LXUnion, center: Todo4XK6GGUnion) -> Manifold;
 
     #[wasm_bindgen(static_method_of = Manifold, js_name = cylinder)]
-    fn cylinder(height: f64, radius_low: f64, radius_high: Option<f64>, circular_segments: Option<f64>, center: /* Union: () | false | true */ String) -> Manifold;
+    fn cylinder(height: f64, radius_low: f64, radius_high: Option<f64>, circular_segments: Option<f64>, center: Todo4XK6GGUnion) -> Manifold;
 
     #[wasm_bindgen(static_method_of = Manifold, js_name = sphere)]
     fn sphere(radius: f64, circular_segments: Option<f64>) -> Manifold;
 
     #[wasm_bindgen(static_method_of = Manifold, js_name = extrude)]
-    fn extrude(polygons: /* Union: Polygons | CrossSection */ String, height: f64, n_divisions: Option<f64>, twist_degrees: Option<f64>, scale_top: /* Union: () | f64 | [f64; 2] */ String, center: /* Union: () | false | true */ String) -> Manifold;
+    fn extrude(polygons: Todo8BOBPEUnion, height: f64, n_divisions: Option<f64>, twist_degrees: Option<f64>, scale_top: TodoB093MSUnion, center: Todo4XK6GGUnion) -> Manifold;
 
     #[wasm_bindgen(static_method_of = Manifold, js_name = revolve)]
-    fn revolve(polygons: /* Union: Polygons | CrossSection */ String, circular_segments: Option<f64>, revolve_degrees: Option<f64>) -> Manifold;
+    fn revolve(polygons: Todo8BOBPEUnion, circular_segments: Option<f64>, revolve_degrees: Option<f64>) -> Manifold;
 
     #[wasm_bindgen(static_method_of = Manifold, js_name = of_mesh)]
     fn of_mesh(mesh: Mesh) -> Manifold;
@@ -201,7 +233,7 @@ extern "C" {
     fn intersection(manifolds: Vec<Manifold>) -> Manifold;
 
     #[wasm_bindgen(static_method_of = Manifold, js_name = hull)]
-    fn hull(points: Vec</* Union: Manifold | Vec3 */ String>) -> Manifold;
+    fn hull(points: Vec<TodoTWMDHTUnion>) -> Manifold;
 
     #[wasm_bindgen(static_method_of = Manifold, js_name = compose)]
     fn compose(manifolds: Vec<Manifold>) -> Manifold;
@@ -213,19 +245,19 @@ extern "C" {
     fn tetrahedron(this: &Manifold) -> Manifold;
 
     #[wasm_bindgen(method)]
-    fn cube(this: &Manifold, size: /* Union: () | f64 | [f64; 3] */ String, center: /* Union: () | false | true */ String) -> Manifold;
+    fn cube(this: &Manifold, size: TodoB093LXUnion, center: Todo4XK6GGUnion) -> Manifold;
 
     #[wasm_bindgen(method)]
-    fn cylinder(this: &Manifold, height: f64, radius_low: f64, radius_high: Option<f64>, circular_segments: Option<f64>, center: /* Union: () | false | true */ String) -> Manifold;
+    fn cylinder(this: &Manifold, height: f64, radius_low: f64, radius_high: Option<f64>, circular_segments: Option<f64>, center: Todo4XK6GGUnion) -> Manifold;
 
     #[wasm_bindgen(method)]
     fn sphere(this: &Manifold, radius: f64, circular_segments: Option<f64>) -> Manifold;
 
     #[wasm_bindgen(method)]
-    fn extrude(this: &Manifold, polygons: /* Union: Polygons | CrossSection */ String, height: f64, n_divisions: Option<f64>, twist_degrees: Option<f64>, scale_top: /* Union: () | f64 | [f64; 2] */ String, center: /* Union: () | false | true */ String) -> Manifold;
+    fn extrude(this: &Manifold, polygons: Todo8BOBPEUnion, height: f64, n_divisions: Option<f64>, twist_degrees: Option<f64>, scale_top: TodoB093MSUnion, center: Todo4XK6GGUnion) -> Manifold;
 
     #[wasm_bindgen(method)]
-    fn revolve(this: &Manifold, polygons: /* Union: Polygons | CrossSection */ String, circular_segments: Option<f64>, revolve_degrees: Option<f64>) -> Manifold;
+    fn revolve(this: &Manifold, polygons: Todo8BOBPEUnion, circular_segments: Option<f64>, revolve_degrees: Option<f64>) -> Manifold;
 
     #[wasm_bindgen(method)]
     fn of_mesh(this: &Manifold, mesh: Mesh) -> Manifold;
@@ -252,7 +284,7 @@ extern "C" {
     fn rotate(this: &Manifold, x: f64, y: Option<f64>, z: Option<f64>) -> Manifold;
 
     #[wasm_bindgen(method)]
-    fn scale(this: &Manifold, v: /* Union: f64 | [f64; 3] */ String) -> Manifold;
+    fn scale(this: &Manifold, v: TodoOJ2BDOUnion) -> Manifold;
 
     #[wasm_bindgen(method)]
     fn mirror(this: &Manifold, normal: [f64; 3]) -> Manifold;
@@ -330,7 +362,7 @@ extern "C" {
     fn hull(this: &Manifold) -> Manifold;
 
     #[wasm_bindgen(method)]
-    fn hull(this: &Manifold, points: Vec</* Union: Manifold | Vec3 */ String>) -> Manifold;
+    fn hull(this: &Manifold, points: Vec<TodoTWMDHTUnion>) -> Manifold;
 
     #[wasm_bindgen(method)]
     fn compose(this: &Manifold, manifolds: Vec<Manifold>) -> Manifold;
@@ -381,7 +413,7 @@ extern "C" {
     fn min_gap(this: &Manifold, other: Manifold, search_length: f64) -> f64;
 
     #[wasm_bindgen(method)]
-    fn status(this: &Manifold) -> /* Union: ErrorStatus */ String;
+    fn status(this: &Manifold) -> Todo8DFTH6Union;
 
     #[wasm_bindgen(method)]
     fn get_mesh(this: &Manifold, normal_idx: Option<f64>) -> Mesh;
@@ -425,5 +457,158 @@ extern "C" {
     #[wasm_bindgen(method)]
     fn transform(this: &Mesh, run: f64) -> [f64; 16];
 
+}
+
+// TODO: Implement proper union type for: Polygons
+// This is a placeholder struct - implement proper sum type or enum
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TodoACYS2HUnion {
+    // TODO: Replace with proper union implementation
+    // Possible variants: Polygons
+    pub todo_data: String, // Placeholder - implement actual data structure
+}
+
+impl TodoACYS2HUnion {
+    pub fn todo() -> Self {
+        Self {
+            todo_data: "TODO: Implement union type".to_string()
+        }
+    }
+}
+
+// TODO: Implement proper union type for: () | f64 | [f64; 2]
+// This is a placeholder struct - implement proper sum type or enum
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TodoB093MSUnion {
+    // TODO: Replace with proper union implementation
+    // Possible variants: () | f64 | [f64; 2]
+    pub todo_data: String, // Placeholder - implement actual data structure
+}
+
+impl TodoB093MSUnion {
+    pub fn todo() -> Self {
+        Self {
+            todo_data: "TODO: Implement union type".to_string()
+        }
+    }
+}
+
+// TODO: Implement proper union type for: () | false | true
+// This is a placeholder struct - implement proper sum type or enum
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Todo4XK6GGUnion {
+    // TODO: Replace with proper union implementation
+    // Possible variants: () | false | true
+    pub todo_data: String, // Placeholder - implement actual data structure
+}
+
+impl Todo4XK6GGUnion {
+    pub fn todo() -> Self {
+        Self {
+            todo_data: "TODO: Implement union type".to_string()
+        }
+    }
+}
+
+// TODO: Implement proper union type for: Polygons | CrossSection
+// This is a placeholder struct - implement proper sum type or enum
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Todo8BOBPEUnion {
+    // TODO: Replace with proper union implementation
+    // Possible variants: Polygons | CrossSection
+    pub todo_data: String, // Placeholder - implement actual data structure
+}
+
+impl Todo8BOBPEUnion {
+    pub fn todo() -> Self {
+        Self {
+            todo_data: "TODO: Implement union type".to_string()
+        }
+    }
+}
+
+// TODO: Implement proper union type for: f64 | [f64; 2]
+// This is a placeholder struct - implement proper sum type or enum
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TodoOJ2BCTUnion {
+    // TODO: Replace with proper union implementation
+    // Possible variants: f64 | [f64; 2]
+    pub todo_data: String, // Placeholder - implement actual data structure
+}
+
+impl TodoOJ2BCTUnion {
+    pub fn todo() -> Self {
+        Self {
+            todo_data: "TODO: Implement union type".to_string()
+        }
+    }
+}
+
+// TODO: Implement proper union type for: () | f64 | [f64; 3]
+// This is a placeholder struct - implement proper sum type or enum
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TodoB093LXUnion {
+    // TODO: Replace with proper union implementation
+    // Possible variants: () | f64 | [f64; 3]
+    pub todo_data: String, // Placeholder - implement actual data structure
+}
+
+impl TodoB093LXUnion {
+    pub fn todo() -> Self {
+        Self {
+            todo_data: "TODO: Implement union type".to_string()
+        }
+    }
+}
+
+// TODO: Implement proper union type for: Manifold | Vec3
+// This is a placeholder struct - implement proper sum type or enum
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TodoTWMDHTUnion {
+    // TODO: Replace with proper union implementation
+    // Possible variants: Manifold | Vec3
+    pub todo_data: String, // Placeholder - implement actual data structure
+}
+
+impl TodoTWMDHTUnion {
+    pub fn todo() -> Self {
+        Self {
+            todo_data: "TODO: Implement union type".to_string()
+        }
+    }
+}
+
+// TODO: Implement proper union type for: f64 | [f64; 3]
+// This is a placeholder struct - implement proper sum type or enum
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TodoOJ2BDOUnion {
+    // TODO: Replace with proper union implementation
+    // Possible variants: f64 | [f64; 3]
+    pub todo_data: String, // Placeholder - implement actual data structure
+}
+
+impl TodoOJ2BDOUnion {
+    pub fn todo() -> Self {
+        Self {
+            todo_data: "TODO: Implement union type".to_string()
+        }
+    }
+}
+
+// TODO: Implement proper union type for: ErrorStatus
+// This is a placeholder struct - implement proper sum type or enum
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Todo8DFTH6Union {
+    // TODO: Replace with proper union implementation
+    // Possible variants: ErrorStatus
+    pub todo_data: String, // Placeholder - implement actual data structure
+}
+
+impl Todo8DFTH6Union {
+    pub fn todo() -> Self {
+        Self {
+            todo_data: "TODO: Implement union type".to_string()
+        }
+    }
 }
 
