@@ -845,8 +845,16 @@ function rustItemToString(item: RustItem): string {
     case "enum":
       const enumDerives = item.derives ? `#[derive(${item.derives.join(", ")})]\n` : "";
       let enumCode = `${enumDerives}pub enum ${item.name} {\n`;
+      
+      // For Global enums, add explicit string values
+      const isGlobalEnum = item.name.startsWith("Global");
+      
       for (const variant of item.variants) {
-        enumCode += `    ${variant},\n`;
+        if (isGlobalEnum) {
+          enumCode += `    ${variant} = "${variant}",\n`;
+        } else {
+          enumCode += `    ${variant},\n`;
+        }
       }
       enumCode += "}\n\n";
       return enumCode;

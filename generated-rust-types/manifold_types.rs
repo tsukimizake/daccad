@@ -7,33 +7,33 @@ use std::fmt::Debug;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum GlobalFillRule {
-    EvenOdd,
-    NonZero,
-    Positive,
-    Negative,
+    EvenOdd = "EvenOdd",
+    NonZero = "NonZero",
+    Positive = "Positive",
+    Negative = "Negative",
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum GlobalJoinType {
-    Square,
-    Round,
-    Miter,
+    Square = "Square",
+    Round = "Round",
+    Miter = "Miter",
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum GlobalErrorStatus {
-    NoError,
-    NonFiniteVertex,
-    NotManifold,
-    VertexOutOfBounds,
-    PropertiesWrongLength,
-    MissingPositionProperties,
-    MergeVectorsDifferentLengths,
-    MergeIndexOutOfBounds,
-    TransformWrongLength,
-    RunIndexWrongLength,
-    FaceIDWrongLength,
-    InvalidConstruction,
+    NoError = "NoError",
+    NonFiniteVertex = "NonFiniteVertex",
+    NotManifold = "NotManifold",
+    VertexOutOfBounds = "VertexOutOfBounds",
+    PropertiesWrongLength = "PropertiesWrongLength",
+    MissingPositionProperties = "MissingPositionProperties",
+    MergeVectorsDifferentLengths = "MergeVectorsDifferentLengths",
+    MergeIndexOutOfBounds = "MergeIndexOutOfBounds",
+    TransformWrongLength = "TransformWrongLength",
+    RunIndexWrongLength = "RunIndexWrongLength",
+    FaceIDWrongLength = "FaceIDWrongLength",
+    InvalidConstruction = "InvalidConstruction",
 }
 
 #[wasm_bindgen]
