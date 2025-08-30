@@ -459,6 +459,36 @@ extern "C" {
 
 }
 
+pub type Vec2 = [f64; 2];
+
+pub type Vec3 = [f64; 3];
+
+pub type Mat3 = [f64; 9];
+
+pub type Mat4 = [f64; 16];
+
+pub type SimplePolygon = Vec<Vec2>;
+
+pub type Polygons = Vec<SimplePolygon>;
+
+pub type GlobalRect = Rect;
+
+pub type GlobalBox = Box;
+
+pub type GlobalSmoothness = Smoothness;
+
+pub type GlobalFillRule = Todo010Union;
+
+pub type GlobalJoinType = Todo011Union;
+
+pub type GlobalErrorStatus = Todo009Union;
+
+pub type CrossSection = wasm_bindgen::JsValue;
+
+pub type Manifold = wasm_bindgen::JsValue;
+
+pub type Mesh = wasm_bindgen::JsValue;
+
 // TODO: Implement proper union type for: Polygons
 // This is a placeholder struct - implement proper sum type or enum
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -605,6 +635,40 @@ pub struct Todo009Union {
 }
 
 impl Todo009Union {
+    pub fn todo() -> Self {
+        Self {
+            todo_data: "TODO: Implement union type".to_string()
+        }
+    }
+}
+
+// TODO: Implement proper union type for: FillRule
+// This is a placeholder struct - implement proper sum type or enum
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Todo010Union {
+    // TODO: Replace with proper union implementation
+    // Possible variants: FillRule
+    pub todo_data: String, // Placeholder - implement actual data structure
+}
+
+impl Todo010Union {
+    pub fn todo() -> Self {
+        Self {
+            todo_data: "TODO: Implement union type".to_string()
+        }
+    }
+}
+
+// TODO: Implement proper union type for: JoinType
+// This is a placeholder struct - implement proper sum type or enum
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Todo011Union {
+    // TODO: Replace with proper union implementation
+    // Possible variants: JoinType
+    pub todo_data: String, // Placeholder - implement actual data structure
+}
+
+impl Todo011Union {
     pub fn todo() -> Self {
         Self {
             todo_data: "TODO: Implement union type".to_string()

@@ -106,15 +106,16 @@ async function generateRustTypes(): Promise<void> {
     // Process type aliases
     const typeAliases = sourceFile.getTypeAliases();
     console.log(`Found ${typeAliases.length} type aliases`);
-    // TODO: Convert to IR approach
-    // For now, skip type aliases to focus on classes
-    // for (const typeAlias of typeAliases) {
-    //   const rustType = processTypeAlias(typeAlias);
-    //   if (rustType) {
-    //     const key = `${sourceFile.getBaseName()}-${rustType.name}`;
-    //     generatedItems.set(key, rustType);
-    //   }
-    // }
+    for (const typeAlias of typeAliases) {
+      const rustItem = processTypeAlias(typeAlias);
+      if (rustItem) {
+        console.log(`Generated type alias item: ${rustItem.name}, kind: ${rustItem.kind}`);
+        const key = `${sourceFile.getBaseName()}-${rustItem.name}`;
+        generatedItems.set(key, rustItem);
+      } else {
+        console.log(`Failed to process type alias: ${typeAlias.getName()}`);
+      }
+    }
 
     // Process classes
     const classes = sourceFile.getClasses();
@@ -195,45 +196,61 @@ function processTypeAlias(typeAlias: TypeAliasDeclaration): RustItem | null {
   const prefixedName = `${fileName}${name}`;
   const aliasType = typeAlias.getType();
 
-
   // Handle special types like Vec2, Vec3 - these should not be prefixed
   if (name === "Vec2") {
-    const rustType = "pub type Vec2 = [f64; 2];\n\n";
-    const kind = "vec2";
-    return { kind, name, rustCode: rustType };
+    return {
+      kind: "type_alias" as const,
+      name: "Vec2", // No prefix for special types
+      target: { kind: "array", element: { kind: "primitive", name: "f64" }, size: 2 }
+    };
   } else if (name === "Vec3") {
-    const rustType = "pub type Vec3 = [f64; 3];\n\n";
-    const kind = "vec3";
-    return { kind, name, rustCode: rustType };
+    return {
+      kind: "type_alias" as const,
+      name: "Vec3", // No prefix for special types
+      target: { kind: "array", element: { kind: "primitive", name: "f64" }, size: 3 }
+    };
   } else if (name === "Mat3") {
-    const rustType = "pub type Mat3 = [f64; 9];\n\n";
-    const kind = "matrix";
-    return { kind, name, rustCode: rustType };
+    return {
+      kind: "type_alias" as const,
+      name: "Mat3", // No prefix for special types
+      target: { kind: "array", element: { kind: "primitive", name: "f64" }, size: 9 }
+    };
   } else if (name === "Mat4") {
-    const rustType = "pub type Mat4 = [f64; 16];\n\n";
-    const kind = "matrix";
-    return { kind, name, rustCode: rustType };
+    return {
+      kind: "type_alias" as const,
+      name: "Mat4", // No prefix for special types
+      target: { kind: "array", element: { kind: "primitive", name: "f64" }, size: 16 }
+    };
   } else if (name === "SimplePolygon") {
-    const rustType = "pub type SimplePolygon = Vec<Vec2>;\n\n";
-    const kind = "polygon";
-    return { kind, name, rustCode: rustType };
+    return {
+      kind: "type_alias" as const,
+      name: "SimplePolygon", // No prefix for special types
+      target: { kind: "array", element: { kind: "named", name: "Vec2" } }
+    };
   } else if (name === "Polygons") {
-    const rustType = "pub type Polygons = Vec<SimplePolygon>;\n\n";
-    const kind = "polygon";
-    return { kind, name, rustCode: rustType };
+    return {
+      kind: "type_alias" as const,
+      name: "Polygons", // No prefix for special types
+      target: { kind: "array", element: { kind: "named", name: "SimplePolygon" } }
+    };
   } else {
-    const convertedType = convertTypeToRust(aliasType);
+    // Use IR-based type conversion
+    const convertedTypeIR = convertTypeToRustIR(aliasType);
 
-    // Only encapsulated types should be converted to JSValue
-    if (fileName === "Manifold" && convertedType === name) {
+    // Only encapsulated types from manifold.d.ts should be converted to JSValue
+    if (fileName === "Manifold" && convertedTypeIR.kind === "named" && convertedTypeIR.name === name) {
       console.log(`Converting manifold.d.ts type alias to JSValue: ${name}`);
-      const rustType = `// ${name} - encapsulated type represented as JSValue\npub type ${name} = wasm_bindgen::JsValue;\n\n`;
-      const kind = "encapsulated";
-      return { kind, name, rustCode: rustType };
+      return {
+        kind: "type_alias" as const,
+        name: name, // Keep original name for encapsulated types
+        target: { kind: "js_value" as const }
+      };
     } else {
-      const rustType = `pub type ${prefixedName} = ${convertedType};\n\n`;
-      const kind = "type_alias";
-      return { kind, name: prefixedName, rustCode: rustType };
+      return {
+        kind: "type_alias" as const,
+        name: prefixedName,
+        target: convertedTypeIR
+      };
     }
   }
 }
