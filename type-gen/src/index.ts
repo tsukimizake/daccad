@@ -565,15 +565,36 @@ function toPascalCase(str: string): string {
     .join('');
 }
 
-function hashStringToIdentifier(str: string): string {
-  // Simple hash to create a stable identifier
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32-bit integer
+// Global counter for sequential Todo Union IDs
+let todoUnionCounter = 1;
+
+// Cache for deduplicating Todo Unions by content
+const todoUnionCache = new Map<string, string>(); // variants signature -> type name
+
+function getNextTodoUnionId(): string {
+  return (todoUnionCounter++).toString().padStart(3, '0');
+}
+
+function getOrCreateTodoUnionName(variants: RustTypeIR[]): string {
+  // Create a signature for the variants to identify duplicates
+  const signature = variants
+    .map(v => JSON.stringify(v))
+    .sort() // Sort to ensure consistent signature regardless of order
+    .join('|');
+    
+  // Check if we already have a Todo Union for these variants
+  if (todoUnionCache.has(signature)) {
+    return todoUnionCache.get(signature)!;
   }
-  return Math.abs(hash).toString(36).toUpperCase().substring(0, 8);
+  
+  // Create new Todo Union name
+  const todoTypeName = `Todo${getNextTodoUnionId()}Union`;
+  todoUnionCache.set(signature, todoTypeName);
+  
+  // Register this as a todo type to be generated
+  registerTodoType(todoTypeName, variants);
+  
+  return todoTypeName;
 }
 
 function registerTodoType(typeName: string, variants: RustTypeIR[]) {
@@ -805,14 +826,8 @@ function rustTypeIRToString(typeIR: RustTypeIR): string {
       const elementsStr = typeIR.elements.map(rustTypeIRToString).join(", ");
       return `(${elementsStr})`;
     case "union":
-      // Create a meaningful todo type name for complex unions
-      const variantsStr = typeIR.variants.map(rustTypeIRToString).join("");
-      const todoTypeName = `Todo${hashStringToIdentifier(variantsStr)}Union`;
-      
-      // Register this as a todo type to be generated
-      registerTodoType(todoTypeName, typeIR.variants);
-      
-      return todoTypeName;
+      // Use deduplicated Todo Union name
+      return getOrCreateTodoUnionName(typeIR.variants);
     case "named":
       return typeIR.name;
     case "generic":
