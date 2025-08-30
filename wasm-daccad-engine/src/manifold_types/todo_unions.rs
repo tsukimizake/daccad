@@ -1,6 +1,6 @@
 // Auto-generated Todo Union types
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 // TODO: Implement proper union type for: Polygons
 // This is a placeholder struct - implement proper sum type or enum
@@ -14,7 +14,7 @@ pub struct Todo001Union {
 impl Todo001Union {
     pub fn todo() -> Self {
         Self {
-            todo_data: "TODO: Implement union type".to_string()
+            todo_data: "TODO: Implement union type".to_string(),
         }
     }
 }
@@ -31,7 +31,7 @@ pub struct Todo002Union {
 impl Todo002Union {
     pub fn todo() -> Self {
         Self {
-            todo_data: "TODO: Implement union type".to_string()
+            todo_data: "TODO: Implement union type".to_string(),
         }
     }
 }
@@ -48,7 +48,7 @@ pub struct Todo003Union {
 impl Todo003Union {
     pub fn todo() -> Self {
         Self {
-            todo_data: "TODO: Implement union type".to_string()
+            todo_data: "TODO: Implement union type".to_string(),
         }
     }
 }
@@ -65,7 +65,7 @@ pub struct Todo004Union {
 impl Todo004Union {
     pub fn todo() -> Self {
         Self {
-            todo_data: "TODO: Implement union type".to_string()
+            todo_data: "TODO: Implement union type".to_string(),
         }
     }
 }
@@ -82,24 +82,7 @@ pub struct Todo005Union {
 impl Todo005Union {
     pub fn todo() -> Self {
         Self {
-            todo_data: "TODO: Implement union type".to_string()
-        }
-    }
-}
-
-// TODO: Implement proper union type for: () | false | true
-// This is a placeholder struct - implement proper sum type or enum
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Todo006Union {
-    // TODO: Replace with proper union implementation
-    // Possible variants: () | false | true
-    pub todo_data: String, // Placeholder - implement actual data structure
-}
-
-impl Todo006Union {
-    pub fn todo() -> Self {
-        Self {
-            todo_data: "TODO: Implement union type".to_string()
+            todo_data: "TODO: Implement union type".to_string(),
         }
     }
 }
@@ -116,7 +99,7 @@ pub struct Todo007Union {
 impl Todo007Union {
     pub fn todo() -> Self {
         Self {
-            todo_data: "TODO: Implement union type".to_string()
+            todo_data: "TODO: Implement union type".to_string(),
         }
     }
 }
@@ -133,7 +116,7 @@ pub struct Todo008Union {
 impl Todo008Union {
     pub fn todo() -> Self {
         Self {
-            todo_data: "TODO: Implement union type".to_string()
+            todo_data: "TODO: Implement union type".to_string(),
         }
     }
 }
@@ -150,7 +133,7 @@ pub struct Todo009Union {
 impl Todo009Union {
     pub fn todo() -> Self {
         Self {
-            todo_data: "TODO: Implement union type".to_string()
+            todo_data: "TODO: Implement union type".to_string(),
         }
     }
 }
@@ -167,7 +150,7 @@ pub struct Todo010Union {
 impl Todo010Union {
     pub fn todo() -> Self {
         Self {
-            todo_data: "TODO: Implement union type".to_string()
+            todo_data: "TODO: Implement union type".to_string(),
         }
     }
 }
@@ -184,8 +167,7 @@ pub struct Todo011Union {
 impl Todo011Union {
     pub fn todo() -> Self {
         Self {
-            todo_data: "TODO: Implement union type".to_string()
+            todo_data: "TODO: Implement union type".to_string(),
         }
     }
 }
-

@@ -958,18 +958,18 @@ function rustItemToString(item: RustItem): string {
 }
 
 function generateRustOutputFiles(generatedItems: Map<string, RustItem>): void {
-  const outputDir = path.resolve(__dirname, "../../generated-rust-types");
+  const outputDir = path.resolve(__dirname, "../../wasm-daccad-engine/generated-manifold-types");
   if (!fs.existsSync(outputDir)) {
     fs.mkdirSync(outputDir, { recursive: true });
   }
 
   // Group items by source file
   const fileGroups = new Map<string, RustItem[]>();
-  
+
   for (const [key, rustItem] of generatedItems) {
     // Key format is based on getBaseName() which removes .d.ts extension
     let fileName: string;
-    
+
     if (key.includes("manifold-global-types")) {
       fileName = "manifold-global-types.d.ts";
     } else if (key.includes("manifold-encapsulated-types")) {
@@ -979,7 +979,7 @@ function generateRustOutputFiles(generatedItems: Map<string, RustItem>): void {
     } else {
       fileName = "unknown";
     }
-    
+
     if (!fileGroups.has(fileName)) {
       fileGroups.set(fileName, []);
     }

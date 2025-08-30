@@ -1,3 +1,4 @@
+use crate::env::ModelId;
 use elm_rs::{Elm, ElmDecode, ElmEncode};
 use serde::{Deserialize, Serialize};
 use tsify::Tsify;
@@ -6,11 +7,10 @@ use wasm_bindgen::prelude::*;
 mod env;
 mod eval;
 mod manifold_primitives;
+mod manifold_types;
 mod parser;
 
-pub use env::*;
 pub use eval::*;
-pub use parser::*;
 pub use manifold_primitives::*;
 
 // Message types defined below will be automatically exported
@@ -127,10 +127,15 @@ impl DaccadEngine {
 
     /// Test function to create a cube using manifold types
     #[wasm_bindgen]
-    pub fn test_manifold_cube(&self, width: f64, height: f64, depth: f64) -> Result<JsValue, String> {
+    pub fn test_manifold_cube(
+        &self,
+        width: f64,
+        height: f64,
+        depth: f64,
+    ) -> Result<JsValue, String> {
         let size = [width, height, depth];
         let mesh_data = manifold_primitives::create_manifold_cube(size)?;
-        
+
         // Convert to JsValue for JavaScript interop
         serde_wasm_bindgen::to_value(&mesh_data)
             .map_err(|e| format!("Failed to serialize mesh data: {}", e))
@@ -142,7 +147,6 @@ impl DaccadEngine {
             Some(model) => match model {
                 env::Model::Manifold(manifold) => Some(self.manifold_to_stl_bytes(manifold)),
                 env::Model::Mesh(mesh) => Some(self.mesh_to_stl_bytes(mesh)),
-                _ => None,
             },
             None => None,
         }

@@ -1,12 +1,10 @@
-// Auto-generated Rust types from manifold-global-types.d.ts
-
 use super::todo_unions::*;
 
-pub type FillRule = Todo002Union;
+pub type FillRule = FillRule;
 
-pub type JoinType = Todo003Union;
+pub type JoinType = JoinType;
 
-pub type ErrorStatus = Todo004Union;
+pub type ErrorStatus = ErrorStatus;
 
 pub type SealedUint32Array = [u32; N];
 
@@ -29,4 +27,3 @@ pub type Rect = Rect;
 pub type Box = Box;
 
 pub type Smoothness = Smoothness;
-

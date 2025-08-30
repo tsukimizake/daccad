@@ -1,9 +1,11 @@
 // Auto-generated Rust types from manifold-encapsulated-types.d.ts
 
-use wasm_bindgen::prelude::*;
-use serde::{Serialize, Deserialize};
-use std::fmt::Debug;
 use super::todo_unions::*;
+use crate::manifold_types::global_types::*;
+use js_sys::{Float32Array, Uint32Array};
+use serde::{Deserialize, Serialize};
+use std::fmt::Debug;
+use wasm_bindgen::prelude::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MeshOptions {
@@ -27,7 +29,7 @@ extern "C" {
     fn new(contours: Todo001Union, fill_rule: Option<FillRule>) -> CrossSection;
 
     #[wasm_bindgen(static_method_of = CrossSection, js_name = square)]
-    fn square(size: Todo005Union, center: Todo006Union) -> CrossSection;
+    fn square(size: Todo005Union, center: bool) -> CrossSection;
 
     #[wasm_bindgen(static_method_of = CrossSection, js_name = circle)]
     fn circle(radius: f64, circular_segments: Option<f64>) -> CrossSection;
@@ -60,16 +62,27 @@ extern "C" {
     fn of_polygons(contours: Todo001Union, fill_rule: Option<FillRule>) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn square(this: &CrossSection, size: Todo005Union, center: Todo006Union) -> CrossSection;
+    fn square(this: &CrossSection, size: Todo005Union, center: bool) -> CrossSection;
 
     #[wasm_bindgen(method)]
     fn circle(this: &CrossSection, radius: f64, circular_segments: Option<f64>) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn extrude(this: &CrossSection, height: f64, n_divisions: Option<f64>, twist_degrees: Option<f64>, scale_top: Todo005Union, center: Todo006Union) -> Manifold;
+    fn extrude(
+        this: &CrossSection,
+        height: f64,
+        n_divisions: Option<f64>,
+        twist_degrees: Option<f64>,
+        scale_top: Todo005Union,
+        center: bool,
+    ) -> Manifold;
 
     #[wasm_bindgen(method)]
-    fn revolve(this: &CrossSection, circular_segments: Option<f64>, revolve_degrees: Option<f64>) -> Manifold;
+    fn revolve(
+        this: &CrossSection,
+        circular_segments: Option<f64>,
+        revolve_degrees: Option<f64>,
+    ) -> Manifold;
 
     #[wasm_bindgen(method)]
     fn transform(this: &CrossSection, m: [f64; 9]) -> CrossSection;
@@ -93,7 +106,13 @@ extern "C" {
     fn warp(this: &CrossSection, warp_func: fn()) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn offset(this: &CrossSection, delta: f64, join_type: Option<JoinType>, miter_limit: Option<f64>, circular_segments: Option<f64>) -> CrossSection;
+    fn offset(
+        this: &CrossSection,
+        delta: f64,
+        join_type: Option<JoinType>,
+        miter_limit: Option<f64>,
+        circular_segments: Option<f64>,
+    ) -> CrossSection;
 
     #[wasm_bindgen(method)]
     fn simplify(this: &CrossSection, epsilon: Option<f64>) -> CrossSection;
@@ -138,7 +157,11 @@ extern "C" {
     fn decompose(this: &CrossSection) -> Vec<CrossSection>;
 
     #[wasm_bindgen(method)]
-    fn of_polygons(this: &CrossSection, contours: Todo001Union, fill_rule: Option<FillRule>) -> CrossSection;
+    fn of_polygons(
+        this: &CrossSection,
+        contours: Todo001Union,
+        fill_rule: Option<FillRule>,
+    ) -> CrossSection;
 
     #[wasm_bindgen(method)]
     fn to_polygons(this: &CrossSection) -> Vec<Vec<[f64; 2]>>;
@@ -161,10 +184,6 @@ extern "C" {
     #[wasm_bindgen(method)]
     fn delete(this: &CrossSection) -> ();
 
-}
-
-#[wasm_bindgen]
-extern "C" {
     type Manifold;
 
     #[wasm_bindgen(constructor)]
@@ -174,19 +193,36 @@ extern "C" {
     fn tetrahedron() -> Manifold;
 
     #[wasm_bindgen(static_method_of = Manifold, js_name = cube)]
-    fn cube(size: Todo009Union, center: Todo006Union) -> Manifold;
+    fn cube(size: Todo009Union, center: bool) -> Manifold;
 
     #[wasm_bindgen(static_method_of = Manifold, js_name = cylinder)]
-    fn cylinder(height: f64, radius_low: f64, radius_high: Option<f64>, circular_segments: Option<f64>, center: Todo006Union) -> Manifold;
+    fn cylinder(
+        height: f64,
+        radius_low: f64,
+        radius_high: Option<f64>,
+        circular_segments: Option<f64>,
+        center: bool,
+    ) -> Manifold;
 
     #[wasm_bindgen(static_method_of = Manifold, js_name = sphere)]
     fn sphere(radius: f64, circular_segments: Option<f64>) -> Manifold;
 
     #[wasm_bindgen(static_method_of = Manifold, js_name = extrude)]
-    fn extrude(polygons: Todo007Union, height: f64, n_divisions: Option<f64>, twist_degrees: Option<f64>, scale_top: Todo005Union, center: Todo006Union) -> Manifold;
+    fn extrude(
+        polygons: Todo007Union,
+        height: f64,
+        n_divisions: Option<f64>,
+        twist_degrees: Option<f64>,
+        scale_top: Todo005Union,
+        center: bool,
+    ) -> Manifold;
 
     #[wasm_bindgen(static_method_of = Manifold, js_name = revolve)]
-    fn revolve(polygons: Todo007Union, circular_segments: Option<f64>, revolve_degrees: Option<f64>) -> Manifold;
+    fn revolve(
+        polygons: Todo007Union,
+        circular_segments: Option<f64>,
+        revolve_degrees: Option<f64>,
+    ) -> Manifold;
 
     #[wasm_bindgen(static_method_of = Manifold, js_name = of_mesh)]
     fn of_mesh(mesh: Mesh) -> Manifold;
@@ -195,7 +231,13 @@ extern "C" {
     fn smooth(mesh: Mesh, sharpened_edges: Option<Vec<Smoothness>>) -> Manifold;
 
     #[wasm_bindgen(static_method_of = Manifold, js_name = level_set)]
-    fn level_set(sdf: fn(), bounds: Box, edge_length: f64, level: Option<f64>, tolerance: Option<f64>) -> Manifold;
+    fn level_set(
+        sdf: fn(),
+        bounds: Box,
+        edge_length: f64,
+        level: Option<f64>,
+        tolerance: Option<f64>,
+    ) -> Manifold;
 
     #[wasm_bindgen(static_method_of = Manifold, js_name = union)]
     fn union(a: Manifold, b: Manifold) -> Manifold;
@@ -228,19 +270,39 @@ extern "C" {
     fn tetrahedron(this: &Manifold) -> Manifold;
 
     #[wasm_bindgen(method)]
-    fn cube(this: &Manifold, size: Todo009Union, center: Todo006Union) -> Manifold;
+    fn cube(this: &Manifold, size: Todo009Union, center: bool) -> Manifold;
 
     #[wasm_bindgen(method)]
-    fn cylinder(this: &Manifold, height: f64, radius_low: f64, radius_high: Option<f64>, circular_segments: Option<f64>, center: Todo006Union) -> Manifold;
+    fn cylinder(
+        this: &Manifold,
+        height: f64,
+        radius_low: f64,
+        radius_high: Option<f64>,
+        circular_segments: Option<f64>,
+        center: bool,
+    ) -> Manifold;
 
     #[wasm_bindgen(method)]
     fn sphere(this: &Manifold, radius: f64, circular_segments: Option<f64>) -> Manifold;
 
     #[wasm_bindgen(method)]
-    fn extrude(this: &Manifold, polygons: Todo007Union, height: f64, n_divisions: Option<f64>, twist_degrees: Option<f64>, scale_top: Todo005Union, center: Todo006Union) -> Manifold;
+    fn extrude(
+        this: &Manifold,
+        polygons: Todo007Union,
+        height: f64,
+        n_divisions: Option<f64>,
+        twist_degrees: Option<f64>,
+        scale_top: Todo005Union,
+        center: bool,
+    ) -> Manifold;
 
     #[wasm_bindgen(method)]
-    fn revolve(this: &Manifold, polygons: Todo007Union, circular_segments: Option<f64>, revolve_degrees: Option<f64>) -> Manifold;
+    fn revolve(
+        this: &Manifold,
+        polygons: Todo007Union,
+        circular_segments: Option<f64>,
+        revolve_degrees: Option<f64>,
+    ) -> Manifold;
 
     #[wasm_bindgen(method)]
     fn of_mesh(this: &Manifold, mesh: Mesh) -> Manifold;
@@ -248,8 +310,15 @@ extern "C" {
     #[wasm_bindgen(method)]
     fn smooth(this: &Manifold, mesh: Mesh, sharpened_edges: Option<Vec<Smoothness>>) -> Manifold;
 
-    #[wasm_bindgen(method)]
-    fn level_set(this: &Manifold, sdf: fn(), bounds: Box, edge_length: f64, level: Option<f64>, tolerance: Option<f64>) -> Manifold;
+    // #[wasm_bindgen(method)]
+    // fn level_set(
+    //     this: &Manifold,
+    //     sdf: fn(),
+    //     bounds: Box,
+    //     edge_length: f64,
+    //     level: Option<f64>,
+    //     tolerance: Option<f64>,
+    // ) -> Manifold;
 
     #[wasm_bindgen(method)]
     fn transform(this: &Manifold, m: [f64; 16]) -> Manifold;
@@ -279,7 +348,11 @@ extern "C" {
     fn smooth_by_normals(this: &Manifold, normal_idx: f64) -> Manifold;
 
     #[wasm_bindgen(method)]
-    fn smooth_out(this: &Manifold, min_sharp_angle: Option<f64>, min_smoothness: Option<f64>) -> Manifold;
+    fn smooth_out(
+        this: &Manifold,
+        min_sharp_angle: Option<f64>,
+        min_smoothness: Option<f64>,
+    ) -> Manifold;
 
     #[wasm_bindgen(method)]
     fn refine(this: &Manifold, n: f64) -> Manifold;
@@ -330,7 +403,11 @@ extern "C" {
     fn split(this: &Manifold, cutter: Manifold) -> (Manifold, Manifold);
 
     #[wasm_bindgen(method)]
-    fn split_by_plane(this: &Manifold, normal: [f64; 3], origin_offset: f64) -> (Manifold, Manifold);
+    fn split_by_plane(
+        this: &Manifold,
+        normal: [f64; 3],
+        origin_offset: f64,
+    ) -> (Manifold, Manifold);
 
     #[wasm_bindgen(method)]
     fn trim_by_plane(this: &Manifold, normal: [f64; 3], origin_offset: f64) -> Manifold;
@@ -411,12 +488,8 @@ extern "C" {
     fn reserve_i_ds(this: &Manifold, count: f64) -> f64;
 
     #[wasm_bindgen(method)]
-    fn delete(this: &Manifold) -> ();
+    fn delete(this: &Manifold);
 
-}
-
-#[wasm_bindgen]
-extern "C" {
     type Mesh;
 
     #[wasm_bindgen(constructor)]
@@ -441,4 +514,3 @@ extern "C" {
     fn transform(this: &Mesh, run: f64) -> [f64; 16];
 
 }
-
