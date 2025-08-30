@@ -8,7 +8,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Intermediate representation for Rust types
-type RustTypeIR = 
+type RustTypeIR =
   | { kind: "primitive"; name: "i32" | "f64" | "bool" | "String" | "()" }
   | { kind: "array"; element: RustTypeIR; size?: number } // [T; N] or Vec<T>
   | { kind: "tuple"; elements: RustTypeIR[] }
@@ -27,7 +27,7 @@ type Method = {
 };
 
 // Intermediate representation for Rust items
-type RustItem = 
+type RustItem =
   | { kind: "struct"; name: string; fields: Array<{ name: string, type: RustTypeIR, optional?: boolean }>; derives?: string[] }
   | { kind: "enum"; name: string; variants: string[]; derives?: string[] }
   | { kind: "extern_block"; name: string; methods: Method[] }
@@ -93,15 +93,16 @@ async function generateRustTypes(): Promise<void> {
     // Process interfaces
     const interfaces = sourceFile.getInterfaces();
     console.log(`Found ${interfaces.length} interfaces`);
-    // TODO: Convert to IR approach
-    // For now, skip interfaces to focus on classes
-    // for (const interfaceDecl of interfaces) {
-    //   const rustType = processInterface(interfaceDecl);
-    //   if (rustType) {
-    //     const key = `${sourceFile.getBaseName()}-${rustType.name}`;
-    //     generatedItems.set(key, rustType);
-    //   }
-    // }
+    for (const interfaceDecl of interfaces) {
+      const rustItem = processInterface(interfaceDecl);
+      if (rustItem) {
+        console.log(`Generated interface item: ${rustItem.name}, kind: ${rustItem.kind}`);
+        const key = `${sourceFile.getBaseName()}-${rustItem.name}`;
+        generatedItems.set(key, rustItem);
+      } else {
+        console.log(`Failed to process interface: ${interfaceDecl.getName()}`);
+      }
+    }
 
     // Process type aliases
     const typeAliases = sourceFile.getTypeAliases();
@@ -131,37 +132,38 @@ async function generateRustTypes(): Promise<void> {
       }
     }
 
-    // TODO: Convert to IR approach  
     // Process enums
     const enums = sourceFile.getEnums();
     console.log(`Found ${enums.length} enums`);
-    // for (const enumDecl of enums) {
-    //   const rustType = processEnum(enumDecl);
-    //   if (rustType) {
-    //     const key = `${sourceFile.getBaseName()}-${rustType.name}`;
-    //     generatedItems.set(key, rustType);
-    //   }
-    // }
+    for (const enumDecl of enums) {
+      const rustItem = processEnum(enumDecl);
+      if (rustItem) {
+        console.log(`Generated enum item: ${rustItem.name}, kind: ${rustItem.kind}`);
+        const key = `${sourceFile.getBaseName()}-${rustItem.name}`;
+        generatedItems.set(key, rustItem);
+      } else {
+        console.log(`Failed to process enum: ${enumDecl.getName()}`);
+      }
+    }
   }
 
-  // Generate Rust output file
-  generateRustOutput(generatedItems);
+  // Generate Rust output files (one per source file)
+  generateRustOutputFiles(generatedItems);
 }
 
 function processInterface(interfaceDecl: InterfaceDeclaration): RustItem | null {
   const name = interfaceDecl.getName();
   if (!name) return null;
-  
+
   const sourceFile = interfaceDecl.getSourceFile();
   const fileName = getFilePrefix(sourceFile.getFilePath());
-  const prefixedName = `${fileName}${name}`;
   const properties = interfaceDecl.getProperties();
 
   // Special handling for SealedUint32Array and SealedFloat32Array
   if (name === "SealedUint32Array") {
     return {
       kind: "type_alias" as const,
-      name: prefixedName,
+      name,
       target: { kind: "named" as const, name: "[u32; N]" } // Generic const parameter
     };
   }
@@ -169,7 +171,7 @@ function processInterface(interfaceDecl: InterfaceDeclaration): RustItem | null 
   if (name === "SealedFloat32Array") {
     return {
       kind: "type_alias" as const,
-      name: prefixedName,
+      name,
       target: { kind: "named" as const, name: "[f32; N]" } // Generic const parameter
     };
   }
@@ -183,7 +185,7 @@ function processInterface(interfaceDecl: InterfaceDeclaration): RustItem | null 
 
   return {
     kind: "struct" as const,
-    name: prefixedName,
+    name,
     fields,
     derives: ["Debug", "Clone", "Serialize", "Deserialize"]
   };
@@ -193,7 +195,6 @@ function processTypeAlias(typeAlias: TypeAliasDeclaration): RustItem | null {
   const name = typeAlias.getName();
   const sourceFile = typeAlias.getSourceFile();
   const fileName = getFilePrefix(sourceFile.getFilePath());
-  const prefixedName = `${fileName}${name}`;
   const aliasType = typeAlias.getType();
 
   // Handle special types like Vec2, Vec3 - these should not be prefixed
@@ -248,7 +249,7 @@ function processTypeAlias(typeAlias: TypeAliasDeclaration): RustItem | null {
     } else {
       return {
         kind: "type_alias" as const,
-        name: prefixedName,
+        name,
         target: convertedTypeIR
       };
     }
@@ -261,7 +262,6 @@ function processClass(classDecl: ClassDeclaration): RustItem | null {
 
   const sourceFile = classDecl.getSourceFile();
   const fileName = getFilePrefix(sourceFile.getFilePath());
-  const prefixedName = `${fileName}${name}`;
 
   const constructors = classDecl.getConstructors();
   const methods = classDecl.getMethods();
@@ -343,21 +343,21 @@ function processClass(classDecl: ClassDeclaration): RustItem | null {
 
     return {
       kind: "struct" as const,
-      name: prefixedName,
+      name,
       fields,
       derives: ["Debug", "Clone", "Serialize", "Deserialize"]
     };
   } else {
     // For other classes that are more like opaque handles
-    let rustStruct = `// ${prefixedName} is an opaque type\n`;
-    rustStruct += `#[derive(Debug, Serialize, Deserialize)]\npub struct ${prefixedName} {\n`;
+    let rustStruct = `// ${name} is an opaque type\n`;
+    rustStruct += `#[derive(Debug, Serialize, Deserialize)]\npub struct ${name} {\n`;
     rustStruct += `    // This is an opaque handle\n`;
     rustStruct += `    _private: std::marker::PhantomData<()>,\n`;
     rustStruct += "}\n\n";
 
     return {
       kind: "type_alias" as const,
-      name: prefixedName,
+      name,
       target: { kind: "js_value" as const }
     };
   }
@@ -367,10 +367,9 @@ function processEnum(enumDecl: EnumDeclaration): RustItem | null {
   const name = enumDecl.getName();
   const sourceFile = enumDecl.getSourceFile();
   const fileName = getFilePrefix(sourceFile.getFilePath());
-  const prefixedName = `${fileName}${name}`;
   const members = enumDecl.getMembers();
 
-  let rustEnum = `#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]\npub enum ${prefixedName} {\n`;
+  let rustEnum = `#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]\npub enum ${name} {\n`;
 
   for (const member of members) {
     const memberName = member.getName();
@@ -380,9 +379,9 @@ function processEnum(enumDecl: EnumDeclaration): RustItem | null {
   rustEnum += "}\n\n";
 
   const variants = members.map(member => member.getName());
-  return { 
-    kind: "enum" as const, 
-    name: prefixedName, 
+  return {
+    kind: "enum" as const,
+    name,
     variants,
     derives: ["Debug", "Clone", "Copy", "PartialEq", "Eq", "Serialize", "Deserialize"]
   };
@@ -395,7 +394,7 @@ function convertTypeToRustIR(type: Type | undefined): RustTypeIR {
   if (!type) return { kind: "primitive", name: "()" };
 
   const typeText = type.getText().trim();
-  
+
   // Handle primitive types
   const primitiveResult = convertPrimitiveToIR(typeText);
   if (primitiveResult) return primitiveResult;
@@ -412,19 +411,19 @@ function convertTypeToRustIR(type: Type | undefined): RustTypeIR {
   if (type.isTuple()) {
     const elements = type.getTupleElements();
     const rustElements = elements.map(el => convertTypeToRustIR(el));
-    
+
     // Check if all elements are the same primitive type
-    if (rustElements.length > 0 && 
-        rustElements.every(el => el.kind === "primitive") &&
-        rustElements.every(el => 
-          el.kind === "primitive" && rustElements[0].kind === "primitive" && 
-          el.name === rustElements[0].name
-        )
+    if (rustElements.length > 0 &&
+      rustElements.every(el => el.kind === "primitive") &&
+      rustElements.every(el =>
+        el.kind === "primitive" && rustElements[0].kind === "primitive" &&
+        el.name === rustElements[0].name
+      )
     ) {
       // Convert to fixed-size array [T; N]
       return { kind: "array", element: rustElements[0], size: rustElements.length };
     }
-    
+
     return { kind: "tuple", elements: rustElements };
   }
 
@@ -432,11 +431,11 @@ function convertTypeToRustIR(type: Type | undefined): RustTypeIR {
   if (type.isUnion()) {
     // Try to preserve original type names from the text representation
     const originalText = typeText;
-    
+
     // Check if the union contains known type alias names
     const unionParts = originalText.split('|').map(part => part.trim().replace(/import\([^)]*\)\./g, ''));
     const hasKnownAliases = unionParts.some(part => typeAliasRegistry.has(part));
-    
+
     if (hasKnownAliases) {
       // Use original names for better readability
       const variants = unionParts.map(part => {
@@ -449,7 +448,7 @@ function convertTypeToRustIR(type: Type | undefined): RustTypeIR {
         if (primitiveResult) return primitiveResult;
         return { kind: "named" as const, name: trimmedPart };
       });
-      
+
       // Check for Option<T> pattern (T | undefined)
       const undefinedVariant = variants.find(v => v.kind === "primitive" && v.name === "()");
       if (undefinedVariant && variants.length === 2) {
@@ -458,13 +457,13 @@ function convertTypeToRustIR(type: Type | undefined): RustTypeIR {
           return { kind: "option", inner: innerType };
         }
       }
-      
+
       return { kind: "union", variants };
     }
-    
+
     // Fallback to type-based analysis
     const variants = type.getUnionTypes().map(t => convertTypeToRustIR(t));
-    
+
     // Check for Option<T> pattern (T | undefined)
     const undefinedVariant = variants.find(v => v.kind === "primitive" && v.name === "()");
     if (undefinedVariant && variants.length === 2) {
@@ -473,20 +472,49 @@ function convertTypeToRustIR(type: Type | undefined): RustTypeIR {
         return { kind: "option", inner: innerType };
       }
     }
-    
+
     return { kind: "union", variants };
   }
 
+  // Handle typeof expressions
+  if (typeText.startsWith("typeof ")) {
+    let referencedName = typeText.replace("typeof ", "").trim();
+    // Clean import paths from typeof references
+    referencedName = referencedName.replace(/import\([^)]*\)\./g, '');
+    // For typeof expressions, we usually want the type itself, not a "typeof" wrapper
+    // This handles cases like "typeof CrossSection" -> "CrossSection"
+    return { kind: "named", name: referencedName };
+  }
+
+  // Handle function types like "() => void"
+  if (typeText.includes("=>") || typeText.match(/^\(\s*\)\s*=>/)) {
+    // Simple function type parsing - could be enhanced later
+    if (typeText.includes("() => void")) {
+      return { kind: "named", name: "fn()" };
+    }
+    // For now, use a generic function type
+    return { kind: "named", name: "fn()" };
+  }
+
   // Handle named types
-  const cleanedName = typeText.replace(/import\([^)]*\)\./g, '').trim();
-  
+  let cleanedName = typeText.replace(/import\([^)]*\)\./g, '').trim();
+
+  // Handle import statements that might be lingering
+  if (cleanedName.startsWith('import(')) {
+    // Extract the actual type name from complex import expressions
+    const match = cleanedName.match(/import\([^)]*\)\.(.+)$/);
+    if (match) {
+      cleanedName = match[1];
+    }
+  }
+
   // Check if this is a known type alias name
   for (const [aliasName, aliasDefinition] of typeAliasRegistry) {
     if (cleanedName === aliasName || cleanedName.endsWith(`.${aliasName}`)) {
       return { kind: "named", name: aliasName };
     }
   }
-  
+
   return { kind: "named", name: cleanedName };
 }
 
@@ -516,7 +544,7 @@ function registerTypeAliases(sourceFile: SourceFile) {
     const name = alias.getName();
     const typeNode = alias.getTypeNode();
     const typeText = typeNode?.getText();
-    
+
     if (typeText) {
       // Fix known problematic type definitions
       if (name === "Polygons" && typeText.includes("SimplePolygon|SimplePolygon[]")) {
@@ -526,7 +554,7 @@ function registerTypeAliases(sourceFile: SourceFile) {
       } else {
         typeAliasRegistry.set(name, typeText);
       }
-      
+
       // Check if this type alias should be converted to enum using AST
       if (typeNode && Node.isUnionTypeNode(typeNode)) {
         const unionTypes = typeNode.getTypeNodes();
@@ -535,7 +563,7 @@ function registerTypeAliases(sourceFile: SourceFile) {
           .map(t => t.asKindOrThrow(SyntaxKind.LiteralType))
           .filter(t => Node.isStringLiteral(t.getLiteral()))
           .map(t => (t.getLiteral() as StringLiteral).getLiteralValue());
-        
+
         // If all union types are string literals, create enum
         if (stringLiterals.length === unionTypes.length && stringLiterals.length > 1) {
           createEnumFromStringLiterals(sourceFile, name, stringLiterals);
@@ -548,23 +576,22 @@ function registerTypeAliases(sourceFile: SourceFile) {
 function createEnumFromStringLiterals(sourceFile: SourceFile, name: string, stringLiterals: string[]) {
   // Convert string literals to PascalCase variants
   const variants = stringLiterals.map(literal => toPascalCase(literal));
-  
+
   // Register as enum in our generated items
   const fileName = getFilePrefix(sourceFile.getFilePath());
-  const prefixedName = `${fileName}${name}`;
-  
+
   const enumItem: RustItem = {
     kind: "enum",
-    name: prefixedName,
+    name,
     variants,
     derives: ["Debug", "Clone", "Serialize", "Deserialize"]
   };
-  
+
   // Add to generated items
   const key = `${sourceFile.getBaseName()}-${name}`;
   generatedItems.set(key, enumItem);
-  
-  console.log(`Created enum ${prefixedName} with variants: ${variants.join(', ')}`);
+
+  console.log(`Created enum ${name} with variants: ${variants.join(', ')}`);
 }
 
 function toPascalCase(str: string): string {
@@ -573,7 +600,7 @@ function toPascalCase(str: string): string {
   if (/^[A-Z][a-z]*([A-Z][a-z]*)*$/.test(str)) {
     return str;
   }
-  
+
   // Split on capital letters and common separators
   return str
     .replace(/([a-z])([A-Z])/g, '$1 $2') // Insert space before capital letters
@@ -598,19 +625,19 @@ function getOrCreateTodoUnionName(variants: RustTypeIR[]): string {
     .map(v => JSON.stringify(v))
     .sort() // Sort to ensure consistent signature regardless of order
     .join('|');
-    
+
   // Check if we already have a Todo Union for these variants
   if (todoUnionCache.has(signature)) {
     return todoUnionCache.get(signature)!;
   }
-  
+
   // Create new Todo Union name
   const todoTypeName = `Todo${getNextTodoUnionId()}Union`;
   todoUnionCache.set(signature, todoTypeName);
-  
+
   // Register this as a todo type to be generated
   registerTodoType(todoTypeName, variants);
-  
+
   return todoTypeName;
 }
 
@@ -623,7 +650,7 @@ function registerTodoType(typeName: string, variants: RustTypeIR[]) {
 
 function generateTodoUnionStruct(typeName: string, variants: RustTypeIR[]): string {
   const variantsComment = variants.map(rustTypeIRToString).join(" | ");
-  
+
   let result = `// TODO: Implement proper union type for: ${variantsComment}\n`;
   result += `// This is a placeholder struct - implement proper sum type or enum\n`;
   result += `#[derive(Debug, Clone, Serialize, Deserialize)]\n`;
@@ -632,7 +659,7 @@ function generateTodoUnionStruct(typeName: string, variants: RustTypeIR[]): stri
   result += `    // Possible variants: ${variantsComment}\n`;
   result += `    pub todo_data: String, // Placeholder - implement actual data structure\n`;
   result += `}\n\n`;
-  
+
   result += `impl ${typeName} {\n`;
   result += `    pub fn todo() -> Self {\n`;
   result += `        Self {\n`;
@@ -640,7 +667,7 @@ function generateTodoUnionStruct(typeName: string, variants: RustTypeIR[]): stri
   result += `        }\n`;
   result += `    }\n`;
   result += `}\n\n`;
-  
+
   return result;
 }
 
@@ -716,16 +743,16 @@ function convertArrayTypes(type: Type, typeText: string): string | null {
     }
     return "Vec<()>";
   }
-  
+
   // Handle tuple/fixed arrays like [number, number] or [number, number, number]
   if (typeText.startsWith("[") && typeText.endsWith("]")) {
     const inner = typeText.slice(1, -1);
     const elements = inner.split(",").map(s => s.trim());
-    
+
     // Check if all elements are the same type
     const firstElementType = elements[0];
     const allSameType = elements.every(el => el === firstElementType);
-    
+
     if (allSameType) {
       // Convert to fixed-size array [T; N] - recursively convert the element type
       const convertedElementType = convertPrimitiveTypes(firstElementType);
@@ -733,12 +760,12 @@ function convertArrayTypes(type: Type, typeText: string): string | null {
         return `[${convertedElementType}; ${elements.length}]`;
       }
     }
-    
+
     // For mixed types or unknown types, fall back to Vec - recursively convert first element type
     const convertedFirstType = convertPrimitiveTypes(firstElementType) || "String";
     return `Vec<${convertedFirstType}>`;
   }
-  
+
   return null;
 }
 
@@ -836,7 +863,7 @@ function rustTypeIRToString(typeIR: RustTypeIR): string {
       return typeIR.name;
     case "array":
       const elementStr = rustTypeIRToString(typeIR.element);
-      return typeIR.size 
+      return typeIR.size
         ? `[${elementStr}; ${typeIR.size}]`
         : `Vec<${elementStr}>`;
     case "tuple":
@@ -866,7 +893,7 @@ function rustItemToString(item: RustItem): string {
       const derives = item.derives ? `#[derive(${item.derives.join(", ")})]\n` : "";
       let structCode = `${derives}pub struct ${item.name} {\n`;
       for (const field of item.fields) {
-        const fieldType = field.optional 
+        const fieldType = field.optional
           ? `Option<${rustTypeIRToString(field.type)}>`
           : rustTypeIRToString(field.type);
         structCode += `    pub ${field.name}: ${fieldType},\n`;
@@ -877,10 +904,10 @@ function rustItemToString(item: RustItem): string {
     case "enum":
       const enumDerives = item.derives ? `#[derive(${item.derives.join(", ")})]\n` : "";
       let enumCode = `${enumDerives}pub enum ${item.name} {\n`;
-      
+
       // For Global enums, add explicit string values
       const isGlobalEnum = item.name.startsWith("Global");
-      
+
       for (const variant of item.variants) {
         if (isGlobalEnum) {
           enumCode += `    ${variant} = "${variant}",\n`;
@@ -894,7 +921,7 @@ function rustItemToString(item: RustItem): string {
     case "extern_block":
       let externCode = `#[wasm_bindgen]\nextern "C" {\n`;
       externCode += `    type ${item.name};\n\n`;
-      
+
       for (const method of item.methods) {
         if (method.methodType === "constructor") {
           externCode += `    #[wasm_bindgen(constructor)]\n`;
@@ -907,18 +934,18 @@ function rustItemToString(item: RustItem): string {
           externCode += `    fn ${method.name}(this: &${item.name}`;
           if (method.args.length > 0) externCode += ", ";
         }
-        
+
         const argStrings = method.args.map(arg => {
-          const argType = arg.optional 
+          const argType = arg.optional
             ? `Option<${rustTypeIRToString(arg.type)}>`
             : rustTypeIRToString(arg.type);
           return `${arg.name}: ${argType}`;
         });
-        
+
         externCode += argStrings.join(", ");
         externCode += `) -> ${rustTypeIRToString(method.returnType)};\n\n`;
       }
-      
+
       externCode += "}\n\n";
       return externCode;
 
@@ -930,16 +957,52 @@ function rustItemToString(item: RustItem): string {
   }
 }
 
-function generateRustOutput(generatedItems: Map<string, RustItem>): void {
+function generateRustOutputFiles(generatedItems: Map<string, RustItem>): void {
   const outputDir = path.resolve(__dirname, "../../generated-rust-types");
   if (!fs.existsSync(outputDir)) {
     fs.mkdirSync(outputDir, { recursive: true });
   }
 
-  let rustOutput = "// Auto-generated Rust types from manifold-3d TypeScript definitions\n\n";
+  // Group items by source file
+  const fileGroups = new Map<string, RustItem[]>();
+  
+  for (const [key, rustItem] of generatedItems) {
+    // Key format is based on getBaseName() which removes .d.ts extension
+    let fileName: string;
+    
+    if (key.includes("manifold-global-types")) {
+      fileName = "manifold-global-types.d.ts";
+    } else if (key.includes("manifold-encapsulated-types")) {
+      fileName = "manifold-encapsulated-types.d.ts";
+    } else if (key.startsWith("manifold.d.ts-")) {
+      fileName = "manifold.d.ts";
+    } else {
+      fileName = "unknown";
+    }
+    
+    if (!fileGroups.has(fileName)) {
+      fileGroups.set(fileName, []);
+    }
+    fileGroups.get(fileName)!.push(rustItem);
+  }
 
-  // Check what imports we need based on generated items
-  const allCode = Array.from(generatedItems.values()).map(rustItemToString).join("");
+  // Generate separate file for each source file
+  for (const [fileName, items] of fileGroups) {
+    generateSingleRustFile(fileName, items, outputDir);
+  }
+
+  // Generate Todo Unions in a separate shared file
+  generateTodoUnionsFile(outputDir);
+
+  console.log(`Generated Rust types written to ${fileGroups.size} files`);
+  console.log(`Generated ${generatedItems.size} items and ${todoTypes.size} todo union types`);
+}
+
+function generateSingleRustFile(fileName: string, items: RustItem[], outputDir: string): void {
+  let rustOutput = `// Auto-generated Rust types from ${fileName}\n\n`;
+
+  // Check what imports we need based on these items
+  const allCode = items.map(rustItemToString).join("");
   const needsWasmBindgen = allCode.includes("wasm_bindgen");
   const needsSerde = allCode.includes("Serialize") || allCode.includes("Deserialize");
 
@@ -952,27 +1015,62 @@ function generateRustOutput(generatedItems: Map<string, RustItem>): void {
     rustOutput += `use serde::{Serialize, Deserialize};\n`;
   }
 
-  // Add common imports
-  rustOutput += `use std::collections::HashMap;\n`;
-  rustOutput += `use std::fmt::Debug;\n`;
+  // Add common imports only if needed
+  if (allCode.includes("HashMap")) {
+    rustOutput += `use std::collections::HashMap;\n`;
+  }
+  if (allCode.includes("Debug")) {
+    rustOutput += `use std::fmt::Debug;\n`;
+  }
+
+  // Import Todo Unions if referenced
+  if (allCode.includes("Todo")) {
+    rustOutput += `use super::todo_unions::*;\n`;
+  }
 
   rustOutput += "\n";
 
-  // Add all generated items
-  for (const [_, rustItem] of generatedItems) {
+  // Add all items for this file
+  for (const rustItem of items) {
     rustOutput += rustItemToString(rustItem);
   }
+
+  // Generate file name mapping
+  const outputFileName = getOutputFileName(fileName);
+  const outputPath = path.join(outputDir, outputFileName);
+  fs.writeFileSync(outputPath, rustOutput);
+
+  console.log(`Generated ${outputFileName} with ${items.length} items`);
+}
+
+function generateTodoUnionsFile(outputDir: string): void {
+  if (todoTypes.size === 0) return;
+
+  let rustOutput = "// Auto-generated Todo Union types\n\n";
+  rustOutput += `use serde::{Serialize, Deserialize};\n\n`;
 
   // Add todo union types as structs
   for (const [typeName, variants] of todoTypes) {
     rustOutput += generateTodoUnionStruct(typeName, variants);
   }
 
-  const outputPath = path.join(outputDir, "manifold_types.rs");
+  const outputPath = path.join(outputDir, "todo_unions.rs");
   fs.writeFileSync(outputPath, rustOutput);
 
-  console.log(`Generated Rust types written to: ${outputPath}`);
-  console.log(`Generated ${generatedItems.size} items and ${todoTypes.size} todo union types`);
+  console.log(`Generated todo_unions.rs with ${todoTypes.size} todo union types`);
+}
+
+function getOutputFileName(sourceFileName: string): string {
+  switch (sourceFileName) {
+    case "manifold-global-types.d.ts":
+      return "global_types.rs";
+    case "manifold-encapsulated-types.d.ts":
+      return "encapsulated_types.rs";
+    case "manifold.d.ts":
+      return "manifold_main.rs";
+    default:
+      return `${sourceFileName.replace('.d.ts', '')}.rs`;
+  }
 }
 
 // Main execution

@@ -1,39 +1,22 @@
-// Auto-generated Rust types from manifold-3d TypeScript definitions
+// Auto-generated Rust types from manifold-encapsulated-types.d.ts
 
 use wasm_bindgen::prelude::*;
 use serde::{Serialize, Deserialize};
-use std::collections::HashMap;
 use std::fmt::Debug;
+use super::todo_unions::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum GlobalFillRule {
-    EvenOdd = "EvenOdd",
-    NonZero = "NonZero",
-    Positive = "Positive",
-    Negative = "Negative",
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum GlobalJoinType {
-    Square = "Square",
-    Round = "Round",
-    Miter = "Miter",
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum GlobalErrorStatus {
-    NoError = "NoError",
-    NonFiniteVertex = "NonFiniteVertex",
-    NotManifold = "NotManifold",
-    VertexOutOfBounds = "VertexOutOfBounds",
-    PropertiesWrongLength = "PropertiesWrongLength",
-    MissingPositionProperties = "MissingPositionProperties",
-    MergeVectorsDifferentLengths = "MergeVectorsDifferentLengths",
-    MergeIndexOutOfBounds = "MergeIndexOutOfBounds",
-    TransformWrongLength = "TransformWrongLength",
-    RunIndexWrongLength = "RunIndexWrongLength",
-    FaceIDWrongLength = "FaceIDWrongLength",
-    InvalidConstruction = "InvalidConstruction",
+pub struct MeshOptions {
+    pub num_prop: f64,
+    pub vert_properties: Float32Array,
+    pub tri_verts: Uint32Array,
+    pub merge_from_vert: Option<Option<Uint32Array>>,
+    pub merge_to_vert: Option<Option<Uint32Array>>,
+    pub run_index: Option<Option<Uint32Array>>,
+    pub run_original_i_d: Option<Option<Uint32Array>>,
+    pub run_transform: Option<Option<Float32Array>>,
+    pub face_i_d: Option<Option<Uint32Array>>,
+    pub halfedge_tangent: Option<Option<Float32Array>>,
 }
 
 #[wasm_bindgen]
@@ -44,46 +27,46 @@ extern "C" {
     fn new(contours: Todo001Union, fill_rule: Option<FillRule>) -> CrossSection;
 
     #[wasm_bindgen(static_method_of = CrossSection, js_name = square)]
-    fn square(size: Todo002Union, center: Todo003Union) -> CrossSection;
+    fn square(size: Todo005Union, center: Todo006Union) -> CrossSection;
 
     #[wasm_bindgen(static_method_of = CrossSection, js_name = circle)]
     fn circle(radius: f64, circular_segments: Option<f64>) -> CrossSection;
 
     #[wasm_bindgen(static_method_of = CrossSection, js_name = union)]
-    fn union(a: Todo004Union, b: Todo004Union) -> CrossSection;
+    fn union(a: Todo007Union, b: Todo007Union) -> CrossSection;
 
     #[wasm_bindgen(static_method_of = CrossSection, js_name = difference)]
-    fn difference(a: Todo004Union, b: Todo004Union) -> CrossSection;
+    fn difference(a: Todo007Union, b: Todo007Union) -> CrossSection;
 
     #[wasm_bindgen(static_method_of = CrossSection, js_name = intersection)]
-    fn intersection(a: Todo004Union, b: Todo004Union) -> CrossSection;
+    fn intersection(a: Todo007Union, b: Todo007Union) -> CrossSection;
 
     #[wasm_bindgen(static_method_of = CrossSection, js_name = union)]
-    fn union(polygons: Vec<Todo004Union>) -> CrossSection;
+    fn union(polygons: Vec<Todo007Union>) -> CrossSection;
 
     #[wasm_bindgen(static_method_of = CrossSection, js_name = difference)]
-    fn difference(polygons: Vec<Todo004Union>) -> CrossSection;
+    fn difference(polygons: Vec<Todo007Union>) -> CrossSection;
 
     #[wasm_bindgen(static_method_of = CrossSection, js_name = intersection)]
-    fn intersection(polygons: Vec<Todo004Union>) -> CrossSection;
+    fn intersection(polygons: Vec<Todo007Union>) -> CrossSection;
 
     #[wasm_bindgen(static_method_of = CrossSection, js_name = hull)]
-    fn hull(polygons: Vec<Todo004Union>) -> CrossSection;
+    fn hull(polygons: Vec<Todo007Union>) -> CrossSection;
 
     #[wasm_bindgen(static_method_of = CrossSection, js_name = compose)]
-    fn compose(polygons: Vec<Todo004Union>) -> CrossSection;
+    fn compose(polygons: Vec<Todo007Union>) -> CrossSection;
 
     #[wasm_bindgen(static_method_of = CrossSection, js_name = of_polygons)]
     fn of_polygons(contours: Todo001Union, fill_rule: Option<FillRule>) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn square(this: &CrossSection, size: Todo002Union, center: Todo003Union) -> CrossSection;
+    fn square(this: &CrossSection, size: Todo005Union, center: Todo006Union) -> CrossSection;
 
     #[wasm_bindgen(method)]
     fn circle(this: &CrossSection, radius: f64, circular_segments: Option<f64>) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn extrude(this: &CrossSection, height: f64, n_divisions: Option<f64>, twist_degrees: Option<f64>, scale_top: Todo002Union, center: Todo003Union) -> Manifold;
+    fn extrude(this: &CrossSection, height: f64, n_divisions: Option<f64>, twist_degrees: Option<f64>, scale_top: Todo005Union, center: Todo006Union) -> Manifold;
 
     #[wasm_bindgen(method)]
     fn revolve(this: &CrossSection, circular_segments: Option<f64>, revolve_degrees: Option<f64>) -> Manifold;
@@ -101,13 +84,13 @@ extern "C" {
     fn rotate(this: &CrossSection, degrees: f64) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn scale(this: &CrossSection, v: Todo005Union) -> CrossSection;
+    fn scale(this: &CrossSection, v: Todo008Union) -> CrossSection;
 
     #[wasm_bindgen(method)]
     fn mirror(this: &CrossSection, ax: [f64; 2]) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn warp(this: &CrossSection, warp_func: (vert: Vec2) => void) -> CrossSection;
+    fn warp(this: &CrossSection, warp_func: fn()) -> CrossSection;
 
     #[wasm_bindgen(method)]
     fn offset(this: &CrossSection, delta: f64, join_type: Option<JoinType>, miter_limit: Option<f64>, circular_segments: Option<f64>) -> CrossSection;
@@ -116,40 +99,40 @@ extern "C" {
     fn simplify(this: &CrossSection, epsilon: Option<f64>) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn add(this: &CrossSection, other: Todo004Union) -> CrossSection;
+    fn add(this: &CrossSection, other: Todo007Union) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn subtract(this: &CrossSection, other: Todo004Union) -> CrossSection;
+    fn subtract(this: &CrossSection, other: Todo007Union) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn intersect(this: &CrossSection, other: Todo004Union) -> CrossSection;
+    fn intersect(this: &CrossSection, other: Todo007Union) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn union(this: &CrossSection, a: Todo004Union, b: Todo004Union) -> CrossSection;
+    fn union(this: &CrossSection, a: Todo007Union, b: Todo007Union) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn difference(this: &CrossSection, a: Todo004Union, b: Todo004Union) -> CrossSection;
+    fn difference(this: &CrossSection, a: Todo007Union, b: Todo007Union) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn intersection(this: &CrossSection, a: Todo004Union, b: Todo004Union) -> CrossSection;
+    fn intersection(this: &CrossSection, a: Todo007Union, b: Todo007Union) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn union(this: &CrossSection, polygons: Vec<Todo004Union>) -> CrossSection;
+    fn union(this: &CrossSection, polygons: Vec<Todo007Union>) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn difference(this: &CrossSection, polygons: Vec<Todo004Union>) -> CrossSection;
+    fn difference(this: &CrossSection, polygons: Vec<Todo007Union>) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn intersection(this: &CrossSection, polygons: Vec<Todo004Union>) -> CrossSection;
+    fn intersection(this: &CrossSection, polygons: Vec<Todo007Union>) -> CrossSection;
 
     #[wasm_bindgen(method)]
     fn hull(this: &CrossSection) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn hull(this: &CrossSection, polygons: Vec<Todo004Union>) -> CrossSection;
+    fn hull(this: &CrossSection, polygons: Vec<Todo007Union>) -> CrossSection;
 
     #[wasm_bindgen(method)]
-    fn compose(this: &CrossSection, polygons: Vec<Todo004Union>) -> CrossSection;
+    fn compose(this: &CrossSection, polygons: Vec<Todo007Union>) -> CrossSection;
 
     #[wasm_bindgen(method)]
     fn decompose(this: &CrossSection) -> Vec<CrossSection>;
@@ -191,19 +174,19 @@ extern "C" {
     fn tetrahedron() -> Manifold;
 
     #[wasm_bindgen(static_method_of = Manifold, js_name = cube)]
-    fn cube(size: Todo006Union, center: Todo003Union) -> Manifold;
+    fn cube(size: Todo009Union, center: Todo006Union) -> Manifold;
 
     #[wasm_bindgen(static_method_of = Manifold, js_name = cylinder)]
-    fn cylinder(height: f64, radius_low: f64, radius_high: Option<f64>, circular_segments: Option<f64>, center: Todo003Union) -> Manifold;
+    fn cylinder(height: f64, radius_low: f64, radius_high: Option<f64>, circular_segments: Option<f64>, center: Todo006Union) -> Manifold;
 
     #[wasm_bindgen(static_method_of = Manifold, js_name = sphere)]
     fn sphere(radius: f64, circular_segments: Option<f64>) -> Manifold;
 
     #[wasm_bindgen(static_method_of = Manifold, js_name = extrude)]
-    fn extrude(polygons: Todo004Union, height: f64, n_divisions: Option<f64>, twist_degrees: Option<f64>, scale_top: Todo002Union, center: Todo003Union) -> Manifold;
+    fn extrude(polygons: Todo007Union, height: f64, n_divisions: Option<f64>, twist_degrees: Option<f64>, scale_top: Todo005Union, center: Todo006Union) -> Manifold;
 
     #[wasm_bindgen(static_method_of = Manifold, js_name = revolve)]
-    fn revolve(polygons: Todo004Union, circular_segments: Option<f64>, revolve_degrees: Option<f64>) -> Manifold;
+    fn revolve(polygons: Todo007Union, circular_segments: Option<f64>, revolve_degrees: Option<f64>) -> Manifold;
 
     #[wasm_bindgen(static_method_of = Manifold, js_name = of_mesh)]
     fn of_mesh(mesh: Mesh) -> Manifold;
@@ -212,7 +195,7 @@ extern "C" {
     fn smooth(mesh: Mesh, sharpened_edges: Option<Vec<Smoothness>>) -> Manifold;
 
     #[wasm_bindgen(static_method_of = Manifold, js_name = level_set)]
-    fn level_set(sdf: (point: Vec3) => number, bounds: Box, edge_length: f64, level: Option<f64>, tolerance: Option<f64>) -> Manifold;
+    fn level_set(sdf: fn(), bounds: Box, edge_length: f64, level: Option<f64>, tolerance: Option<f64>) -> Manifold;
 
     #[wasm_bindgen(static_method_of = Manifold, js_name = union)]
     fn union(a: Manifold, b: Manifold) -> Manifold;
@@ -233,7 +216,7 @@ extern "C" {
     fn intersection(manifolds: Vec<Manifold>) -> Manifold;
 
     #[wasm_bindgen(static_method_of = Manifold, js_name = hull)]
-    fn hull(points: Vec<Todo007Union>) -> Manifold;
+    fn hull(points: Vec<Todo010Union>) -> Manifold;
 
     #[wasm_bindgen(static_method_of = Manifold, js_name = compose)]
     fn compose(manifolds: Vec<Manifold>) -> Manifold;
@@ -245,19 +228,19 @@ extern "C" {
     fn tetrahedron(this: &Manifold) -> Manifold;
 
     #[wasm_bindgen(method)]
-    fn cube(this: &Manifold, size: Todo006Union, center: Todo003Union) -> Manifold;
+    fn cube(this: &Manifold, size: Todo009Union, center: Todo006Union) -> Manifold;
 
     #[wasm_bindgen(method)]
-    fn cylinder(this: &Manifold, height: f64, radius_low: f64, radius_high: Option<f64>, circular_segments: Option<f64>, center: Todo003Union) -> Manifold;
+    fn cylinder(this: &Manifold, height: f64, radius_low: f64, radius_high: Option<f64>, circular_segments: Option<f64>, center: Todo006Union) -> Manifold;
 
     #[wasm_bindgen(method)]
     fn sphere(this: &Manifold, radius: f64, circular_segments: Option<f64>) -> Manifold;
 
     #[wasm_bindgen(method)]
-    fn extrude(this: &Manifold, polygons: Todo004Union, height: f64, n_divisions: Option<f64>, twist_degrees: Option<f64>, scale_top: Todo002Union, center: Todo003Union) -> Manifold;
+    fn extrude(this: &Manifold, polygons: Todo007Union, height: f64, n_divisions: Option<f64>, twist_degrees: Option<f64>, scale_top: Todo005Union, center: Todo006Union) -> Manifold;
 
     #[wasm_bindgen(method)]
-    fn revolve(this: &Manifold, polygons: Todo004Union, circular_segments: Option<f64>, revolve_degrees: Option<f64>) -> Manifold;
+    fn revolve(this: &Manifold, polygons: Todo007Union, circular_segments: Option<f64>, revolve_degrees: Option<f64>) -> Manifold;
 
     #[wasm_bindgen(method)]
     fn of_mesh(this: &Manifold, mesh: Mesh) -> Manifold;
@@ -266,7 +249,7 @@ extern "C" {
     fn smooth(this: &Manifold, mesh: Mesh, sharpened_edges: Option<Vec<Smoothness>>) -> Manifold;
 
     #[wasm_bindgen(method)]
-    fn level_set(this: &Manifold, sdf: (point: Vec3) => number, bounds: Box, edge_length: f64, level: Option<f64>, tolerance: Option<f64>) -> Manifold;
+    fn level_set(this: &Manifold, sdf: fn(), bounds: Box, edge_length: f64, level: Option<f64>, tolerance: Option<f64>) -> Manifold;
 
     #[wasm_bindgen(method)]
     fn transform(this: &Manifold, m: [f64; 16]) -> Manifold;
@@ -284,13 +267,13 @@ extern "C" {
     fn rotate(this: &Manifold, x: f64, y: Option<f64>, z: Option<f64>) -> Manifold;
 
     #[wasm_bindgen(method)]
-    fn scale(this: &Manifold, v: Todo008Union) -> Manifold;
+    fn scale(this: &Manifold, v: Todo011Union) -> Manifold;
 
     #[wasm_bindgen(method)]
     fn mirror(this: &Manifold, normal: [f64; 3]) -> Manifold;
 
     #[wasm_bindgen(method)]
-    fn warp(this: &Manifold, warp_func: (vert: Vec3) => void) -> Manifold;
+    fn warp(this: &Manifold, warp_func: fn()) -> Manifold;
 
     #[wasm_bindgen(method)]
     fn smooth_by_normals(this: &Manifold, normal_idx: f64) -> Manifold;
@@ -308,7 +291,7 @@ extern "C" {
     fn refine_to_tolerance(this: &Manifold, tolerance: f64) -> Manifold;
 
     #[wasm_bindgen(method)]
-    fn set_properties(this: &Manifold, num_prop: f64, prop_func: (newProp: number[], position: Vec3, oldProp: number[]) => void) -> Manifold;
+    fn set_properties(this: &Manifold, num_prop: f64, prop_func: fn()) -> Manifold;
 
     #[wasm_bindgen(method)]
     fn calculate_curvature(this: &Manifold, gaussian_idx: f64, mean_idx: f64) -> Manifold;
@@ -362,7 +345,7 @@ extern "C" {
     fn hull(this: &Manifold) -> Manifold;
 
     #[wasm_bindgen(method)]
-    fn hull(this: &Manifold, points: Vec<Todo007Union>) -> Manifold;
+    fn hull(this: &Manifold, points: Vec<Todo010Union>) -> Manifold;
 
     #[wasm_bindgen(method)]
     fn compose(this: &Manifold, manifolds: Vec<Manifold>) -> Manifold;
@@ -413,7 +396,7 @@ extern "C" {
     fn min_gap(this: &Manifold, other: Manifold, search_length: f64) -> f64;
 
     #[wasm_bindgen(method)]
-    fn status(this: &Manifold) -> Todo009Union;
+    fn status(this: &Manifold) -> Todo004Union;
 
     #[wasm_bindgen(method)]
     fn get_mesh(this: &Manifold, normal_idx: Option<f64>) -> Mesh;
@@ -457,222 +440,5 @@ extern "C" {
     #[wasm_bindgen(method)]
     fn transform(this: &Mesh, run: f64) -> [f64; 16];
 
-}
-
-pub type Vec2 = [f64; 2];
-
-pub type Vec3 = [f64; 3];
-
-pub type Mat3 = [f64; 9];
-
-pub type Mat4 = [f64; 16];
-
-pub type SimplePolygon = Vec<Vec2>;
-
-pub type Polygons = Vec<SimplePolygon>;
-
-pub type GlobalRect = Rect;
-
-pub type GlobalBox = Box;
-
-pub type GlobalSmoothness = Smoothness;
-
-pub type GlobalFillRule = Todo010Union;
-
-pub type GlobalJoinType = Todo011Union;
-
-pub type GlobalErrorStatus = Todo009Union;
-
-pub type CrossSection = wasm_bindgen::JsValue;
-
-pub type Manifold = wasm_bindgen::JsValue;
-
-pub type Mesh = wasm_bindgen::JsValue;
-
-// TODO: Implement proper union type for: Polygons
-// This is a placeholder struct - implement proper sum type or enum
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Todo001Union {
-    // TODO: Replace with proper union implementation
-    // Possible variants: Polygons
-    pub todo_data: String, // Placeholder - implement actual data structure
-}
-
-impl Todo001Union {
-    pub fn todo() -> Self {
-        Self {
-            todo_data: "TODO: Implement union type".to_string()
-        }
-    }
-}
-
-// TODO: Implement proper union type for: () | f64 | [f64; 2]
-// This is a placeholder struct - implement proper sum type or enum
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Todo002Union {
-    // TODO: Replace with proper union implementation
-    // Possible variants: () | f64 | [f64; 2]
-    pub todo_data: String, // Placeholder - implement actual data structure
-}
-
-impl Todo002Union {
-    pub fn todo() -> Self {
-        Self {
-            todo_data: "TODO: Implement union type".to_string()
-        }
-    }
-}
-
-// TODO: Implement proper union type for: () | false | true
-// This is a placeholder struct - implement proper sum type or enum
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Todo003Union {
-    // TODO: Replace with proper union implementation
-    // Possible variants: () | false | true
-    pub todo_data: String, // Placeholder - implement actual data structure
-}
-
-impl Todo003Union {
-    pub fn todo() -> Self {
-        Self {
-            todo_data: "TODO: Implement union type".to_string()
-        }
-    }
-}
-
-// TODO: Implement proper union type for: Polygons | CrossSection
-// This is a placeholder struct - implement proper sum type or enum
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Todo004Union {
-    // TODO: Replace with proper union implementation
-    // Possible variants: Polygons | CrossSection
-    pub todo_data: String, // Placeholder - implement actual data structure
-}
-
-impl Todo004Union {
-    pub fn todo() -> Self {
-        Self {
-            todo_data: "TODO: Implement union type".to_string()
-        }
-    }
-}
-
-// TODO: Implement proper union type for: f64 | [f64; 2]
-// This is a placeholder struct - implement proper sum type or enum
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Todo005Union {
-    // TODO: Replace with proper union implementation
-    // Possible variants: f64 | [f64; 2]
-    pub todo_data: String, // Placeholder - implement actual data structure
-}
-
-impl Todo005Union {
-    pub fn todo() -> Self {
-        Self {
-            todo_data: "TODO: Implement union type".to_string()
-        }
-    }
-}
-
-// TODO: Implement proper union type for: () | f64 | [f64; 3]
-// This is a placeholder struct - implement proper sum type or enum
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Todo006Union {
-    // TODO: Replace with proper union implementation
-    // Possible variants: () | f64 | [f64; 3]
-    pub todo_data: String, // Placeholder - implement actual data structure
-}
-
-impl Todo006Union {
-    pub fn todo() -> Self {
-        Self {
-            todo_data: "TODO: Implement union type".to_string()
-        }
-    }
-}
-
-// TODO: Implement proper union type for: Manifold | Vec3
-// This is a placeholder struct - implement proper sum type or enum
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Todo007Union {
-    // TODO: Replace with proper union implementation
-    // Possible variants: Manifold | Vec3
-    pub todo_data: String, // Placeholder - implement actual data structure
-}
-
-impl Todo007Union {
-    pub fn todo() -> Self {
-        Self {
-            todo_data: "TODO: Implement union type".to_string()
-        }
-    }
-}
-
-// TODO: Implement proper union type for: f64 | [f64; 3]
-// This is a placeholder struct - implement proper sum type or enum
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Todo008Union {
-    // TODO: Replace with proper union implementation
-    // Possible variants: f64 | [f64; 3]
-    pub todo_data: String, // Placeholder - implement actual data structure
-}
-
-impl Todo008Union {
-    pub fn todo() -> Self {
-        Self {
-            todo_data: "TODO: Implement union type".to_string()
-        }
-    }
-}
-
-// TODO: Implement proper union type for: ErrorStatus
-// This is a placeholder struct - implement proper sum type or enum
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Todo009Union {
-    // TODO: Replace with proper union implementation
-    // Possible variants: ErrorStatus
-    pub todo_data: String, // Placeholder - implement actual data structure
-}
-
-impl Todo009Union {
-    pub fn todo() -> Self {
-        Self {
-            todo_data: "TODO: Implement union type".to_string()
-        }
-    }
-}
-
-// TODO: Implement proper union type for: FillRule
-// This is a placeholder struct - implement proper sum type or enum
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Todo010Union {
-    // TODO: Replace with proper union implementation
-    // Possible variants: FillRule
-    pub todo_data: String, // Placeholder - implement actual data structure
-}
-
-impl Todo010Union {
-    pub fn todo() -> Self {
-        Self {
-            todo_data: "TODO: Implement union type".to_string()
-        }
-    }
-}
-
-// TODO: Implement proper union type for: JoinType
-// This is a placeholder struct - implement proper sum type or enum
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Todo011Union {
-    // TODO: Replace with proper union implementation
-    // Possible variants: JoinType
-    pub todo_data: String, // Placeholder - implement actual data structure
-}
-
-impl Todo011Union {
-    pub fn todo() -> Self {
-        Self {
-            todo_data: "TODO: Implement union type".to_string()
-        }
-    }
 }
 
