@@ -28,3 +28,8 @@ elm-stuff
 tauri/gen/*
 target/
 pkg/
+
+
+# Added by cargo
+
+/target

@@ -1,0 +1,9 @@
+[package]
+name = "daccad"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+manifold-rs = "0.6.2"
+nom = "8"
+bevy = "0.16"
