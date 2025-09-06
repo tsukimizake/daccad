@@ -6,4 +6,5 @@ edition = "2024"
 [dependencies]
 manifold-rs = "0.6.2"
 nom = "8"
-bevy = "0.16"
+bevy = { version = "0.16", features = ["default_font"] }
+bevy_egui = "0.36"
