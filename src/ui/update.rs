@@ -3,12 +3,13 @@ use bevy::prelude::*;
 use bevy::render::{camera::RenderTarget, render_resource::*, view::RenderLayers};
 use bevy_egui::{EguiContexts, egui};
 
-use crate::ui::{ModelPreview, ModelPreviews};
+use crate::ui::{EditorText, ModelPreview, ModelPreviews};
 
 // egui UI: add previews dynamically and render all existing previews
 pub fn egui_ui(
     mut contexts: EguiContexts,
     mut previews: ResMut<ModelPreviews>,
+    mut editor_text: ResMut<EditorText>,
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -75,40 +76,69 @@ pub fn egui_ui(
                 previews.0.push(ModelPreview {
                     image: rt_image,
                     size: rt_size,
-                    text: String::new(),
                 });
             }
         });
     }
 
-    // Draw all previews (separate borrows of contexts per window)
-    for (i, preview) in previews.0.iter_mut().enumerate() {
-        let tex_id = contexts
-            .image_id(&preview.image)
-            .unwrap_or_else(|| contexts.add_image(preview.image.clone()));
+    // Precompute texture ids while we don't hold a ctx borrow
+    let preview_textures: Vec<(egui::TextureId, UVec2)> = previews
+        .0
+        .iter()
+        .map(|p| {
+            let id = contexts
+                .image_id(&p.image)
+                .unwrap_or_else(|| contexts.add_image(p.image.clone()));
+            (id, p.size)
+        })
+        .collect();
 
-        if let Ok(ctx) = contexts.ctx_mut() {
-            egui::Window::new(format!("Preview {}", i + 1))
-                .default_open(true)
-                .show(ctx, |ui| {
-                    egui::Frame::default()
-                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(120)))
-                        .corner_radius(egui::CornerRadius::same(6))
-                        .inner_margin(egui::Margin::symmetric(8, 8))
-                        .show(ui, |ui| {
-                            ui.vertical(|ui| {
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut preview.text)
-                                        .hint_text("Enter text"),
-                                );
-                                let size = [preview.size.x as f32, preview.size.y as f32];
-                                ui.add(egui::Image::from_texture((
-                                    tex_id,
-                                    egui::vec2(size[0], size[1]),
-                                )));
-                            });
-                        });
-                });
-        }
+    // Main split view: left = large text area, right = previews
+    if let Ok(ctx) = contexts.ctx_mut() {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.columns(2, |columns| {
+                // Left half: big multiline text area
+                let left = &mut columns[0];
+                let size_left = left.available_size();
+                left.add_sized(
+                    size_left,
+                    egui::TextEdit::multiline(&mut editor_text.0)
+                        .hint_text("ここにテキストを入力してください"),
+                );
+
+                // Right half: show all previews stacked
+                let right = &mut columns[1];
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false; 2])
+                    .show(right, |ui| {
+                        if preview_textures.is_empty() {
+                            ui.label(
+                                "プレビューはまだありません。上の『Add Preview』を押してください。",
+                            );
+                        } else {
+                            for (i, (tex_id, size)) in preview_textures.iter().enumerate() {
+                                egui::Frame::default()
+                                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(120)))
+                                    .corner_radius(egui::CornerRadius::same(6))
+                                    .inner_margin(egui::Margin::symmetric(8, 8))
+                                    .show(ui, |ui| {
+                                        ui.label(format!("Preview {}", i + 1));
+                                        let avail_w = ui.available_width();
+                                        let (w, h) = {
+                                            let w = avail_w.max(1.0);
+                                            let aspect = size.y as f32 / size.x as f32;
+                                            (w, w * aspect)
+                                        };
+                                        ui.add(egui::Image::from_texture((
+                                            *tex_id,
+                                            egui::vec2(w, h),
+                                        )));
+                                    });
+                                ui.add_space(6.0);
+                            }
+                        }
+                    });
+            });
+        });
     }
 }
