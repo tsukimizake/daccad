@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::ui::{EditorText, FontsConfigured, ModelPreviews};
+use crate::ui::{EditorText, ModelPreviews};
 use bevy::log::{info, warn};
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, egui};
@@ -12,21 +12,15 @@ pub fn setup(mut commands: Commands) {
     // Start with no previews; they are added via UI
     commands.insert_resource(ModelPreviews::default());
     // Global editor text for the left pane
-    commands.insert_resource(EditorText::default());
-    // Mark fonts as not configured; will configure during egui pass
-    commands.insert_resource(FontsConfigured(false));
+    commands.insert_resource(EditorText("cube(10).".to_string()));
 }
 
-pub fn setup_fonts(mut contexts: EguiContexts, mut configured: ResMut<FontsConfigured>) {
-    if configured.0 {
-        return;
-    }
+pub fn setup_fonts(mut contexts: EguiContexts) {
     if let Ok(ctx) = contexts.ctx_mut() {
         let mut fonts = egui::FontDefinitions::default();
 
         let path = "assets/fonts/NotoSansJP-Regular.ttf";
 
-        info!("egui: trying font {}", path);
         if let Ok(bytes) = std::fs::read(path) {
             info!("egui: font loaded: {}", path);
             fonts
@@ -39,9 +33,10 @@ pub fn setup_fonts(mut contexts: EguiContexts, mut configured: ResMut<FontsConfi
                 list.insert(0, "jp".to_owned());
             }
             ctx.set_fonts(fonts);
-            configured.0 = true;
             return;
         }
         warn!("egui: no Japanese font found under assets/fonts; tofu may appear");
+    } else {
+        warn!("egui: no egui context available to set fonts");
     }
 }

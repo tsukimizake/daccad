@@ -13,9 +13,6 @@ pub struct ModelPreviews(pub Vec<ModelPreview>);
 #[derive(Resource, Default, Clone)]
 pub struct EditorText(pub String);
 
-#[derive(Resource, Default, Clone)]
-pub struct FontsConfigured(pub bool);
-
 #[derive(Clone)]
 pub struct ModelPreview {
     pub image: Handle<Image>,
