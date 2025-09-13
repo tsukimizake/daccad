@@ -23,83 +23,14 @@ pub fn egui_ui(
     if let Ok(ctx) = contexts.ctx_mut() {
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             if ui.button("Add Preview").clicked() {
-                // Create a basic cube mesh and store its handle along with default params
-                // TODO generate from prolog
-                let mesh_handle = meshes.add(Mesh::from(Cuboid::from_size(Vec3::splat(1.0))));
-                // Choose a simple material
-                let material = materials.add(StandardMaterial {
-                    base_color: Color::srgb(0.7, 0.2, 0.2),
-                    ..default()
-                });
-
-                // Position new preview based on current count
-                let idx = preview_targets.0.len();
-                let x = (idx as f32) * 2.5 - 2.5;
-
-                // Spawn the visible mesh entity in the 3D world
-                let entity = commands
-                    .spawn((
-                        Mesh3d(mesh_handle.clone()),
-                        MeshMaterial3d(material),
-                        Transform::from_xyz(x, 0.5, 0.0),
-                    ))
-                    .id();
-
-                // Create an offscreen render target
-                let rt_size = UVec2::new(512, 384);
-                let size = Extent3d {
-                    width: rt_size.x,
-                    height: rt_size.y,
-                    depth_or_array_layers: 1,
-                };
-                let mut image = Image::new_fill(
-                    size,
-                    TextureDimension::D2,
-                    &[0, 0, 0, 0],
-                    TextureFormat::Rgba8UnormSrgb,
-                    RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
+                add_preview(
+                    &mut commands,
+                    &mut meshes,
+                    &mut materials,
+                    &mut images,
+                    &mut preview_targets,
+                    &editor_text,
                 );
-                image.texture_descriptor.usage = TextureUsages::RENDER_ATTACHMENT
-                    | TextureUsages::TEXTURE_BINDING
-                    | TextureUsages::COPY_SRC;
-                let rt_image = images.add(image);
-
-                // Unique render layer per preview
-                let layer_idx = (preview_targets.0.len() as u8).saturating_add(1);
-                let layer_only = RenderLayers::layer(layer_idx as usize);
-
-                // Offscreen camera rendering only that layer
-                commands.spawn((
-                    Camera3d::default(),
-                    Camera {
-                        target: RenderTarget::Image(rt_image.clone().into()),
-                        ..default()
-                    },
-                    Transform::from_xyz(2.5, 2.5, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
-                    layer_only.clone(),
-                ));
-
-                // Light for the offscreen layer
-                commands.spawn((
-                    DirectionalLight::default(),
-                    Transform::from_xyz(4.0, 8.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
-                    layer_only.clone(),
-                ));
-
-                // Make the mesh visible to both default (0) and offscreen layer
-                let both_layers = RenderLayers::from_layers(&[0, layer_idx as usize]);
-                commands.entity(entity).insert(both_layers);
-
-                // Store in resource for UI display and transform updates
-                preview_targets.0.push(PreviewTarget {
-                    mesh_handle: mesh_handle.clone(),
-                    rt_image: rt_image.clone(),
-                    rt_size,
-                    rotate_x: 0.0,
-                    rotate_y: 0.0,
-                    // initialize with current editor text (or empty if preferred)
-                    query: editor_text.0.clone(),
-                });
             }
         });
     }
@@ -150,6 +81,93 @@ pub fn egui_ui(
             });
         });
     }
+}
+
+fn add_preview(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
+    preview_targets: &mut PreviewTargets,
+    editor_text: &EditorText,
+) {
+    // Create a basic cube mesh and store its handle along with default params
+    // TODO generate from prolog
+    let mesh_handle = meshes.add(Mesh::from(Cuboid::from_size(Vec3::splat(1.0))));
+    // Choose a simple material
+    let material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.7, 0.2, 0.2),
+        ..default()
+    });
+
+    // Position new preview based on current count
+    let idx = preview_targets.0.len();
+    let x = (idx as f32) * 2.5 - 2.5;
+
+    // Spawn the visible mesh entity in the 3D world
+    let entity = commands
+        .spawn((
+            Mesh3d(mesh_handle.clone()),
+            MeshMaterial3d(material),
+            Transform::from_xyz(x, 0.5, 0.0),
+        ))
+        .id();
+
+    // Create an offscreen render target
+    let rt_size = UVec2::new(512, 384);
+    let size = Extent3d {
+        width: rt_size.x,
+        height: rt_size.y,
+        depth_or_array_layers: 1,
+    };
+    let mut image = Image::new_fill(
+        size,
+        TextureDimension::D2,
+        &[0, 0, 0, 0],
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
+    );
+    image.texture_descriptor.usage = TextureUsages::RENDER_ATTACHMENT
+        | TextureUsages::TEXTURE_BINDING
+        | TextureUsages::COPY_SRC;
+    let rt_image = images.add(image);
+
+    // Unique render layer per preview
+    let layer_idx = (preview_targets.0.len() as u8).saturating_add(1);
+    let layer_only = RenderLayers::layer(layer_idx as usize);
+
+    // Offscreen camera rendering only that layer
+    commands.spawn((
+        Camera3d::default(),
+        Camera {
+            target: RenderTarget::Image(rt_image.clone().into()),
+            ..default()
+        },
+        Transform::from_xyz(2.5, 2.5, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
+        layer_only.clone(),
+    ));
+
+    // Light for the offscreen layer
+    commands.spawn((
+        DirectionalLight::default(),
+        Transform::from_xyz(4.0, 8.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
+        layer_only.clone(),
+    ));
+
+    // Make the mesh visible to both default (0) and offscreen layer
+    let both_layers = RenderLayers::from_layers(&[0, layer_idx as usize]);
+    commands.entity(entity).insert(both_layers);
+
+    // Store in resource for UI display and transform updates
+    preview_targets.0.push(PreviewTarget {
+        mesh_handle: mesh_handle.clone(),
+        rt_image: rt_image.clone(),
+        rt_size,
+        rotate_x: 0.0,
+        rotate_y: 0.0,
+        // initialize with current editor text (or empty if preferred)
+        query: editor_text.0.clone(),
+    });
 }
 
 fn preview_target_ui(
