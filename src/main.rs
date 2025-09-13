@@ -16,5 +16,6 @@ pub fn main() {
         .add_systems(Startup, setup)
         .add_systems(EguiPrimaryContextPass, setup_fonts.run_if(run_once))
         .add_systems(EguiPrimaryContextPass, egui_ui)
+        .add_systems(Update, update_preview_transforms)
         .run();
 }

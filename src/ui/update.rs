@@ -1,24 +1,51 @@
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
-use bevy::render::{camera::RenderTarget, render_resource::*, view::RenderLayers};
+use bevy::render::{
+    camera::RenderTarget,
+    render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages},
+    view::RenderLayers,
+};
 use bevy_egui::{EguiContexts, egui};
 
-use crate::ui::{EditorText, ModelPreview, ModelPreviews};
+use crate::ui::{EditorText, PreviewTarget, PreviewTargets};
 
 // egui UI: add previews dynamically and render all existing previews
 pub fn egui_ui(
     mut contexts: EguiContexts,
-    mut previews: ResMut<ModelPreviews>,
-    mut editor_text: ResMut<EditorText>,
+    mut preview_targets: ResMut<PreviewTargets>,
     mut commands: Commands,
-    mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    mut editor_text: ResMut<EditorText>,
 ) {
+    // Toolbar: add a new preview
     if let Ok(ctx) = contexts.ctx_mut() {
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             if ui.button("Add Preview").clicked() {
-                // Create an offscreen render target for this preview
+                // Create a basic cube mesh and store its handle along with default params
+                // TODO generate from prolog
+                let mesh_handle = meshes.add(Mesh::from(Cuboid::from_size(Vec3::splat(1.0))));
+                // Choose a simple material
+                let material = materials.add(StandardMaterial {
+                    base_color: Color::srgb(0.7, 0.2, 0.2),
+                    ..default()
+                });
+
+                // Position new preview based on current count
+                let idx = preview_targets.0.len();
+                let x = (idx as f32) * 2.5 - 2.5;
+
+                // Spawn the visible mesh entity in the 3D world
+                let entity = commands
+                    .spawn((
+                        Mesh3d(mesh_handle.clone()),
+                        MeshMaterial3d(material),
+                        Transform::from_xyz(x, 0.5, 0.0),
+                    ))
+                    .id();
+
+                // Create an offscreen render target
                 let rt_size = UVec2::new(512, 384);
                 let size = Extent3d {
                     width: rt_size.x,
@@ -37,11 +64,11 @@ pub fn egui_ui(
                     | TextureUsages::COPY_SRC;
                 let rt_image = images.add(image);
 
-                // Unique render layer for this preview
-                let layer_idx = (previews.0.len() as u8).saturating_add(1);
-                let layer = RenderLayers::layer(layer_idx as usize);
+                // Unique render layer per preview
+                let layer_idx = (preview_targets.0.len() as u8).saturating_add(1);
+                let layer_only = RenderLayers::layer(layer_idx as usize);
 
-                // Camera rendering into the texture
+                // Offscreen camera rendering only that layer
                 commands.spawn((
                     Camera3d::default(),
                     Camera {
@@ -49,51 +76,47 @@ pub fn egui_ui(
                         ..default()
                     },
                     Transform::from_xyz(2.5, 2.5, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
-                    layer.clone(),
+                    layer_only.clone(),
                 ));
 
-                // Light for this layer
+                // Light for the offscreen layer
                 commands.spawn((
                     DirectionalLight::default(),
                     Transform::from_xyz(4.0, 8.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
-                    layer.clone(),
+                    layer_only.clone(),
                 ));
 
-                // Cube in the preview layer
-                let mesh = meshes.add(Mesh::from(Cuboid::from_size(Vec3::splat(1.0))));
-                let material = materials.add(StandardMaterial {
-                    base_color: Color::srgb(0.7, 0.2, 0.2),
-                    ..default()
-                });
-                commands.spawn((
-                    Mesh3d(mesh),
-                    MeshMaterial3d(material),
-                    Transform::from_xyz(0.0, 0.5, 0.0),
-                    layer.clone(),
-                ));
+                // Make the mesh visible to both default (0) and offscreen layer
+                let both_layers = RenderLayers::from_layers(&[0, layer_idx as usize]);
+                commands.entity(entity).insert(both_layers);
 
-                // Track this preview for UI
-                previews.0.push(ModelPreview {
-                    image: rt_image,
-                    size: rt_size,
+                // Store in resource for UI display and transform updates
+                preview_targets.0.push(PreviewTarget {
+                    mesh_handle: mesh_handle.clone(),
+                    rt_image: rt_image.clone(),
+                    rt_size,
+                    rotate_x: 0.0,
+                    rotate_y: 0.0,
+                    // initialize with current editor text (or empty if preferred)
+                    query: editor_text.0.clone(),
                 });
             }
         });
     }
 
-    // Precompute texture ids while we don't hold a ctx borrow
-    let preview_textures: Vec<(egui::TextureId, UVec2)> = previews
+    // Precompute egui texture ids for each preview's offscreen image
+    let preview_images: Vec<(egui::TextureId, UVec2)> = preview_targets
         .0
         .iter()
-        .map(|p| {
+        .map(|t| {
             let id = contexts
-                .image_id(&p.image)
-                .unwrap_or_else(|| contexts.add_image(p.image.clone()));
-            (id, p.size)
+                .image_id(&t.rt_image)
+                .unwrap_or_else(|| contexts.add_image(t.rt_image.clone()));
+            (id, t.rt_size)
         })
         .collect();
 
-    // Main split view: left = large text area, right = previews
+    // Main split view: left = large text area, right = previews list and controls
     if let Ok(ctx) = contexts.ctx_mut() {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.columns(2, |columns| {
@@ -106,39 +129,81 @@ pub fn egui_ui(
                         .hint_text("ここにテキストを入力してください"),
                 );
 
-                // Right half: show all previews stacked
+                // Right half: show and edit previews
                 let right = &mut columns[1];
                 egui::ScrollArea::vertical()
                     .auto_shrink([false; 2])
                     .show(right, |ui| {
-                        if preview_textures.is_empty() {
+                        if preview_targets.0.is_empty() {
                             ui.label(
                                 "プレビューはまだありません。上の『Add Preview』を押してください。",
                             );
                         } else {
-                            for (i, (tex_id, size)) in preview_textures.iter().enumerate() {
-                                egui::Frame::default()
-                                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(120)))
-                                    .corner_radius(egui::CornerRadius::same(6))
-                                    .inner_margin(egui::Margin::symmetric(8, 8))
-                                    .show(ui, |ui| {
-                                        ui.label(format!("Preview {}", i + 1));
-                                        let avail_w = ui.available_width();
-                                        let (w, h) = {
-                                            let w = avail_w.max(1.0);
-                                            let aspect = size.y as f32 / size.x as f32;
-                                            (w, w * aspect)
-                                        };
-                                        ui.add(egui::Image::from_texture((
-                                            *tex_id,
-                                            egui::vec2(w, h),
-                                        )));
-                                    });
+                            for (i, t) in preview_targets.0.iter_mut().enumerate() {
+                                if let Some((tex_id, size)) = preview_images.get(i) {
+                                    preview_target_ui(ui, i, t, *tex_id, *size);
+                                }
                                 ui.add_space(6.0);
                             }
                         }
                     });
             });
         });
+    }
+}
+
+fn preview_target_ui(
+    ui: &mut egui::Ui,
+    index: usize,
+    target: &mut PreviewTarget,
+    tex_id: egui::TextureId,
+    size: UVec2,
+) {
+    egui::Frame::default()
+        .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(120)))
+        .corner_radius(egui::CornerRadius::same(6))
+        .inner_margin(egui::Margin::symmetric(8, 8))
+        .show(ui, |ui| {
+            ui.label(format!("Preview {}", index + 1));
+            ui.add_space(4.0);
+            // Query text
+            ui.label("Query:");
+            ui.text_edit_singleline(&mut target.query);
+            ui.add_space(4.0);
+            // Rotation controls
+            ui.horizontal(|ui| {
+                ui.label("Rotate X:");
+                ui.add(egui::DragValue::new(&mut target.rotate_x).speed(0.01));
+                ui.label("Rotate Y:");
+                ui.add(egui::DragValue::new(&mut target.rotate_y).speed(0.01));
+            });
+            ui.add_space(6.0);
+            // Show the offscreen render under controls
+            let avail_w = ui.available_width();
+            let aspect = size.y as f32 / size.x as f32;
+            let w = avail_w.clamp(160.0, 640.0);
+            let h = w * aspect;
+            ui.add(egui::Image::from_texture((tex_id, egui::vec2(w, h))));
+        });
+}
+
+// Keep spawned preview entity rotations in sync with UI values
+pub fn update_preview_transforms(
+    preview_targets: Res<PreviewTargets>,
+    mut q: Query<(&Mesh3d, &mut Transform)>,
+) {
+    if preview_targets.0.is_empty() {
+        return;
+    }
+    for (mesh3d, mut transform) in q.iter_mut() {
+        if let Some(t) = preview_targets
+            .0
+            .iter()
+            .find(|t| t.mesh_handle.id() == mesh3d.0.id())
+        {
+            let rx = t.rotate_x as f32;
+            let ry = t.rotate_y as f32;
+            transform.rotation = Quat::from_euler(EulerRot::XYZ, rx, ry, 0.0);
+        }
     }
 }
