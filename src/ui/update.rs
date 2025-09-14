@@ -5,7 +5,11 @@ use bevy::render::{
     render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages},
     view::RenderLayers,
 };
+use bevy::tasks::futures_lite::future::{block_on, poll_once};
+use bevy::tasks::{AsyncComputeTaskPool, Task};
 use bevy_egui::{EguiContexts, egui};
+
+use crate::prolog::mock::mock_generate_mesh;
 
 use crate::ui::{EditorText, PreviewTarget, PreviewTargets};
 
@@ -13,24 +17,19 @@ use crate::ui::{EditorText, PreviewTarget, PreviewTargets};
 pub fn egui_ui(
     mut contexts: EguiContexts,
     mut preview_targets: ResMut<PreviewTargets>,
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut images: ResMut<Assets<Image>>,
     mut editor_text: ResMut<EditorText>,
+    mut pending: ResMut<PendingPreviews>,
 ) {
     // Toolbar: add a new preview
     if let Ok(ctx) = contexts.ctx_mut() {
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             if ui.button("Add Preview").clicked() {
-                add_preview(
-                    &mut commands,
-                    &mut meshes,
-                    &mut materials,
-                    &mut images,
-                    &mut preview_targets,
-                    &editor_text,
-                );
+                let pool = AsyncComputeTaskPool::get();
+                let task: Task<Mesh> = pool.spawn(mock_generate_mesh());
+                pending.0.push(PendingPreviewTask {
+                    task,
+                    query: editor_text.0.clone(),
+                });
             }
         });
     }
@@ -83,17 +82,17 @@ pub fn egui_ui(
     }
 }
 
-fn add_preview(
+fn finalize_add_preview(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     images: &mut Assets<Image>,
     preview_targets: &mut PreviewTargets,
-    editor_text: &EditorText,
+    mesh: Mesh,
+    query_text: String,
 ) {
-    // Create a basic cube mesh and store its handle along with default params
-    // TODO generate from prolog
-    let mesh_handle = meshes.add(Mesh::from(Cuboid::from_size(Vec3::splat(1.0))));
+    // Store generated mesh
+    let mesh_handle = meshes.add(mesh);
     // Choose a simple material
     let material = materials.add(StandardMaterial {
         base_color: Color::srgb(0.7, 0.2, 0.2),
@@ -127,9 +126,8 @@ fn add_preview(
         TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
     );
-    image.texture_descriptor.usage = TextureUsages::RENDER_ATTACHMENT
-        | TextureUsages::TEXTURE_BINDING
-        | TextureUsages::COPY_SRC;
+    image.texture_descriptor.usage =
+        TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_SRC;
     let rt_image = images.add(image);
 
     // Unique render layer per preview
@@ -165,9 +163,51 @@ fn add_preview(
         rt_size,
         rotate_x: 0.0,
         rotate_y: 0.0,
-        // initialize with current editor text (or empty if preferred)
-        query: editor_text.0.clone(),
+        // initialize with query captured when task started
+        query: query_text,
     });
+}
+
+#[derive(Resource, Default)]
+pub struct PendingPreviews(pub Vec<PendingPreviewTask>);
+
+pub struct PendingPreviewTask {
+    pub task: Task<Mesh>,
+    pub query: String,
+}
+
+pub fn poll_preview_tasks(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    mut preview_targets: ResMut<PreviewTargets>,
+    mut pending: ResMut<PendingPreviews>,
+) {
+    // Use retain_mut to remove finished tasks and collect results
+    let mut finished: Vec<(Mesh, String)> = Vec::new();
+    pending.0.retain_mut(|t| {
+        if let Some(mesh) = block_on(poll_once(&mut t.task)) {
+            let query = std::mem::take(&mut t.query);
+            finished.push((mesh, query));
+            false // drop finished task
+        } else {
+            true // keep pending task
+        }
+    });
+
+    // Finalize previews for all finished tasks after the retain completes
+    for (mesh, query) in finished {
+        finalize_add_preview(
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+            &mut images,
+            &mut preview_targets,
+            mesh,
+            query,
+        );
+    }
 }
 
 fn preview_target_ui(

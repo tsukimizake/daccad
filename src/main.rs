@@ -5,6 +5,7 @@ use bevy_egui::{EguiPlugin, EguiPrimaryContextPass};
 use crate::ui::setup::*;
 use crate::ui::update::*;
 mod ui;
+mod prolog;
 
 pub fn main() {
     App::new()
@@ -16,6 +17,6 @@ pub fn main() {
         .add_systems(Startup, setup)
         .add_systems(EguiPrimaryContextPass, setup_fonts.run_if(run_once))
         .add_systems(EguiPrimaryContextPass, egui_ui)
-        .add_systems(Update, update_preview_transforms)
+        .add_systems(Update, (poll_preview_tasks, update_preview_transforms))
         .run();
 }

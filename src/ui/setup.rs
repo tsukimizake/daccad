@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::ui::{EditorText, PreviewTargets};
+use crate::ui::update::PendingPreviews;
 use bevy::log::{info, warn};
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, egui};
@@ -19,6 +20,8 @@ pub fn setup(mut commands: Commands) {
 
     // Start with no previews; they are added via UI
     commands.insert_resource(PreviewTargets::default());
+    // Queue for async preview generation tasks
+    commands.insert_resource(PendingPreviews::default());
     // Global editor text for the left pane
     commands.insert_resource(EditorText("cube(10).".to_string()));
 }
