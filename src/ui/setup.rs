@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use crate::ui::{EditorText, PreviewTargets};
-use crate::ui::update::PendingPreviews;
+use crate::ui::update::AsyncWorldRes;
+use bevy_async_ecs::AsyncWorld;
 use bevy::log::{info, warn};
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, egui};
@@ -20,10 +21,14 @@ pub fn setup(mut commands: Commands) {
 
     // Start with no previews; they are added via UI
     commands.insert_resource(PreviewTargets::default());
-    // Queue for async preview generation tasks
-    commands.insert_resource(PendingPreviews::default());
     // Global editor text for the left pane
     commands.insert_resource(EditorText("cube(10).".to_string()));
+}
+
+// Initialize bevy-async-ecs and store AsyncWorld as a Resource
+pub fn init_async_world(world: &mut World) {
+    let async_world = AsyncWorld::from_world(world);
+    world.insert_resource(AsyncWorldRes(async_world));
 }
 
 pub fn setup_fonts(mut contexts: EguiContexts) {

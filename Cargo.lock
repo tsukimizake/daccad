@@ -358,6 +358,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy-async-ecs"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d707f61b5adbbeabdd305487971bdb6f2dd540d87a3a3301f425ee650d047a18"
+dependencies = [
+ "async-channel",
+ "bevy_app",
+ "bevy_ecs",
+ "bevy_log",
+ "bevy_platform",
+]
+
+[[package]]
 name = "bevy_a11y"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2010,6 +2023,7 @@ name = "daccad"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "bevy-async-ecs",
  "bevy_egui",
  "manifold-rs",
  "nom 8.0.0",
