@@ -27,7 +27,7 @@ pub fn egui_ui(
     if let Ok(ctx) = contexts.ctx_mut() {
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             if ui.button("Add Preview").clicked() {
-                let query_text = editor_text.0.clone();
+                let query_text = "main.".to_string();
                 let async_world = async_world.0.clone();
                 let fut = async move {
                     let mesh = mock_generate_mesh().await;
@@ -100,8 +100,8 @@ fn finalize_add_preview_world(world: &mut World, mesh: Mesh, query_text: String)
     let material = {
         let mut materials = world.resource_mut::<Assets<StandardMaterial>>();
         materials.add(StandardMaterial {
-        base_color: Color::srgb(0.7, 0.2, 0.2),
-        ..default()
+            base_color: Color::srgb(0.7, 0.2, 0.2),
+            ..default()
         })
     };
 
@@ -166,15 +166,18 @@ fn finalize_add_preview_world(world: &mut World, mesh: Mesh, query_text: String)
     world.entity_mut(entity).insert(both_layers);
 
     // Store in resource for UI display and transform updates
-    world.resource_mut::<PreviewTargets>().0.push(PreviewTarget {
-        mesh_handle: mesh_handle.clone(),
-        rt_image: rt_image.clone(),
-        rt_size,
-        rotate_x: 0.0,
-        rotate_y: 0.0,
-        // initialize with query captured when task started
-        query: query_text,
-    });
+    world
+        .resource_mut::<PreviewTargets>()
+        .0
+        .push(PreviewTarget {
+            mesh_handle: mesh_handle.clone(),
+            rt_image: rt_image.clone(),
+            rt_size,
+            rotate_x: 0.0,
+            rotate_y: 0.0,
+            // initialize with query captured when task started
+            query: query_text,
+        });
 }
 
 // Pending previews and polling system are no longer needed with bevy-async-ecs
@@ -193,9 +196,10 @@ fn preview_target_ui(
         .show(ui, |ui| {
             ui.label(format!("Preview {}", index + 1));
             ui.add_space(4.0);
-            // Query text
-            ui.label("Query:");
-            ui.text_edit_singleline(&mut target.query);
+            ui.horizontal(|ui| {
+                ui.label("?-");
+                ui.text_edit_singleline(&mut target.query);
+            });
             ui.add_space(4.0);
             // Rotation controls
             ui.horizontal(|ui| {
@@ -208,7 +212,7 @@ fn preview_target_ui(
             // Show the offscreen render under controls
             let avail_w = ui.available_width();
             let aspect = size.y as f32 / size.x as f32;
-            let w = avail_w.clamp(160.0, 640.0);
+            let w = avail_w;
             let h = w * aspect;
             ui.add(egui::Image::from_texture((tex_id, egui::vec2(w, h))));
         });
