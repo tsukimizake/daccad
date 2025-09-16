@@ -24,10 +24,10 @@ impl Plugin for UiPlugin {
 }
 
 #[derive(Resource, Clone, Default, Deref, DerefMut)]
-pub(super) struct PreviewTargets(pub Vec<PreviewTarget>);
+struct PreviewTargets(pub Vec<PreviewTarget>);
 
 #[derive(Clone)]
-pub(super) struct PreviewTarget {
+struct PreviewTarget {
     pub mesh_handle: Handle<Mesh>,
     pub rt_image: Handle<Image>,
     pub rt_size: UVec2,
@@ -37,8 +37,8 @@ pub(super) struct PreviewTarget {
 }
 
 #[derive(Resource, Default, Clone, Deref, DerefMut)]
-pub(super) struct EditorText(pub String);
+struct EditorText(pub String);
 
 // Local counter to assign unique IDs to preview requests
 #[derive(Resource, Default, Deref, DerefMut)]
-pub(super) struct NextRequestId(u64);
+struct NextRequestId(u64);

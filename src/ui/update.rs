@@ -10,7 +10,7 @@ use bevy::render::{
 use bevy_egui::{EguiContexts, egui};
 
 // egui UI: add previews dynamically and render all existing previews
-pub fn egui_ui(
+pub(super) fn egui_ui(
     mut contexts: EguiContexts,
     mut preview_targets: ResMut<PreviewTargets>,
     mut editor_text: ResMut<EditorText>,
@@ -80,7 +80,7 @@ pub fn egui_ui(
 }
 
 // Handle generated previews: spawn entities and track UI state
-pub fn on_preview_generated(
+pub(super) fn on_preview_generated(
     mut ev_generated: EventReader<PreviewGenerated>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -207,7 +207,7 @@ fn preview_target_ui(
 }
 
 // Keep spawned preview entity rotations in sync with UI values
-pub fn update_preview_transforms(
+pub(super) fn update_preview_transforms(
     preview_targets: Res<PreviewTargets>,
     mut q: Query<(&Mesh3d, &mut Transform)>,
 ) {
