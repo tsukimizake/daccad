@@ -21,8 +21,8 @@ pub fn egui_ui(
     if let Ok(ctx) = contexts.ctx_mut() {
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             if ui.button("Add Preview").clicked() {
-                let id = next_id.0;
-                next_id.0 += 1;
+                let id = **next_id;
+                **next_id += 1;
                 let query_text = "main.".to_string();
                 ev_generate.write(GeneratePreviewRequest {
                     request_id: id,
@@ -225,4 +225,3 @@ pub fn update_preview_transforms(
         }
     }
 }
-

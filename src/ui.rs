@@ -1,4 +1,3 @@
-use bevy::ecs::component::Component;
 use bevy::prelude::*;
 use derived_deref::{Deref, DerefMut};
 
@@ -24,9 +23,6 @@ impl Plugin for UiPlugin {
     }
 }
 
-#[derive(Component)]
-struct Ui;
-
 #[derive(Resource, Clone, Default, Deref, DerefMut)]
 pub(super) struct PreviewTargets(pub Vec<PreviewTarget>);
 
@@ -44,5 +40,5 @@ pub(super) struct PreviewTarget {
 pub(super) struct EditorText(pub String);
 
 // Local counter to assign unique IDs to preview requests
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Deref, DerefMut)]
 pub(super) struct NextRequestId(u64);
