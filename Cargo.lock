@@ -2025,6 +2025,7 @@ dependencies = [
  "bevy",
  "bevy-async-ecs",
  "bevy_egui",
+ "derived-deref",
  "manifold-rs",
  "nom 8.0.0",
 ]
@@ -2060,6 +2061,17 @@ dependencies = [
  "quote",
  "syn",
  "unicode-xid",
+]
+
+[[package]]
+name = "derived-deref"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "805ef2023ccd65425743a91ecd11fc020979a0b01921db3104fb606d18a7b43e"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

@@ -12,8 +12,9 @@ use bevy_egui::{EguiContexts, egui};
 use crate::prolog::mock::mock_generate_mesh;
 
 use crate::ui::{EditorText, PreviewTarget, PreviewTargets};
+use derived_deref::{Deref, DerefMut};
 
-#[derive(Resource, Clone)]
+#[derive(Resource, Clone, Deref, DerefMut)]
 pub struct AsyncWorldRes(pub AsyncWorld);
 
 // egui UI: add previews dynamically and render all existing previews
@@ -28,7 +29,8 @@ pub fn egui_ui(
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             if ui.button("Add Preview").clicked() {
                 let query_text = "main.".to_string();
-                let async_world = async_world.0.clone();
+                // Clone inner AsyncWorld without using `.0`
+                let async_world = (&**async_world).clone();
                 let fut = async move {
                     let mesh = mock_generate_mesh().await;
                     async_world
@@ -44,7 +46,6 @@ pub fn egui_ui(
 
     // Precompute egui texture ids for each preview's offscreen image
     let preview_images: Vec<(egui::TextureId, UVec2)> = preview_targets
-        .0
         .iter()
         .map(|t| {
             let id = contexts
@@ -61,23 +62,20 @@ pub fn egui_ui(
                 // Left half: big multiline text area
                 let left = &mut columns[0];
                 let size_left = left.available_size();
-                left.add_sized(
-                    size_left,
-                    egui::TextEdit::multiline(&mut editor_text.0)
-                        .hint_text("ここにテキストを入力してください"),
-                );
+                left.add_sized(size_left, egui::TextEdit::multiline(&mut **editor_text)
+                    .hint_text("ここにテキストを入力してください"));
 
                 // Right half: show and edit previews
                 let right = &mut columns[1];
                 egui::ScrollArea::vertical()
                     .auto_shrink([false; 2])
                     .show(right, |ui| {
-                        if preview_targets.0.is_empty() {
+                        if preview_targets.is_empty() {
                             ui.label(
                                 "プレビューはまだありません。上の『Add Preview』を押してください。",
                             );
                         } else {
-                            for (i, t) in preview_targets.0.iter_mut().enumerate() {
+                            for (i, t) in preview_targets.iter_mut().enumerate() {
                                 if let Some((tex_id, size)) = preview_images.get(i) {
                                     preview_target_ui(ui, i, t, *tex_id, *size);
                                 }
@@ -106,7 +104,7 @@ fn finalize_add_preview_world(world: &mut World, mesh: Mesh, query_text: String)
     };
 
     // Position new preview based on current count
-    let idx = { world.resource::<PreviewTargets>().0.len() };
+    let idx = world.resource::<PreviewTargets>().len();
     let x = (idx as f32) * 2.5 - 2.5;
 
     // Spawn the visible mesh entity in the 3D world
@@ -140,7 +138,7 @@ fn finalize_add_preview_world(world: &mut World, mesh: Mesh, query_text: String)
     };
 
     // Unique render layer per preview
-    let layer_idx = ({ world.resource::<PreviewTargets>().0.len() } as u8).saturating_add(1);
+    let layer_idx = (world.resource::<PreviewTargets>().len() as u8).saturating_add(1);
     let layer_only = RenderLayers::layer(layer_idx as usize);
 
     // Offscreen camera rendering only that layer
@@ -168,7 +166,6 @@ fn finalize_add_preview_world(world: &mut World, mesh: Mesh, query_text: String)
     // Store in resource for UI display and transform updates
     world
         .resource_mut::<PreviewTargets>()
-        .0
         .push(PreviewTarget {
             mesh_handle: mesh_handle.clone(),
             rt_image: rt_image.clone(),
@@ -223,12 +220,11 @@ pub fn update_preview_transforms(
     preview_targets: Res<PreviewTargets>,
     mut q: Query<(&Mesh3d, &mut Transform)>,
 ) {
-    if preview_targets.0.is_empty() {
+    if preview_targets.is_empty() {
         return;
     }
     for (mesh3d, mut transform) in q.iter_mut() {
         if let Some(t) = preview_targets
-            .0
             .iter()
             .find(|t| t.mesh_handle.id() == mesh3d.0.id())
         {

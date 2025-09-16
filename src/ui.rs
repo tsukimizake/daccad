@@ -1,5 +1,6 @@
 use bevy::ecs::component::Component;
 use bevy::prelude::*;
+use derived_deref::{Deref, DerefMut};
 
 pub mod setup;
 pub mod update;
@@ -7,7 +8,7 @@ pub mod update;
 #[derive(Component)]
 pub struct Ui;
 
-#[derive(Resource, Default, Clone)]
+#[derive(Resource, Default, Clone, Deref, DerefMut)]
 pub struct PreviewTargets(pub Vec<PreviewTarget>);
 
 #[derive(Clone)]
@@ -20,5 +21,5 @@ pub struct PreviewTarget {
     pub query: String, // prolog query string to generate the preview. currently unused.
 }
 
-#[derive(Resource, Default, Clone)]
+#[derive(Resource, Default, Clone, Deref, DerefMut)]
 pub struct EditorText(pub String);
