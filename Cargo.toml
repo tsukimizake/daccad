@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 manifold-rs = "0.6.2"
 nom = "8"
-bevy = { version = "0.16", features = ["default_font"] }
+bevy = "0.16" 
 bevy_egui = "0.36"
 bevy-async-ecs = "0.8.1"
 derived-deref = "2.1.0"
