@@ -14,3 +14,4 @@ pub struct PreviewGenerated {
     pub query: String,
     pub mesh: Mesh,
 }
+

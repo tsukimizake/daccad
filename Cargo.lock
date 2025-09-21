@@ -2027,7 +2027,7 @@ dependencies = [
  "bevy_egui",
  "derived-deref",
  "manifold-rs",
- "nom 8.0.0",
+ "prolog",
 ]
 
 [[package]]
@@ -3981,6 +3981,14 @@ name = "profiling"
 version = "1.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3eb8486b569e12e2c32ad3e204dbaba5e4b5b216e9367044f25f1dba42341773"
+
+[[package]]
+name = "prolog"
+version = "0.1.0"
+dependencies = [
+ "manifold-rs",
+ "nom 8.0.0",
+]
 
 [[package]]
 name = "quick-xml"

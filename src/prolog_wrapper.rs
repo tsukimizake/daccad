@@ -1,23 +1,17 @@
 use bevy::prelude::*;
-use std::thread;
-use std::time::Duration;
-
-use crate::events::{GeneratePreviewRequest, PreviewGenerated};
 use bevy::tasks::AsyncComputeTaskPool;
 use bevy_async_ecs::AsyncWorld;
+use derived_deref::{Deref, DerefMut};
+
+use crate::events::{GeneratePreviewRequest, PreviewGenerated};
+use prolog::mock::mock_generate_mesh;
 
 #[derive(Resource, Clone, Deref, DerefMut)]
 struct AsyncWorldRes(AsyncWorld);
 
-// Simple synchronous mock: waits ~1s and returns a cube mesh.
-fn mock_generate_mesh() -> Mesh {
-    thread::sleep(Duration::from_secs(1));
-    Mesh::from(Cuboid::from_size(Vec3::splat(1.0)))
-}
+pub struct PrologPlugin;
 
-pub struct PrologMockPlugin;
-
-impl Plugin for PrologMockPlugin {
+impl Plugin for PrologPlugin {
     fn build(&self, app: &mut App) {
         // Initialize AsyncWorld handle for this app
         app.add_systems(Startup, init_async_world);

@@ -2,11 +2,10 @@ use bevy::log::LogPlugin;
 use bevy::prelude::*;
 
 mod events;
+mod prolog_wrapper;
 mod ui;
-mod prolog;
-
 use crate::events::{GeneratePreviewRequest, PreviewGenerated};
-use crate::prolog::mock::PrologMockPlugin;
+use crate::prolog_wrapper::PrologPlugin;
 use crate::ui::UiPlugin;
 use bevy_async_ecs::AsyncEcsPlugin;
 
@@ -19,6 +18,6 @@ pub fn main() {
         .add_plugins(AsyncEcsPlugin)
         .add_event::<GeneratePreviewRequest>()
         .add_event::<PreviewGenerated>()
-        .add_plugins((UiPlugin, PrologMockPlugin))
+        .add_plugins((UiPlugin, PrologPlugin))
         .run();
 }
