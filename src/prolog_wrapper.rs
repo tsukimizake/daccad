@@ -1,9 +1,13 @@
 use bevy::prelude::*;
+use bevy::render::{
+    mesh::Indices, render_asset::RenderAssetUsages, render_resource::PrimitiveTopology,
+};
 use bevy::tasks::AsyncComputeTaskPool;
 use bevy_async_ecs::AsyncWorld;
 use derived_deref::{Deref, DerefMut};
 
 use crate::events::{GeneratePreviewRequest, PreviewGenerated};
+use manifold_rs::Mesh as RsMesh;
 use prolog::mock::mock_generate_mesh;
 
 #[derive(Resource, Clone, Deref, DerefMut)]
@@ -37,7 +41,12 @@ fn consume_requests(
         let query = req.query.clone();
         AsyncComputeTaskPool::get()
             .spawn(async move {
-                let mesh = mock_generate_mesh();
+                // Generate manifold-rs Mesh and convert to Bevy Mesh within this scope
+                let mesh = {
+                    let rs_mesh: RsMesh = mock_generate_mesh();
+                    let mesh = rs_mesh_to_bevy_mesh(&rs_mesh);
+                    mesh
+                };
                 async_world
                     .apply(move |world: &mut World| {
                         world.send_event(PreviewGenerated {
@@ -50,4 +59,40 @@ fn consume_requests(
             })
             .detach();
     }
+}
+
+// Convert a manifold-rs Mesh into a Bevy Mesh
+fn rs_mesh_to_bevy_mesh(rs_mesh: &RsMesh) -> Mesh {
+    // Vertices are a flat Vec<f32> with `num_props` stride (first 3 are XYZ).
+    // 法線がプロパティに無い場合はpanicします（calculate_normalsを先に呼んでいることを想定）。
+    let vertices = rs_mesh.vertices();
+    bevy::log::info!("manifold-rs mesh has {} vertices", vertices.len());
+    let stride = rs_mesh.num_props() as usize;
+    bevy::log::info!("num_props (stride) = {}", stride);
+    assert!(
+        stride != 6,
+        "manifold-rs mesh has no normals; call calculate_normals(3, ...) before to_mesh()"
+    );
+
+    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(vertices.len() / stride);
+    let mut normals: Vec<[f32; 3]> = Vec::with_capacity(vertices.len() / stride);
+    for chunk in vertices.chunks_exact(stride) {
+        positions.push([chunk[0], chunk[1], chunk[2]]);
+        normals.push([chunk[3], chunk[4], chunk[5]]);
+    }
+
+    // Indices are already triangles from manifold-rs
+    let indices: Vec<u32> = rs_mesh.indices();
+
+    let mut bevy_mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
+    );
+    bevy_mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    bevy_mesh.insert_indices(Indices::U32(indices));
+
+    // Insert normals from manifold-rs (required by assertion above)
+    bevy_mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+
+    bevy_mesh
 }
