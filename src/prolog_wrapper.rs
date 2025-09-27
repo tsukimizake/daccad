@@ -70,8 +70,8 @@ fn rs_mesh_to_bevy_mesh(rs_mesh: &RsMesh) -> Mesh {
     let stride = rs_mesh.num_props() as usize;
     bevy::log::info!("num_props (stride) = {}", stride);
     assert!(
-        stride != 6,
-        "manifold-rs mesh has no normals; call calculate_normals(3, ...) before to_mesh()"
+        stride == 6,
+        "manifold-rs mesh has no normals; call calculate_normals(0, ...) before to_mesh()"
     );
 
     let mut positions: Vec<[f32; 3]> = Vec::with_capacity(vertices.len() / stride);
