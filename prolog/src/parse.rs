@@ -5,7 +5,7 @@ use nom::{
     character::complete::{char, digit1, multispace1},
     combinator::{cut, map, map_res, opt, recognize, value},
     multi::{many0, separated_list0, separated_list1},
-    sequence::{delimited, pair, preceded, separated_pair, terminated, tuple},
+    sequence::{delimited, pair, preceded, separated_pair, terminated},
 };
 
 pub type PResult<'a, T> = IResult<&'a str, T>;
@@ -39,7 +39,7 @@ fn line_comment(input: &str) -> PResult<'_, ()> {
 
 fn block_comment(input: &str) -> PResult<'_, ()> {
     // /* ... */ (non-nested)
-    map(tuple((tag("/*"), cut(take_until("*/")), tag("*/"))), |_| ()).parse(input)
+    map((tag("/*"), cut(take_until("*/")), tag("*/")), |_| ()).parse(input)
 }
 
 fn space_or_comment1(input: &str) -> PResult<'_, ()> {
@@ -138,10 +138,10 @@ fn list_term(input: &str) -> PResult<'_, Term> {
     ws(delimited(
         char('['),
         map(
-            tuple((
+            (
                 separated_list0(ws(char(',')), term),
                 opt(preceded(ws(char('|')), term)),
-            )),
+            ),
             |(items, tail)| Term::List {
                 items,
                 tail: tail.map(Box::new),
