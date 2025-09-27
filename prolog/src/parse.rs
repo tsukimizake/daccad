@@ -217,71 +217,58 @@ pub fn program(input: &str) -> PResult<'_, Vec<Clause>> {
 }
 
 pub fn query(input: &str) -> PResult<'_, Vec<Term>> {
-    ws(terminated(
-        preceded(ws(tag("?-")), goals),
-        cut(ws(char('.'))),
-    ))
-    .parse(input)
+    ws(terminated(goals, cut(ws(char('.'))))).parse(input)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn assert_parsed_clause(src: &str, expected: Clause) {
+    fn assert_clause(src: &str, expected: Clause) {
         let (_, parsed) = clause(src).unwrap();
         assert_eq!(parsed, expected);
     }
 
     #[test]
     fn parse_fact() {
-        assert_parsed_clause(
+        assert_clause(
             "parent(alice, bob).",
             Clause::Fact(Term::Struct {
                 functor: "parent".to_string(),
                 args: vec![
                     Term::Atom("alice".to_string()),
-                    Term::Atom("bob".to_string())
-                ]
-            })
+                    Term::Atom("bob".to_string()),
+                ],
+            }),
         );
     }
 
     #[test]
     fn parse_rule() {
-        assert_parsed_clause(
+        assert_clause(
             "grandparent(X, Y) :- parent(X, Z), parent(Z, Y).",
             Clause::Rule {
                 head: Term::Struct {
                     functor: "grandparent".to_string(),
-                    args: vec![
-                        Term::Var("X".to_string()),
-                        Term::Var("Y".to_string())
-                    ],
+                    args: vec![Term::Var("X".to_string()), Term::Var("Y".to_string())],
                 },
                 body: vec![
                     Term::Struct {
                         functor: "parent".to_string(),
-                        args: vec![
-                            Term::Var("X".to_string()),
-                            Term::Var("Z".to_string())
-                        ],
+                        args: vec![Term::Var("X".to_string()), Term::Var("Z".to_string())],
                     },
                     Term::Struct {
                         functor: "parent".to_string(),
-                        args: vec![
-                            Term::Var("Z".to_string()),
-                            Term::Var("Y".to_string())
-                        ],
-                    }
+                        args: vec![Term::Var("Z".to_string()), Term::Var("Y".to_string())],
+                    },
                 ],
-            }
+            },
         );
     }
 
     #[test]
     fn parse_list() {
-        assert_parsed_clause(
+        assert_clause(
             "member(X, [X|_]).",
             Clause::Fact(Term::Struct {
                 functor: "member".to_string(),
@@ -292,13 +279,13 @@ mod tests {
                         tail: Some(Box::new(Term::Var("_".to_string()))),
                     },
                 ],
-            })
+            }),
         );
     }
 
     #[test]
     fn parse_query_simple() {
-        let src = "?- member(X, [1,2,3]).";
+        let src = "member(X, [1,2,3]).";
         let (_, qs) = query(src).unwrap();
         assert_eq!(
             qs,
@@ -307,11 +294,7 @@ mod tests {
                 args: vec![
                     Term::Var("X".to_string()),
                     Term::List {
-                        items: vec![
-                            Term::Number(1),
-                            Term::Number(2),
-                            Term::Number(3),
-                        ],
+                        items: vec![Term::Number(1), Term::Number(2), Term::Number(3),],
                         tail: None,
                     },
                 ],
