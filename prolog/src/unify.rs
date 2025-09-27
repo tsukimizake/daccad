@@ -41,8 +41,8 @@ fn occurs_in(var: &str, term: &Term, s: &Subst) -> bool {
 }
 
 fn bind(var: &str, term: &Term, mut s: Subst) -> Option<Subst> {
-    if let Term::Var(v2) = term {
-        if v2 == var {
+    if let Term::Var(v) = term {
+        if v == var {
             return Some(s); // X = X
         }
     }
@@ -134,13 +134,7 @@ pub fn unify(t1: &Term, t2: &Term, s0: &Subst) -> Option<Subst> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn v(name: &str) -> Term {
-        Term::Var(name.to_string())
-    }
-    fn a(name: &str) -> Term {
-        Term::Atom(name.to_string())
-    }
+    use crate::types::{a, v};
 
     #[test]
     fn unify_var_atom() {

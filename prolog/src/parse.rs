@@ -203,7 +203,7 @@ pub fn query(input: &str) -> PResult<'_, Vec<Term>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Clause, Term};
+    use crate::types::{a, v, Clause, Term};
 
     fn assert_clause(src: &str, expected: Clause) {
         let (_, parsed) = clause(src).unwrap();
@@ -216,10 +216,7 @@ mod tests {
             "parent(alice, bob).",
             Clause::Fact(Term::Struct {
                 functor: "parent".to_string(),
-                args: vec![
-                    Term::Atom("alice".to_string()),
-                    Term::Atom("bob".to_string()),
-                ],
+                args: vec![a("alice"), a("bob")],
             }),
         );
     }
@@ -231,16 +228,16 @@ mod tests {
             Clause::Rule {
                 head: Term::Struct {
                     functor: "grandparent".to_string(),
-                    args: vec![Term::Var("X".to_string()), Term::Var("Y".to_string())],
+                    args: vec![v("X"), v("Y")],
                 },
                 body: vec![
                     Term::Struct {
                         functor: "parent".to_string(),
-                        args: vec![Term::Var("X".to_string()), Term::Var("Z".to_string())],
+                        args: vec![v("X"), v("Z")],
                     },
                     Term::Struct {
                         functor: "parent".to_string(),
-                        args: vec![Term::Var("Z".to_string()), Term::Var("Y".to_string())],
+                        args: vec![v("Z"), v("Y")],
                     },
                 ],
             },
@@ -254,10 +251,10 @@ mod tests {
             Clause::Fact(Term::Struct {
                 functor: "member".to_string(),
                 args: vec![
-                    Term::Var("X".to_string()),
+                    v("X"),
                     Term::List {
-                        items: vec![Term::Var("X".to_string())],
-                        tail: Some(Box::new(Term::Var("_".to_string()))),
+                        items: vec![v("X")],
+                        tail: Some(Box::new(v("_"))),
                     },
                 ],
             }),
@@ -273,7 +270,7 @@ mod tests {
             vec![Term::Struct {
                 functor: "member".to_string(),
                 args: vec![
-                    Term::Var("X".to_string()),
+                    v("X"),
                     Term::List {
                         items: vec![Term::Number(1), Term::Number(2), Term::Number(3),],
                         tail: None,
