@@ -1,6 +1,5 @@
 use nom::{
-    IResult,
-    Parser,
+    IResult, Parser,
     branch::alt,
     bytes::complete::{is_not, tag, take_until, take_while, take_while1},
     character::complete::{char, digit1, multispace1},
@@ -128,8 +127,10 @@ fn variable(input: &str) -> PResult<'_, String> {
 }
 
 fn integer(input: &str) -> PResult<'_, i64> {
-    map_res(recognize(pair(opt(char('-')), digit1)), |s: &str| s.parse::<i64>())
-        .parse(input)
+    map_res(recognize(pair(opt(char('-')), digit1)), |s: &str| {
+        s.parse::<i64>()
+    })
+    .parse(input)
 }
 
 // Terms
@@ -227,12 +228,15 @@ pub fn query(input: &str) -> PResult<'_, Vec<Term>> {
 mod tests {
     use super::*;
 
+    fn assert_parsed_clause(src: &str, expected: Clause) {
+        let (_, parsed) = clause(src).unwrap();
+        assert_eq!(parsed, expected);
+    }
+
     #[test]
     fn parse_fact() {
-        let src = "parent(alice, bob).";
-        let (_, c) = clause(src).unwrap();
-        assert_eq!(
-            c,
+        assert_parsed_clause(
+            "parent(alice, bob).",
             Clause::Fact(Term::Struct {
                 functor: "parent".to_string(),
                 args: vec![
@@ -241,58 +245,77 @@ mod tests {
                 ]
             })
         );
-        // match c {
-        //     Clause::Fact(Term::Struct { functor, args }) => {
-        //         assert_eq!(functor, "parent");
-        //         assert_eq!(args.len(), 2);
-        //     }
-        //     _ => panic!("expected fact"),
-        // }
     }
 
     #[test]
     fn parse_rule() {
-        let src = "grandparent(X, Y) :- parent(X, Z), parent(Z, Y).";
-        let (_, c) = clause(src).unwrap();
-        match c {
-            Clause::Rule { head, body } => {
-                match head {
-                    Term::Struct { functor, args } => {
-                        assert_eq!(functor, "grandparent");
-                        assert_eq!(args.len(), 2);
+        assert_parsed_clause(
+            "grandparent(X, Y) :- parent(X, Z), parent(Z, Y).",
+            Clause::Rule {
+                head: Term::Struct {
+                    functor: "grandparent".to_string(),
+                    args: vec![
+                        Term::Var("X".to_string()),
+                        Term::Var("Y".to_string())
+                    ],
+                },
+                body: vec![
+                    Term::Struct {
+                        functor: "parent".to_string(),
+                        args: vec![
+                            Term::Var("X".to_string()),
+                            Term::Var("Z".to_string())
+                        ],
+                    },
+                    Term::Struct {
+                        functor: "parent".to_string(),
+                        args: vec![
+                            Term::Var("Z".to_string()),
+                            Term::Var("Y".to_string())
+                        ],
                     }
-                    _ => panic!("expected struct head"),
-                }
-                assert_eq!(body.len(), 2);
+                ],
             }
-            _ => panic!("expected rule"),
-        }
+        );
     }
 
     #[test]
     fn parse_list() {
-        let src = "member(X, [X|_]).";
-        let (_, c) = clause(src).unwrap();
-        match c {
-            Clause::Fact(Term::Struct { functor, args }) => {
-                assert_eq!(functor, "member");
-                assert_eq!(args.len(), 2);
-                match &args[1] {
-                    Term::List { items, tail } => {
-                        assert_eq!(items.len(), 1);
-                        assert!(tail.is_some());
-                    }
-                    _ => panic!("expected list"),
-                }
-            }
-            _ => panic!("expected fact"),
-        }
+        assert_parsed_clause(
+            "member(X, [X|_]).",
+            Clause::Fact(Term::Struct {
+                functor: "member".to_string(),
+                args: vec![
+                    Term::Var("X".to_string()),
+                    Term::List {
+                        items: vec![Term::Var("X".to_string())],
+                        tail: Some(Box::new(Term::Var("_".to_string()))),
+                    },
+                ],
+            })
+        );
     }
 
     #[test]
     fn parse_query_simple() {
         let src = "?- member(X, [1,2,3]).";
         let (_, qs) = query(src).unwrap();
-        assert_eq!(qs.len(), 1);
+        assert_eq!(
+            qs,
+            vec![Term::Struct {
+                functor: "member".to_string(),
+                args: vec![
+                    Term::Var("X".to_string()),
+                    Term::List {
+                        items: vec![
+                            Term::Number(1),
+                            Term::Number(2),
+                            Term::Number(3),
+                        ],
+                        tail: None,
+                    },
+                ],
+            }]
+        );
     }
 }
