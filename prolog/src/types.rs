@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Term {
     Var(String),
@@ -28,3 +30,5 @@ pub fn v(name: impl Into<String>) -> Term {
 pub fn a(name: impl Into<String>) -> Term {
     Term::Atom(name.into())
 }
+
+pub type Subst = HashMap<String, Term>;

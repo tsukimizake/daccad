@@ -1,9 +1,6 @@
-use crate::types::Term;
-use std::collections::HashMap;
+use crate::types::{Subst, Term};
 
-type Subst = HashMap<String, Term>;
-
-fn apply(term: &Term, s: &Subst) -> Term {
+pub fn apply(term: &Term, s: &Subst) -> Term {
     match term {
         Term::Var(v) => {
             if let Some(t) = s.get(v) {
