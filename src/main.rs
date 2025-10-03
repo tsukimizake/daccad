@@ -16,8 +16,8 @@ pub fn main() {
             ..default()
         }))
         .add_plugins(AsyncEcsPlugin)
-        .add_event::<GeneratePreviewRequest>()
-        .add_event::<PreviewGenerated>()
+        .add_message::<GeneratePreviewRequest>()
+        .add_message::<PreviewGenerated>()
         .add_plugins((UiPlugin, PrologPlugin))
         .run();
 }

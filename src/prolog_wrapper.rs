@@ -1,8 +1,7 @@
-use bevy::prelude::*;
-use bevy::render::{
-    mesh::Indices, render_asset::RenderAssetUsages, render_resource::PrimitiveTopology,
-};
+use bevy::asset::RenderAssetUsages;
+use bevy::render::render_resource::PrimitiveTopology;
 use bevy::tasks::AsyncComputeTaskPool;
+use bevy::{mesh::Indices, prelude::*};
 use bevy_async_ecs::AsyncWorld;
 use derived_deref::{Deref, DerefMut};
 
@@ -32,7 +31,7 @@ fn init_async_world(world: &mut World) {
 
 // Listen for requests and spawn a worker for each one
 fn consume_requests(
-    mut ev_requests: EventReader<GeneratePreviewRequest>,
+    mut ev_requests: MessageReader<GeneratePreviewRequest>,
     async_world: Res<AsyncWorldRes>,
 ) {
     for req in ev_requests.read() {
@@ -49,7 +48,7 @@ fn consume_requests(
                 };
                 async_world
                     .apply(move |world: &mut World| {
-                        world.send_event(PreviewGenerated {
+                        world.write_message(PreviewGenerated {
                             request_id,
                             query,
                             mesh,

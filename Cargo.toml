@@ -18,9 +18,9 @@ members = [
 
 [dependencies]
 manifold-rs = "0.6.2"
-bevy = "0.16" 
-bevy_egui = "0.36"
-bevy-async-ecs = "0.8.1"
+bevy = "0.17" 
+bevy_egui = "0.37"
+bevy-async-ecs = "0.9"
 derived-deref = "2.1.0"
 prolog = { path = "prolog" }
 

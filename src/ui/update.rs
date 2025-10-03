@@ -1,12 +1,10 @@
 use crate::events::{GeneratePreviewRequest, PreviewGenerated};
 use crate::ui::{EditorText, NextRequestId, PreviewTarget, PreviewTargets};
 use bevy::asset::RenderAssetUsages;
+use bevy::camera::RenderTarget;
+use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
-use bevy::render::{
-    camera::RenderTarget,
-    render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages},
-    view::RenderLayers,
-};
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use bevy_egui::{EguiContexts, egui};
 
 // egui UI: add previews dynamically and render all existing previews
@@ -15,7 +13,7 @@ pub(super) fn egui_ui(
     mut preview_targets: ResMut<PreviewTargets>,
     mut editor_text: ResMut<EditorText>,
     mut next_id: ResMut<NextRequestId>,
-    mut ev_generate: EventWriter<GeneratePreviewRequest>,
+    mut ev_generate: MessageWriter<GeneratePreviewRequest>,
 ) {
     // Toolbar: add a new preview
     if let Ok(ctx) = contexts.ctx_mut() {
@@ -36,9 +34,9 @@ pub(super) fn egui_ui(
     let preview_images: Vec<(egui::TextureId, UVec2)> = preview_targets
         .iter()
         .map(|t| {
-            let id = contexts
-                .image_id(&t.rt_image)
-                .unwrap_or_else(|| contexts.add_image(t.rt_image.clone()));
+            let id = contexts.image_id(&t.rt_image).unwrap_or_else(|| {
+                contexts.add_image(bevy_egui::EguiTextureHandle::Strong(t.rt_image.clone()))
+            });
             (id, t.rt_size)
         })
         .collect();
@@ -81,7 +79,7 @@ pub(super) fn egui_ui(
 
 // Handle generated previews: spawn entities and track UI state
 pub(super) fn on_preview_generated(
-    mut ev_generated: EventReader<PreviewGenerated>,
+    mut ev_generated: MessageReader<PreviewGenerated>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
