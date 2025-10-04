@@ -1,0 +1,26 @@
+[package]
+name = "daccad"
+version = "0.1.0"
+edition = "2024"
+
+# Enable a small amount of optimization in the dev profile.
+[profile.dev]
+opt-level = 1
+
+# Enable a large amount of optimization in the dev profile for dependencies.
+[profile.dev.package."*"]
+opt-level = 3
+
+[workspace]
+members = [
+    "prolog",
+]
+
+[dependencies]
+manifold-rs = "0.6.2"
+bevy = "0.17" 
+bevy_egui = "0.37"
+bevy-async-ecs = "0.9"
+derived-deref = "2.1.0"
+prolog = { path = "prolog" }
+
