@@ -71,41 +71,240 @@ fn dfs(kb: &[Clause], goals: Vec<Term>, s: &Subst, out: &mut Vec<Subst>, cid: &m
 #[cfg(test)]
 mod run_query {
     use super::*;
+    use crate::parse::{program, query};
+    use crate::unify::apply;
 
-    fn v(x: &str) -> Term {
-        Term::Var(x.to_string())
+    fn parse_program(src: &str) -> Vec<Clause> {
+        let (_, clauses) = program(src).expect("Failed to parse program");
+        clauses
     }
-    fn a(x: &str) -> Term {
-        Term::Atom(x.to_string())
+
+    fn parse_query(src: &str) -> Vec<Term> {
+        let (_, goals) = query(src).expect("Failed to parse query");
+        goals
     }
-    fn f(functor: &str, args: Vec<Term>) -> Term {
-        Term::Struct {
-            functor: functor.to_string(),
-            args,
+
+    fn test_query(program_src: &str, query_src: &str, expected: &[(&str, &str)]) {
+        let kb = parse_program(program_src);
+        let query_goals = parse_query(query_src);
+        let sols = solve(&kb, query_goals);
+
+        assert!(
+            !sols.is_empty(),
+            "No solutions found for query: {}",
+            query_src
+        );
+
+        let found_match = sols.iter().any(|sol| {
+            expected.iter().all(|(var_name, expected_value)| {
+                let var_term = Term::Var(var_name.to_string());
+                let actual_value = apply(&var_term, sol);
+                let expected_term = Term::Atom(expected_value.to_string());
+                actual_value == expected_term
+            })
+        });
+
+        assert!(
+            found_match,
+            "Expected solution not found. Query: {}, Expected: {:?}, Found solutions: {:?}",
+            query_src, expected, sols
+        );
+    }
+
+    fn test_query_count(program_src: &str, query_src: &str, expected_count: usize) {
+        let kb = parse_program(program_src);
+        let query_goals = parse_query(query_src);
+        let sols = solve(&kb, query_goals);
+
+        assert_eq!(
+            sols.len(),
+            expected_count,
+            "Expected {} solutions for query '{}', but found {}. Solutions: {:?}",
+            expected_count,
+            query_src,
+            sols.len(),
+            sols
+        );
+    }
+
+    fn test_query_succeeds(program_src: &str, query_src: &str) {
+        let kb = parse_program(program_src);
+        let query_goals = parse_query(query_src);
+        let sols = solve(&kb, query_goals);
+
+        assert!(
+            !sols.is_empty(),
+            "Query should succeed but no solutions found: {}",
+            query_src
+        );
+    }
+
+    fn test_query_fails(program_src: &str, query_src: &str) {
+        let kb = parse_program(program_src);
+        let query_goals = parse_query(query_src);
+        let sols = solve(&kb, query_goals);
+
+        assert!(
+            sols.is_empty(),
+            "Query should fail but found solutions: {:?}",
+            sols
+        );
+    }
+
+    fn test_query_variable_values(
+        program_src: &str,
+        query_src: &str,
+        var_name: &str,
+        expected_values: &[&str],
+    ) {
+        let kb = parse_program(program_src);
+        let query_goals = parse_query(query_src);
+        let sols = solve(&kb, query_goals);
+
+        assert!(
+            !sols.is_empty(),
+            "No solutions found for query: {}",
+            query_src
+        );
+
+        let var_term = Term::Var(var_name.to_string());
+        let actual_values: Vec<Term> = sols.iter().map(|sol| apply(&var_term, sol)).collect();
+
+        for expected_value in expected_values {
+            let expected_term = Term::Atom(expected_value.to_string());
+            assert!(
+                actual_values.contains(&expected_term),
+                "Expected value '{}' for variable '{}' not found. Query: {}, Found values: {:?}",
+                expected_value,
+                var_name,
+                query_src,
+                actual_values
+            );
         }
     }
 
     #[test]
-    fn ancestor_demo() {
-        let kb = vec![
-            Clause::Fact(f("parent", vec![a("a"), a("b")])),
-            Clause::Fact(f("parent", vec![a("b"), a("c")])),
-            Clause::Rule {
-                head: f("ancestor", vec![v("X"), v("Y")]),
-                body: vec![f("parent", vec![v("X"), v("Y")])],
-            },
-            Clause::Rule {
-                head: f("ancestor", vec![v("X"), v("Y")]),
-                body: vec![
-                    f("parent", vec![v("X"), v("Z")]),
-                    f("ancestor", vec![v("Z"), v("Y")]),
-                ],
-            },
-        ];
+    fn ancestor() {
+        let program_str = r#"
+            parent(a, b).
+            parent(b, c).
+            ancestor(X, Y) :- parent(X, Y).
+            ancestor(X, Y) :- parent(X, Z), ancestor(Z, Y).
+        "#;
 
-        let sols = solve(&kb, vec![f("ancestor", vec![a("a"), v("Y")])]);
-        assert!(sols.len() >= 2);
-        assert_eq!(apply(&v("Y"), &sols[0]), a("b"));
-        assert_eq!(apply(&v("Y"), &sols[1]), a("c"));
+        test_query(program_str, "ancestor(a, Y).", &[("Y", "b")]);
+        test_query(program_str, "ancestor(a, Y).", &[("Y", "c")]);
+
+        test_query_count(program_str, "ancestor(a, Y).", 2);
+    }
+
+    #[test]
+    fn fact() {
+        let program_str = r#"
+            likes(mary, food).
+            likes(mary, wine).
+            likes(john, wine).
+            likes(john, mary).
+        "#;
+
+        test_query(program_str, "likes(mary, food).", &[]);
+        test_query(program_str, "likes(mary, X).", &[("X", "food")]);
+        test_query(program_str, "likes(mary, X).", &[("X", "wine")]);
+        test_query_count(program_str, "likes(mary, X).", 2);
+
+        test_query_fails(program_str, "likes(mary, john).");
+        test_query_fails(program_str, "likes(mary, beer).");
+        test_query_fails(program_str, "likes(alice, X).");
+    }
+
+    #[test]
+    fn peano() {
+        let program_str = r#"
+            add(zero, X, X).
+            add(succ(X), Y, succ(Z)) :- add(X, Y, Z).
+        "#;
+
+        test_query_succeeds(program_str, "add(zero, succ(zero), succ(zero)).");
+        test_query_succeeds(program_str, "add(succ(zero), succ(zero), Result).");
+
+        test_query_count(program_str, "add(succ(zero), succ(zero), Result).", 1);
+    }
+
+    #[test]
+    fn single_variable_single_value() {
+        test_query(
+            "parent(tom, bob). parent(bob, liz).",
+            "parent(tom, X).",
+            &[("X", "bob")],
+        );
+    }
+
+    #[test]
+    fn multiple_variables_one_solution() {
+        test_query(
+            "family(father(john), mother(mary), child(alice)).",
+            "family(father(X), mother(Y), child(Z)).",
+            &[("X", "john"), ("Y", "mary"), ("Z", "alice")],
+        );
+    }
+
+    #[test]
+    fn relationship_with_multiple_variables() {
+        test_query(
+            "married(john, mary).",
+            "married(X, Y).",
+            &[("X", "john"), ("Y", "mary")],
+        );
+    }
+
+    #[test]
+    fn person_with_multiple_attributes() {
+        test_query(
+            "person(alice, age(twentyfive), city(tokyo)).",
+            "person(Name, age(Age), city(City)).",
+            &[("Name", "alice"), ("Age", "twentyfive"), ("City", "tokyo")],
+        );
+    }
+
+    #[test]
+    fn structured_terms() {
+        test_query(
+            "teaches(professor(smith), course(math), room(a101)).",
+            "teaches(professor(Prof), course(Subject), room(Room)).",
+            &[("Prof", "smith"), ("Subject", "math"), ("Room", "a101")],
+        );
+    }
+
+    #[test]
+    fn single_variable_multiple_values() {
+        test_query_variable_values(
+            "parent(a, b). parent(a, c). parent(a, d).",
+            "parent(a, X).",
+            "X",
+            &["b", "c", "d"],
+        );
+    }
+
+    #[test]
+    fn multiple_solutions_with_query_sequence() {
+        let employee_program = r"works(john, company(google)). 
+            works(mary, company(apple)). 
+            works(bob, company(microsoft)).";
+        test_query(
+            employee_program,
+            "works(john, company(Company)).",
+            &[("Company", "google")],
+        );
+        test_query(
+            employee_program,
+            "works(mary, company(Company)).",
+            &[("Company", "apple")],
+        );
+        test_query(
+            employee_program,
+            "works(bob, company(Company)).",
+            &[("Company", "microsoft")],
+        );
+        test_query_count(employee_program, "works(Person, company(Company)).", 3);
     }
 }
