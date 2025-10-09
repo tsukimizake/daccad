@@ -196,6 +196,19 @@ pub fn program(input: &str) -> PResult<'_, Vec<Clause>> {
     ws(terminated(many0(clause), opt(space_or_comment1))).parse(input)
 }
 
+/// Parse an entire Prolog database (sequence of clauses) and ensure full consumption.
+/// Returns the list of clauses or the first parse error.
+pub fn database(input: &str) -> Result<Vec<Clause>, nom::Err<nom::error::Error<&str>>> {
+    match program(input) {
+        Ok((rest, clauses)) if rest.is_empty() => Ok(clauses),
+        Ok((rest, _)) => Err(nom::Err::Error(nom::error::Error {
+            input: rest,
+            code: nom::error::ErrorKind::Fail,
+        })),
+        Err(e) => Err(e),
+    }
+}
+
 pub fn query(input: &str) -> PResult<'_, Vec<Term>> {
     ws(terminated(goals, cut(ws(char('.'))))).parse(input)
 }
@@ -203,7 +216,7 @@ pub fn query(input: &str) -> PResult<'_, Vec<Term>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{a, v, Clause, Term};
+    use crate::types::{Clause, Term, a, v};
 
     fn assert_clause(src: &str, expected: Clause) {
         let (_, parsed) = clause(src).unwrap();
@@ -278,5 +291,19 @@ mod tests {
                 ],
             }]
         );
+    }
+
+    #[test]
+    fn parse_database() {
+        let src = r#"
+            % facts
+            parent(alice, bob).
+            parent(bob, carol).
+
+            /* rule */
+            grandparent(X, Y) :- parent(X, Z), parent(Z, Y).
+        "#;
+        let db = database(src).unwrap();
+        assert_eq!(db.len(), 3);
     }
 }
