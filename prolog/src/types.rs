@@ -1,7 +1,4 @@
-use std::{
-    collections::HashMap,
-    rc::{Rc, Weak},
-};
+use std::{collections::HashMap, rc::Rc};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Term {
@@ -136,9 +133,9 @@ pub enum Cell {
 
 pub enum Frame {
     Environment {
-        return_pc: Weak<WamInstr>,
-        prev_ep: Weak<Frame>,
-        local_start: Weak<Cell>, // ?
+        return_pc: Rc<WamInstr>,
+        prev_ep: Rc<Frame>,
+        local_start: Rc<Cell>, // ?
     },
 
     ChoicePoint {
