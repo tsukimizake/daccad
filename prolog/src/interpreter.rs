@@ -5,9 +5,9 @@ use crate::types::{Cell, Frame, WamInstr};
 struct Machine {
     heap: Vec<Cell>, // Hレジスタはheap.len()
     stack: Vec<Frame>,
-    trail: Vec<Rc<Cell>>, // 変更された参照セルのヒープ位置
-    arg_registers: [Cell; 32],
-    other_registers: [Cell; 32],
+    trail: Vec<Rc<Cell>>,     // 変更された参照セルのヒープ位置
+    arg_registers: Vec<Cell>, // TODO runtime_sized_arrayにする可能性
+    other_registers: Vec<Cell>,
     program: Vec<WamInstr>,
     pc: usize,
     ep: Rc<Frame>, // 現在の環境フレーム先頭 ()
