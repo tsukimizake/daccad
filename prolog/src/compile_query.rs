@@ -1,7 +1,10 @@
+use std::collections::HashMap;
+
 use crate::register_managers::{ArgRegisterManager, XRegisterManager};
 use crate::types::{Term, WamInstr, WamReg};
 
 pub struct QueryCompiler {
+    declared_vars: HashMap<String, WamReg>, // atomもここ
     arg_register_manager: ArgRegisterManager,
     x_register_manager: XRegisterManager,
 }
@@ -9,6 +12,7 @@ pub struct QueryCompiler {
 impl QueryCompiler {
     pub fn new() -> Self {
         QueryCompiler {
+            declared_vars: HashMap::new(),
             arg_register_manager: ArgRegisterManager::new(),
             x_register_manager: XRegisterManager::new(),
         }
@@ -22,6 +26,17 @@ impl QueryCompiler {
         self.x_register_manager.get_next()
     }
 
+    fn find_var(&self, var: &str) -> Option<&WamReg> {
+        if let Some(reg) = self.declared_vars.get(var) {
+            return Some(reg);
+        }
+        None
+    }
+
+    fn decl_var(&mut self, var: String, reg: WamReg) {
+        self.declared_vars.insert(var, reg);
+    }
+
     pub fn cleanup_regs(&mut self) {
         self.arg_register_manager.reset();
         self.x_register_manager.reset();
@@ -29,10 +44,12 @@ impl QueryCompiler {
 
     pub fn compile(&mut self, query: Term) -> Vec<WamInstr> {
         match query {
-            Term::Atom(name) => vec![WamInstr::PutAtom {
-                reg: self.get_next_a(),
-                name,
-            }],
+            Term::Atom(name) => {
+                vec![WamInstr::PutAtom {
+                    reg: self.get_next_a(),
+                    name,
+                }]
+            }
             _ => {
                 todo!();
             }
