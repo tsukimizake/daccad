@@ -77,7 +77,7 @@ pub enum WamInstr {
         reg: WamReg, // TODO Xレジスタの宣言のためにVec？必要な場合がわかってない
     },
     PutAtom {
-        name: u32,
+        name: String,
         reg: WamReg,
     },
     PutNumber {

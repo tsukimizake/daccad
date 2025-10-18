@@ -28,7 +28,42 @@ impl QueryCompiler {
     }
 
     pub fn compile(&mut self, query: Term) -> Vec<WamInstr> {
-        todo!()
+        match query {
+            Term::Atom(name) => vec![WamInstr::PutAtom {
+                reg: self.get_next_a(),
+                name,
+            }],
+            _ => {
+                todo!();
+            }
+        }
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        parse::query,
+        types::{WamInstr, WamReg},
+    };
+
+    fn test_compile_query(source: &str, expected: Vec<WamInstr>) {
+        let mut compiler = QueryCompiler::new();
+        let parsed_query = query(source).unwrap().1;
+        // For now, we'll compile just the first term in the query
+        let instructions = compiler.compile(parsed_query[0].clone());
+        assert_eq!(instructions, expected);
+    }
+
+    #[test]
+    fn query_atom() {
+        test_compile_query(
+            "parent.",
+            vec![WamInstr::PutAtom {
+                name: "parent".to_string(),
+                reg: WamReg::A(0),
+            }],
+        );
+    }
+}
