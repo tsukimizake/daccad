@@ -1,5 +1,9 @@
 use std::{collections::HashMap, rc::Rc};
 
+///////////////
+// AST
+///////////////
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Term {
     Var(String),
@@ -30,11 +34,14 @@ pub fn v(name: impl Into<String>) -> Term {
 pub fn a(name: impl Into<String>) -> Term {
     Term::Atom(name.into())
 }
+///////////////
+// WAM bitecode
+///////////////
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WamRegister {
-    A(u64), // Argument register
-    X(u64), // Temporary register
+    A(u32), // Argument register
+    X(u32), // Temporary register
 }
 
 pub type Subst = HashMap<String, Term>;
@@ -43,7 +50,7 @@ pub type Subst = HashMap<String, Term>;
 pub enum WamInstr {
     GetStruct {
         functor: String,
-        arity: u64,
+        arity: u32,
         reg: WamRegister,
     },
     GetAtom {
@@ -61,27 +68,24 @@ pub enum WamInstr {
 
     PutStruct {
         functor: String,
-        arity: u64,
+        arity: u32,
         reg: WamRegister,
     },
     PutVar {
-        reg: WamRegister,
-        arg: u64,
+        name: String,
+        reg: WamRegister, // TODO Xレジスタの宣言のためにVec？必要な場合がわかってない
     },
     PutAtom {
+        name: u32,
         reg: WamRegister,
-        name: u64,
     },
     PutNumber {
-        reg: WamRegister,
         val: i64,
+        reg: WamRegister,
     },
 
-    SetStruct {
-        name: String,
-    },
     SetVar {
-        name: String,
+        reg: WamRegister,
     },
     SetAtom {
         name: String,
@@ -91,51 +95,63 @@ pub enum WamInstr {
     },
 
     UnifyAtom {
-        name: String,
+        reg: WamRegister,
     },
     UnifyNumber {
         val: i64,
     },
     UnifyVar {
-        name: String,
+        reg: WamRegister,
     },
 
     Call {
         predicate: String,
-        arity: u64,
+        arity: u32,
     },
     Execute {
-        predicate: u64,
-        arity: u64,
+        predicate: u32,
+        arity: u32,
     },
     Allocate {
-        size: u64,
+        size: u32,
     },
     Deallocate,
     Proceed,
 
     TryMeElse {
-        target: u64,
+        target: u32,
     },
     RetryMeElse {
-        target: u64,
+        target: u32,
     },
     TrustMeElseFail,
 }
 
+///////////////
+// WAM interpreter
+///////////////
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Cell {
-    Ref(Rc<Cell>),
-    Str { functor: u64, arity: u64 },
+pub enum HeapCell {
+    Ref(Rc<HeapCell>),
+    Struct { functor: u32, arity: u32 },
+    Atom(String),
+    Number(i64),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RegStackCell {
+    Ref(Rc<HeapCell>),
+    Struct { functor: String, arity: u32 },
     Atom(String),
     Number(i64),
 }
 
 pub enum Frame {
     Environment {
-        return_pc: Rc<WamInstr>,
         prev_ep: Rc<Frame>,
-        local_start: Rc<Cell>, // ?
+        return_pc: Rc<WamInstr>,
+        registers: Vec<RegStackCell>,
     },
 
     ChoicePoint {

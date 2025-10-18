@@ -1,13 +1,13 @@
 use std::{collections::HashMap, rc::Rc};
 
-use crate::types::{Cell, Frame, WamInstr};
+use crate::types::{Frame, RegStackCell, WamInstr};
 
 struct Machine {
-    heap: Vec<Cell>, // Hレジスタはheap.len()
+    heap: Vec<RegStackCell>, // Hレジスタはheap.len()
     stack: Vec<Frame>,
-    trail: Vec<Rc<Cell>>,     // 変更された参照セルのヒープ位置
-    arg_registers: Vec<Cell>, // TODO runtime_sized_arrayにする可能性
-    other_registers: Vec<Cell>,
+    trail: Vec<Rc<RegStackCell>>,     // 変更された参照セルのヒープ位置
+    arg_registers: Vec<RegStackCell>, // TODO runtime_sized_arrayにする可能性
+    other_registers: Vec<RegStackCell>,
     program: Vec<WamInstr>,
     pc: usize,
     ep: Rc<Frame>, // 現在の環境フレーム先頭 ()
