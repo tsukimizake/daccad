@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, iter::once};
 
 use crate::types::{Clause, Term, WamInstr, WamRegister};
 
@@ -65,7 +65,7 @@ impl XRegisterManager {
 
 #[allow(unused)]
 pub(crate) struct Compiler {
-    declared_functors: Vec<HashMap<String, u32>>,
+    declared_functors: Vec<HashMap<String, usize>>,
     declared_vars: Vec<HashMap<String, WamRegister>>, // atomもここ
     arg_register_manager: ArgRegisterManager,
     x_register_manager: XRegisterManager,
@@ -82,7 +82,7 @@ impl Compiler {
         }
     }
 
-    fn find_functor(&self, functor: &str) -> Option<u32> {
+    fn find_functor(&self, functor: &str) -> Option<usize> {
         for scope in self.declared_functors.iter().rev() {
             if let Some(arity) = scope.get(functor) {
                 return Some(*arity);
@@ -90,7 +90,7 @@ impl Compiler {
         }
         None
     }
-    fn decl_functor(&mut self, functor: String, arity: u32) {
+    fn decl_functor(&mut self, functor: String, arity: usize) {
         if let Some(scope) = self.declared_functors.last_mut() {
             scope.insert(functor, arity);
         } else {
@@ -135,6 +135,7 @@ impl Compiler {
     }
 
     pub fn compile_db(&mut self, db: Vec<Clause>) -> Vec<WamInstr> {
+        self.push_scope();
         db.into_iter()
             .flat_map(|clause| match clause {
                 Clause::Fact(term) => self.compile_db_term(term),
@@ -149,6 +150,7 @@ impl Compiler {
         self.push_scope();
         let res = self.compile_db_term_impl(term);
         self.cleanup_regs();
+        self.pop_scope();
         res
     }
 
@@ -173,6 +175,28 @@ impl Compiler {
                     let reg = self.get_next_a();
                     self.decl_var(name.clone(), reg);
                     vec![WamInstr::GetVar { name, reg }] // TODO Xレジスタの宣言？必要な場合がわかってない
+                }
+            }
+            Term::Struct { functor, args } => {
+                let arity = args.len();
+                if let Some(_) = self.find_functor(&functor) {
+                    todo!("unify");
+                } else {
+                    self.decl_functor(functor.clone(), arity);
+                    let head = WamInstr::GetStruct {
+                        functor,
+                        arity,
+                        reg: self.get_next_a(),
+                    };
+
+                    self.push_scope();
+                    let tail = args
+                        .into_iter()
+                        .flat_map(|arg| self.compile_db_term_impl(arg));
+                    let res = once(head).chain(tail).collect::<Vec<WamInstr>>();
+                    self.pop_scope();
+
+                    res
                 }
             }
             _ => {

@@ -50,7 +50,7 @@ pub type Subst = HashMap<String, Term>;
 pub enum WamInstr {
     GetStruct {
         functor: String,
-        arity: u32,
+        arity: usize,
         reg: WamRegister,
     },
     GetAtom {
@@ -68,7 +68,7 @@ pub enum WamInstr {
 
     PutStruct {
         functor: String,
-        arity: u32,
+        arity: usize,
         reg: WamRegister,
     },
     PutVar {
@@ -106,11 +106,11 @@ pub enum WamInstr {
 
     Call {
         predicate: String,
-        arity: u32,
+        arity: usize,
     },
     Execute {
         predicate: u32,
-        arity: u32,
+        arity: usize,
     },
     Allocate {
         size: u32,
@@ -134,7 +134,7 @@ pub enum WamInstr {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HeapCell {
     Ref(Rc<HeapCell>),
-    Struct { functor: u32, arity: u32 },
+    Struct { functor: u32, arity: usize },
     Atom(String),
     Number(i64),
 }
@@ -142,7 +142,7 @@ pub enum HeapCell {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RegStackCell {
     Ref(Rc<HeapCell>),
-    Struct { functor: String, arity: u32 },
+    Struct { functor: String, arity: usize },
     Atom(String),
     Number(i64),
 }
