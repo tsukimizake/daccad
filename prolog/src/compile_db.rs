@@ -6,7 +6,7 @@ use crate::{
 };
 
 #[allow(unused)]
-pub(crate) struct Compiler {
+pub(super) struct Compiler {
     declared_vars: HashMap<String, WamReg>, // atomもここ
     arg_register_manager: ArgRegisterManager,
     x_register_manager: XRegisterManager,
