@@ -1,72 +1,13 @@
 use std::{collections::HashMap, iter::once};
 
-use crate::types::{Clause, Term, WamInstr, WamRegister};
-
-#[allow(unused)]
-struct RegisterManager {
-    count: u32,
-}
-
-impl RegisterManager {
-    fn new() -> Self {
-        RegisterManager { count: 0 }
-    }
-
-    fn get_next(&mut self) -> u32 {
-        let current = self.count;
-        self.count += 1;
-        current
-    }
-
-    fn reset(&mut self) {
-        self.count = 0;
-    }
-}
-
-struct ArgRegisterManager {
-    inner: RegisterManager,
-}
-
-impl ArgRegisterManager {
-    fn new() -> Self {
-        ArgRegisterManager {
-            inner: RegisterManager::new(),
-        }
-    }
-
-    fn get_next(&mut self) -> WamRegister {
-        WamRegister::A(self.inner.get_next())
-    }
-
-    fn reset(&mut self) {
-        self.inner.reset();
-    }
-}
-
-struct XRegisterManager {
-    inner: RegisterManager,
-}
-
-impl XRegisterManager {
-    fn new() -> Self {
-        XRegisterManager {
-            inner: RegisterManager::new(),
-        }
-    }
-
-    fn get_next(&mut self) -> WamRegister {
-        WamRegister::X(self.inner.get_next())
-    }
-
-    fn reset(&mut self) {
-        self.inner.reset();
-    }
-}
+use crate::{
+    register_managers::{ArgRegisterManager, XRegisterManager},
+    types::{Clause, Term, WamInstr, WamReg},
+};
 
 #[allow(unused)]
 pub(crate) struct Compiler {
-    declared_functors: Vec<HashMap<String, usize>>,
-    declared_vars: Vec<HashMap<String, WamRegister>>, // atomもここ
+    declared_vars: HashMap<String, WamReg>, // atomもここ
     arg_register_manager: ArgRegisterManager,
     x_register_manager: XRegisterManager,
 }
@@ -75,67 +16,35 @@ pub(crate) struct Compiler {
 impl Compiler {
     pub fn new() -> Self {
         Compiler {
-            declared_functors: vec![],
-            declared_vars: vec![],
+            declared_vars: HashMap::new(),
             arg_register_manager: ArgRegisterManager::new(),
             x_register_manager: XRegisterManager::new(),
         }
     }
 
-    fn find_functor(&self, functor: &str) -> Option<usize> {
-        for scope in self.declared_functors.iter().rev() {
-            if let Some(arity) = scope.get(functor) {
-                return Some(*arity);
-            }
+    fn find_var(&self, var: &str) -> Option<&WamReg> {
+        if let Some(reg) = self.declared_vars.get(var) {
+            return Some(reg);
         }
         None
     }
-    fn decl_functor(&mut self, functor: String, arity: usize) {
-        if let Some(scope) = self.declared_functors.last_mut() {
-            scope.insert(functor, arity);
-        } else {
-            panic!("No scope to declare variable");
-        }
+    fn decl_var(&mut self, var: String, reg: WamReg) {
+        self.declared_vars.insert(var, reg);
     }
-
-    fn find_var(&self, var: &str) -> Option<&WamRegister> {
-        for scope in self.declared_vars.iter().rev() {
-            if let Some(reg) = scope.get(var) {
-                return Some(reg);
-            }
-        }
-        None
-    }
-    fn decl_var(&mut self, var: String, reg: WamRegister) {
-        if let Some(scope) = self.declared_vars.last_mut() {
-            scope.insert(var, reg);
-        } else {
-            panic!("No scope to declare variable");
-        }
-    }
-    fn push_scope(&mut self) {
-        self.declared_functors.push(HashMap::new());
-        self.declared_vars.push(HashMap::new());
-    }
-    fn pop_scope(&mut self) {
-        self.declared_functors.pop();
-        self.declared_vars.pop();
-    }
-    fn get_next_a(&mut self) -> WamRegister {
+    fn get_next_a(&mut self) -> WamReg {
         self.arg_register_manager.get_next()
     }
 
-    fn get_next_x(&mut self) -> WamRegister {
+    fn get_next_x(&mut self) -> WamReg {
         self.x_register_manager.get_next()
     }
-
-    fn cleanup_regs(&mut self) {
+    fn cleanup_regs_and_vars(&mut self) {
         self.arg_register_manager.reset();
         self.x_register_manager.reset();
+        self.declared_vars = HashMap::new();
     }
 
     pub fn compile_db(&mut self, db: Vec<Clause>) -> Vec<WamInstr> {
-        self.push_scope();
         db.into_iter()
             .flat_map(|clause| match clause {
                 Clause::Fact(term) => self.compile_db_term(term),
@@ -147,10 +56,8 @@ impl Compiler {
     }
 
     fn compile_db_term(&mut self, term: Term) -> Vec<WamInstr> {
-        self.push_scope();
         let res = self.compile_db_term_impl(term);
-        self.cleanup_regs();
-        self.pop_scope();
+        self.cleanup_regs_and_vars();
         res
     }
 
@@ -179,25 +86,18 @@ impl Compiler {
             }
             Term::Struct { functor, args } => {
                 let arity = args.len();
-                if let Some(_) = self.find_functor(&functor) {
-                    todo!("unify");
-                } else {
-                    self.decl_functor(functor.clone(), arity);
-                    let head = WamInstr::GetStruct {
-                        functor,
-                        arity,
-                        reg: self.get_next_a(),
-                    };
+                let head = WamInstr::GetStruct {
+                    functor,
+                    arity,
+                    reg: self.get_next_a(),
+                };
 
-                    self.push_scope();
-                    let tail = args
-                        .into_iter()
-                        .flat_map(|arg| self.compile_db_term_impl(arg));
-                    let res = once(head).chain(tail).collect::<Vec<WamInstr>>();
-                    self.pop_scope();
+                let tail = args
+                    .into_iter()
+                    .flat_map(|arg| self.compile_db_term_impl(arg));
+                let res = once(head).chain(tail).collect::<Vec<WamInstr>>();
 
-                    res
-                }
+                res
             }
             _ => {
                 todo!()
@@ -210,7 +110,7 @@ impl Compiler {
 mod tests {
     use super::*;
     use crate::parse::clause;
-    use crate::types::WamRegister;
+    use crate::types::WamReg;
 
     fn test_compile_db(source: &str, expected: Vec<WamInstr>) {
         let mut compiler = Compiler::new();
@@ -226,21 +126,21 @@ mod tests {
         // Test A register allocation
         let a_reg1 = compiler.get_next_a();
         let a_reg2 = compiler.get_next_a();
-        assert_eq!(a_reg1, WamRegister::A(0));
-        assert_eq!(a_reg2, WamRegister::A(1));
+        assert_eq!(a_reg1, WamReg::A(0));
+        assert_eq!(a_reg2, WamReg::A(1));
 
         // Test X register allocation
         let x_reg1 = compiler.get_next_x();
         let x_reg2 = compiler.get_next_x();
-        assert_eq!(x_reg1, WamRegister::X(0));
-        assert_eq!(x_reg2, WamRegister::X(1));
+        assert_eq!(x_reg1, WamReg::X(0));
+        assert_eq!(x_reg2, WamReg::X(1));
 
         // Test reset
-        compiler.cleanup_regs();
+        compiler.cleanup_regs_and_vars();
         let a_reg_after_reset = compiler.get_next_a();
         let x_reg_after_reset = compiler.get_next_x();
-        assert_eq!(a_reg_after_reset, WamRegister::A(0));
-        assert_eq!(x_reg_after_reset, WamRegister::X(0));
+        assert_eq!(a_reg_after_reset, WamReg::A(0));
+        assert_eq!(x_reg_after_reset, WamReg::X(0));
     }
 
     #[test]
@@ -249,7 +149,7 @@ mod tests {
             "parent.",
             vec![WamInstr::GetAtom {
                 name: "parent".to_string(),
-                reg: WamRegister::A(0),
+                reg: WamReg::A(0),
             }],
         );
     }
@@ -262,15 +162,15 @@ mod tests {
                 WamInstr::GetStruct {
                     functor: "parent".to_string(),
                     arity: 2,
-                    reg: WamRegister::A(0),
+                    reg: WamReg::A(0),
                 },
                 WamInstr::GetAtom {
                     name: "john".to_string(),
-                    reg: WamRegister::A(1),
+                    reg: WamReg::A(1),
                 },
                 WamInstr::GetAtom {
                     name: "doe".to_string(),
-                    reg: WamRegister::A(2),
+                    reg: WamReg::A(2),
                 },
             ],
         );
@@ -284,15 +184,13 @@ mod tests {
                 WamInstr::GetStruct {
                     functor: "a".to_string(),
                     arity: 2,
-                    reg: WamRegister::A(0),
+                    reg: WamReg::A(0),
                 },
                 WamInstr::GetVar {
                     name: "X".to_string(),
-                    reg: WamRegister::A(1),
+                    reg: WamReg::A(1),
                 },
-                WamInstr::UnifyVar {
-                    reg: WamRegister::A(1),
-                },
+                WamInstr::UnifyVar { reg: WamReg::A(1) },
             ],
         );
     }

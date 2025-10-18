@@ -34,12 +34,13 @@ pub fn v(name: impl Into<String>) -> Term {
 pub fn a(name: impl Into<String>) -> Term {
     Term::Atom(name.into())
 }
+
 ///////////////
 // WAM bitecode
 ///////////////
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum WamRegister {
+pub enum WamReg {
     A(u32), // Argument register
     X(u32), // Temporary register
 }
@@ -51,41 +52,41 @@ pub enum WamInstr {
     GetStruct {
         functor: String,
         arity: usize,
-        reg: WamRegister,
+        reg: WamReg,
     },
     GetAtom {
         name: String,
-        reg: WamRegister,
+        reg: WamReg,
     },
     GetNumber {
         val: i64,
-        reg: WamRegister,
+        reg: WamReg,
     },
     GetVar {
         name: String,
-        reg: WamRegister,
+        reg: WamReg,
     },
 
     PutStruct {
         functor: String,
         arity: usize,
-        reg: WamRegister,
+        reg: WamReg,
     },
     PutVar {
         name: String,
-        reg: WamRegister, // TODO Xレジスタの宣言のためにVec？必要な場合がわかってない
+        reg: WamReg, // TODO Xレジスタの宣言のためにVec？必要な場合がわかってない
     },
     PutAtom {
         name: u32,
-        reg: WamRegister,
+        reg: WamReg,
     },
     PutNumber {
         val: i64,
-        reg: WamRegister,
+        reg: WamReg,
     },
 
     SetVar {
-        reg: WamRegister,
+        reg: WamReg,
     },
     SetAtom {
         name: String,
@@ -95,13 +96,13 @@ pub enum WamInstr {
     },
 
     UnifyAtom {
-        reg: WamRegister,
+        reg: WamReg,
     },
     UnifyNumber {
         val: i64,
     },
     UnifyVar {
-        reg: WamRegister,
+        reg: WamReg,
     },
 
     Call {
