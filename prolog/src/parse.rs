@@ -1,4 +1,3 @@
-use crate::types::{Clause, Term};
 use nom::{
     IResult, Parser,
     branch::alt,
@@ -8,6 +7,35 @@ use nom::{
     multi::{many0, separated_list0, separated_list1},
     sequence::{delimited, pair, preceded, separated_pair, terminated},
 };
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Term {
+    Var(String),
+    Atom(String),
+    Number(i64),
+    Struct {
+        functor: String,
+        args: Vec<Term>,
+    },
+    List {
+        items: Vec<Term>,
+        tail: Option<Box<Term>>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Clause {
+    Fact(Term),
+    Rule { head: Term, body: Vec<Term> },
+}
+
+pub fn v(name: impl Into<String>) -> Term {
+    Term::Var(name.into())
+}
+
+pub fn a(name: impl Into<String>) -> Term {
+    Term::Atom(name.into())
+}
 
 pub type PResult<'a, T> = IResult<&'a str, T>;
 
@@ -216,7 +244,7 @@ pub fn query(input: &str) -> PResult<'_, Vec<Term>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Clause, Term, a, v};
+    use super::{a, v, Clause, Term};
 
     fn assert_clause(src: &str, expected: Clause) {
         let (_, parsed) = clause(src).unwrap();

@@ -1,4 +1,4 @@
-use crate::types::WamReg;
+use crate::compiler_bytecode::WamReg;
 
 #[allow(unused)]
 pub struct RegisterManager {
@@ -60,3 +60,4 @@ impl XRegisterManager {
         self.inner.reset();
     }
 }
+

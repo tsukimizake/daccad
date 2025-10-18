@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
+use crate::compiler_bytecode::{WamInstr, WamReg};
+use crate::parse::Term;
 use crate::register_managers::{ArgRegisterManager, XRegisterManager};
-use crate::types::{Term, WamInstr, WamReg};
 
 pub struct QueryCompiler {
     declared_vars: HashMap<String, WamReg>, // atomもここ
@@ -61,8 +62,8 @@ impl QueryCompiler {
 mod tests {
     use super::*;
     use crate::{
+        compiler_bytecode::{WamInstr, WamReg},
         parse::query,
-        types::{WamInstr, WamReg},
     };
 
     fn test_compile_query(source: &str, expected: Vec<WamInstr>) {

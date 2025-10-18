@@ -1,7 +1,7 @@
 pub mod compile_db;
 pub mod compile_query;
+pub mod compiler_bytecode;
 pub mod interpreter;
 pub mod mock;
-mod parse;
+pub mod parse;
 mod register_managers;
-pub mod types;

@@ -1,8 +1,9 @@
 use std::{collections::HashMap, iter::once};
 
 use crate::{
+    compiler_bytecode::{WamInstr, WamReg},
+    parse::{Clause, Term},
     register_managers::{ArgRegisterManager, XRegisterManager},
-    types::{Clause, Term, WamInstr, WamReg},
 };
 
 #[allow(unused)]
@@ -109,8 +110,8 @@ impl Compiler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::compiler_bytecode::WamReg;
     use crate::parse::clause;
-    use crate::types::WamReg;
 
     fn test_compile_db(source: &str, expected: Vec<WamInstr>) {
         let mut compiler = Compiler::new();

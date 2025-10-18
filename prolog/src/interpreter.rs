@@ -1,6 +1,34 @@
 use std::{collections::HashMap, rc::Rc};
 
-use crate::types::{Frame, RegStackCell, WamInstr};
+use crate::compiler_bytecode::WamInstr;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum HeapCell {
+    Ref(Rc<HeapCell>),
+    Struct { functor: u32, arity: usize },
+    Atom(String),
+    Number(i64),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RegStackCell {
+    Ref(Rc<HeapCell>),
+    Struct { functor: String, arity: usize },
+    Atom(String),
+    Number(i64),
+}
+
+enum Frame {
+    Environment {
+        prev_ep: Rc<Frame>,
+        return_pc: Rc<WamInstr>,
+        registers: Vec<RegStackCell>,
+    },
+
+    ChoicePoint {
+        // TODO
+    },
+}
 
 struct Machine {
     heap: Vec<RegStackCell>, // Hレジスタはheap.len()
