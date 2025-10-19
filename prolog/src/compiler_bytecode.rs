@@ -7,8 +7,6 @@ pub enum WamReg {
     X(u32), // Temporary register
 }
 
-pub type Subst = HashMap<String, Term>;
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum WamInstr {
     GetStruct {

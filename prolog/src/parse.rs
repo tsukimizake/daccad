@@ -29,15 +29,15 @@ pub enum Clause {
     Rule { head: Term, body: Vec<Term> },
 }
 
-pub fn v(name: impl Into<String>) -> Term {
+pub(super) fn v(name: impl Into<String>) -> Term {
     Term::Var(name.into())
 }
 
-pub fn a(name: impl Into<String>) -> Term {
+pub(super) fn a(name: impl Into<String>) -> Term {
     Term::Atom(name.into())
 }
 
-pub type PResult<'a, T> = IResult<&'a str, T>;
+pub(super) type PResult<'a, T> = IResult<&'a str, T>;
 
 // Whitespace and comments
 fn line_comment(input: &str) -> PResult<'_, ()> {
@@ -198,7 +198,7 @@ fn simple_term(input: &str) -> PResult<'_, Term> {
     alt((list_term, paren_term, number_term, var_term, atom_term)).parse(input)
 }
 
-pub fn term(input: &str) -> PResult<'_, Term> {
+pub(super) fn term(input: &str) -> PResult<'_, Term> {
     simple_term(input)
 }
 
@@ -206,7 +206,7 @@ fn goals(input: &str) -> PResult<'_, Vec<Term>> {
     separated_list1(ws(char(',')), term).parse(input)
 }
 
-pub fn clause(input: &str) -> PResult<'_, Clause> {
+pub(super) fn clause(input: &str) -> PResult<'_, Clause> {
     ws(terminated(
         alt((
             map(
@@ -244,7 +244,7 @@ pub fn query(input: &str) -> PResult<'_, Vec<Term>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::{a, v, Clause, Term};
+    use super::{Clause, Term, a, v};
 
     fn assert_clause(src: &str, expected: Clause) {
         let (_, parsed) = clause(src).unwrap();

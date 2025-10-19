@@ -1,7 +1,7 @@
 use crate::compiler_bytecode::WamReg;
 
 #[allow(unused)]
-pub struct RegisterManager {
+pub(crate) struct RegisterManager {
     count: u32,
 }
 
@@ -21,7 +21,7 @@ impl RegisterManager {
     }
 }
 
-pub struct ArgRegisterManager {
+pub(crate) struct ArgRegisterManager {
     inner: RegisterManager,
 }
 
@@ -41,7 +41,7 @@ impl ArgRegisterManager {
     }
 }
 
-pub struct XRegisterManager {
+pub(crate) struct XRegisterManager {
     inner: RegisterManager,
 }
 

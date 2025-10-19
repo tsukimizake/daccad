@@ -3,7 +3,7 @@ use bevy::log::{info, warn};
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, egui};
 
-pub fn setup(mut commands: Commands) {
+pub(super) fn setup(mut commands: Commands) {
     // 3D camera for rendering model previews
     commands.spawn((
         Camera3d::default(),
@@ -17,7 +17,7 @@ pub fn setup(mut commands: Commands) {
 }
 
 
-pub fn setup_fonts(mut contexts: EguiContexts) {
+pub(super) fn setup_fonts(mut contexts: EguiContexts) {
     if let Ok(ctx) = contexts.ctx_mut() {
         let mut fonts = egui::FontDefinitions::default();
 

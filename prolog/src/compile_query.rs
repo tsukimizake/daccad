@@ -4,7 +4,7 @@ use crate::compiler_bytecode::{WamInstr, WamReg};
 use crate::parse::Term;
 use crate::register_managers::{ArgRegisterManager, XRegisterManager};
 
-pub struct QueryCompiler {
+pub(super) struct QueryCompiler {
     declared_vars: HashMap<String, WamReg>, // atomもここ
     arg_register_manager: ArgRegisterManager,
     x_register_manager: XRegisterManager,
