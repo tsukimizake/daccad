@@ -1,4 +1,4 @@
-use std::{collections::HashMap, rc::Rc};
+use std::rc::Rc;
 
 use crate::compiler_bytecode::WamInstr;
 
@@ -6,7 +6,7 @@ use crate::compiler_bytecode::WamInstr;
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum HeapCell {
     Ref(Rc<HeapCell>),
-    Struct { functor: u32, arity: usize },
+    Struct { functor: String, arity: usize },
     Atom(String),
     Number(i64),
 }
@@ -35,16 +35,21 @@ enum Frame {
 }
 
 #[allow(unused)]
+struct TrailEntry {
+    cells_to_revert: Vec<RegStackCell>,
+}
+
+#[allow(unused)]
 struct Machine<'a> {
-    heap: Vec<RegStackCell>, // Hレジスタはheap.len()
+    heap: Vec<Rc<RegStackCell>>, // Hレジスタはheap.len()
     stack: Vec<Rc<Frame>>,
-    trail: Vec<Rc<RegStackCell>>,     // 変更された参照セルのヒープ位置
-    arg_registers: Vec<RegStackCell>, // TODO runtime_sized_arrayにする可能性
-    other_registers: Vec<RegStackCell>,
+    arg_registers: Vec<Rc<RegStackCell>>, // TODO runtime_sized_arrayにする可能性
+    other_registers: Vec<Rc<RegStackCell>>,
     program: &'a [WamInstr],
     pc: &'a WamInstr,
     env_p: Rc<Frame>,    // 現在の環境フレーム先頭
     choice_p: Rc<Frame>, // 現在の選択ポイントフレーム先頭
+    trail: Vec<TrailEntry>,
 }
 
 #[allow(unused)]
@@ -55,13 +60,13 @@ impl<'a> Machine<'a> {
         Self {
             heap: Vec::new(),
             stack: stack,
-            trail: Vec::new(),
             arg_registers: Vec::new(),
             other_registers: Vec::new(),
             program,
             pc: &program[0],
             env_p: stack_head.clone(),
             choice_p: stack_head,
+            trail: Vec::new(),
         }
     }
 }
