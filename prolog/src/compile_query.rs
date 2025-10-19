@@ -45,8 +45,14 @@ impl Compiler {
         self.x_register_manager.reset();
     }
 
-    pub fn compile(&mut self, query: Term) -> Vec<WamInstr> {
-        match query {
+    pub fn compile(&mut self, query_terms: Vec<Term>) -> Vec<WamInstr> {
+        query_terms
+            .into_iter()
+            .flat_map(|term| self.compile_query(term))
+            .collect()
+    }
+    fn compile_query(&mut self, term: Term) -> Vec<WamInstr> {
+        match term {
             Term::Atom(name) => {
                 vec![WamInstr::PutAtom {
                     reg: self.get_next_a(),
@@ -69,10 +75,10 @@ mod tests {
     };
 
     fn test_compile_query(source: &str, expected: Vec<WamInstr>) {
-        let mut compiler = Compiler::new();
+        let mut query_compiler = Compiler::new();
         let parsed_query = query(source).unwrap().1;
         // For now, we'll compile just the first term in the query
-        let instructions = compiler.compile(parsed_query[0].clone());
+        let instructions = query_compiler.compile(parsed_query);
         assert_eq!(instructions, expected);
     }
 

@@ -2,7 +2,7 @@ use crate::compiler_bytecode::WamReg;
 
 #[allow(unused)]
 pub(crate) struct RegisterManager {
-    count: u32,
+    count: usize,
 }
 
 impl RegisterManager {
@@ -10,7 +10,7 @@ impl RegisterManager {
         RegisterManager { count: 0 }
     }
 
-    pub fn get_next(&mut self) -> u32 {
+    pub fn get_next(&mut self) -> usize {
         let current = self.count;
         self.count += 1;
         current

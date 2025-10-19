@@ -1,7 +1,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WamReg {
-    A(u32), // Argument register
-    X(u32), // Temporary register
+    A(usize), // Argument register
+    X(usize), // Temporary register
 }
 
 #[allow(unused)]

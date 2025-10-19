@@ -5,6 +5,7 @@ use crate::compiler_bytecode::WamInstr;
 #[allow(unused)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum HeapCell {
+    Empty,
     Ref(Rc<HeapCell>),
     Struct { functor: String, arity: usize },
     Atom(String),
@@ -14,6 +15,7 @@ enum HeapCell {
 #[allow(unused)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RegStackCell {
+    Empty,
     Ref(Rc<HeapCell>),
     Struct { functor: String, arity: usize },
     Atom(String),
@@ -40,11 +42,44 @@ struct TrailEntry {
 }
 
 #[allow(unused)]
+#[derive(Debug, Clone)]
+struct RuntimeRegBank {
+    registers: Vec<RegStackCell>,
+}
+
+impl RuntimeRegBank {
+    fn new() -> Self {
+        Self {
+            registers: vec![RegStackCell::Empty; 32],
+        }
+    }
+
+    fn get(&self, index: usize) -> &RegStackCell {
+        if index < self.registers.len() {
+            &self.registers[index]
+        } else {
+            &RegStackCell::Empty
+        }
+    }
+
+    fn insert(&mut self, index: usize, value: RegStackCell) {
+        if index >= self.registers.len() {
+            self.registers.resize(index + 1, RegStackCell::Empty);
+        }
+        self.registers[index] = value;
+    }
+
+    fn len(&self) -> usize {
+        self.registers.len()
+    }
+}
+
+#[allow(unused)]
 struct Machine<'a> {
     heap: Vec<Rc<RegStackCell>>, // Hレジスタはheap.len()
     stack: Vec<Rc<Frame>>,
-    arg_registers: Vec<Rc<RegStackCell>>, // TODO runtime_sized_arrayにする可能性
-    other_registers: Vec<Rc<RegStackCell>>,
+    arg_registers: RuntimeRegBank,
+    other_registers: RuntimeRegBank,
     program: &'a [WamInstr],
     current_instr: &'a WamInstr, // program counter相当
     env_p: Rc<Frame>,            // 現在の環境フレーム先頭
@@ -60,8 +95,8 @@ impl<'a> Machine<'a> {
         Self {
             heap: Vec::with_capacity(32),
             stack: stack,
-            arg_registers: Vec::with_capacity(32),
-            other_registers: Vec::with_capacity(32),
+            arg_registers: RuntimeRegBank::new(),
+            other_registers: RuntimeRegBank::new(),
             program,
             current_instr: &program[0],
             env_p: stack_head.clone(),
@@ -72,8 +107,26 @@ impl<'a> Machine<'a> {
     fn step(&mut self) {
         match self.current_instr {
             WamInstr::PutAtom { name, reg } => {
-                let cell = Rc::new(RegStackCell::Atom(name.clone()));
-                self.arg_registers.push(cell);
+                let cell = RegStackCell::Atom(name.clone());
+                match reg {
+                    crate::compiler_bytecode::WamReg::A(index) => {
+                        self.arg_registers.insert(*index, cell);
+                    }
+                    crate::compiler_bytecode::WamReg::X(index) => {
+                        self.other_registers.insert(*index, cell);
+                    }
+                }
+            }
+            WamInstr::GetAtom { name, reg } => {
+                let cell = RegStackCell::Atom(name.clone());
+                match reg {
+                    crate::compiler_bytecode::WamReg::A(index) => {
+                        self.arg_registers.insert(*index, cell);
+                    }
+                    crate::compiler_bytecode::WamReg::X(index) => {
+                        self.other_registers.insert(*index, cell);
+                    }
+                }
             }
             _ => {
                 todo!();
@@ -88,16 +141,16 @@ mod tests {
 
     use super::*;
 
-    fn test(db_str: String, query_str: String, expect_todo: ()) {
-        let (_, db_clause) = crate::parse::clause(&db_str).unwrap();
-        let (_, query_term) = crate::parse::term(&query_str).unwrap();
-        let db = compile_db::Compiler::new().compile_db(vec![db_clause]);
-        let _query = crate::compile_query::Compiler::new().compile(query_term);
+    fn test(db_str: String, query_str: String, _expect_todo: ()) {
+        let db_clauses = crate::parse::database(&db_str).unwrap();
+        let (_, query_terms) = crate::parse::query(&query_str).unwrap();
+        let db = compile_db::Compiler::new().compile_db(db_clauses);
+        let _query = crate::compile_query::Compiler::new().compile(query_terms);
         let mut machine = Machine::new(&db);
         // 以下TODO
         machine.step();
-        let expected = Rc::new(RegStackCell::Atom("hello.".to_string()));
-        assert_eq!(machine.arg_registers[0], expected);
+        let expected = RegStackCell::Atom("hello".to_string());
+        assert_eq!(machine.arg_registers.get(0), &expected);
     }
     #[test]
     fn test_simple_put_atom() {
