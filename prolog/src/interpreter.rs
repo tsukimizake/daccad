@@ -2,6 +2,7 @@ use std::{collections::HashMap, rc::Rc};
 
 use crate::compiler_bytecode::WamInstr;
 
+#[allow(unused)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum HeapCell {
     Ref(Rc<HeapCell>),
@@ -10,6 +11,7 @@ enum HeapCell {
     Number(i64),
 }
 
+#[allow(unused)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RegStackCell {
     Ref(Rc<HeapCell>),
@@ -18,6 +20,7 @@ enum RegStackCell {
     Number(i64),
 }
 
+#[allow(unused)]
 enum Frame {
     Environment {
         prev_ep: Rc<Frame>,
@@ -30,6 +33,7 @@ enum Frame {
     },
 }
 
+#[allow(unused)]
 struct Machine {
     heap: Vec<RegStackCell>, // Hレジスタはheap.len()
     stack: Vec<Frame>,
@@ -43,6 +47,7 @@ struct Machine {
     name_table: HashMap<usize, String>,
 }
 
+#[allow(unused)]
 impl Machine {
     pub fn lookup_name(&self, id: usize) -> &String {
         self.name_table.get(&id).unwrap()

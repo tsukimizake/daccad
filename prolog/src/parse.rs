@@ -29,10 +29,12 @@ pub enum Clause {
     Rule { head: Term, body: Vec<Term> },
 }
 
+#[allow(unused)]
 pub(super) fn v(name: impl Into<String>) -> Term {
     Term::Var(name.into())
 }
 
+#[allow(unused)]
 pub(super) fn a(name: impl Into<String>) -> Term {
     Term::Atom(name.into())
 }

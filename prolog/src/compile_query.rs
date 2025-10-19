@@ -4,15 +4,17 @@ use crate::compiler_bytecode::{WamInstr, WamReg};
 use crate::parse::Term;
 use crate::register_managers::{ArgRegisterManager, XRegisterManager};
 
-pub(super) struct QueryCompiler {
+#[allow(unused)]
+pub(super) struct Compiler {
     declared_vars: HashMap<String, WamReg>, // atomもここ
     arg_register_manager: ArgRegisterManager,
     x_register_manager: XRegisterManager,
 }
 
-impl QueryCompiler {
+#[allow(unused)]
+impl Compiler {
     pub fn new() -> Self {
-        QueryCompiler {
+        Compiler {
             declared_vars: HashMap::new(),
             arg_register_manager: ArgRegisterManager::new(),
             x_register_manager: XRegisterManager::new(),
@@ -67,7 +69,7 @@ mod tests {
     };
 
     fn test_compile_query(source: &str, expected: Vec<WamInstr>) {
-        let mut compiler = QueryCompiler::new();
+        let mut compiler = Compiler::new();
         let parsed_query = query(source).unwrap().1;
         // For now, we'll compile just the first term in the query
         let instructions = compiler.compile(parsed_query[0].clone());

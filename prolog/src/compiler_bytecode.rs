@@ -1,12 +1,10 @@
-use crate::parse::Term;
-use std::collections::HashMap;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WamReg {
     A(u32), // Argument register
     X(u32), // Temporary register
 }
 
+#[allow(unused)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum WamInstr {
     GetStruct {
