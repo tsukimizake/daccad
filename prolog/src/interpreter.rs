@@ -2,7 +2,6 @@ use std::rc::Rc;
 
 use crate::compiler_bytecode::{WamInstr, WamReg};
 
-#[allow(unused)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Cell {
     Empty,
@@ -12,7 +11,6 @@ enum Cell {
     Number(i64),
 }
 
-#[allow(unused)]
 enum Frame {
     Base {},
     Environment {
@@ -20,160 +18,152 @@ enum Frame {
         return_pc: Rc<WamInstr>,
         registers: Vec<Cell>,
     },
-
     ChoicePoint {
         // TODO
     },
 }
 
-#[allow(unused)]
 struct TrailEntry {
     cells_to_revert: Vec<Cell>,
 }
 
-#[allow(unused)]
-#[derive(Debug, Clone)]
-struct RuntimeRegBank {
-    registers: Vec<Cell>,
-}
-
-impl RuntimeRegBank {
-    fn new() -> Self {
-        Self {
-            registers: vec![Cell::Empty; 32],
-        }
-    }
-
-    fn get(&self, index: usize) -> &Cell {
-        if index < self.registers.len() {
-            &self.registers[index]
-        } else {
-            &Cell::Empty
-        }
-    }
-
-    fn insert(&mut self, index: usize, value: Cell) {
-        if index >= self.registers.len() {
-            self.registers.resize(index + 1, Cell::Empty);
-        }
-        self.registers[index] = value;
+fn get_register(registers: &[Cell], index: usize) -> &Cell {
+    if index < registers.len() {
+        &registers[index]
+    } else {
+        &Cell::Empty
     }
 }
 
-#[allow(unused)]
-struct Machine {
-    heap: Vec<Rc<Cell>>, // Hレジスタはheap.len()
-    stack: Vec<Rc<Frame>>,
-    arg_registers: RuntimeRegBank,
-    other_registers: RuntimeRegBank,
-    instructions: Vec<WamInstr>,
-    counter: usize,
-    env_p: Rc<Frame>,    // 現在の環境フレーム先頭
-    choice_p: Rc<Frame>, // 現在の選択ポイントフレーム先頭
-    trail: Vec<TrailEntry>,
+fn set_register(registers: &mut Vec<Cell>, index: usize, value: Cell) {
+    if index >= registers.len() {
+        registers.resize(index + 1, Cell::Empty);
+    }
+    registers[index] = value;
 }
 
-#[allow(unused)]
-impl Machine {
-    pub(super) fn new(instructions: Vec<WamInstr>) -> Self {
-        let stack_head = Rc::new(Frame::Base {});
-        let stack = vec![stack_head.clone()];
-        Self {
-            heap: Vec::with_capacity(32),
-            stack: stack,
-            arg_registers: RuntimeRegBank::new(),
-            other_registers: RuntimeRegBank::new(),
-            instructions,
-            counter: 0,
-            env_p: stack_head.clone(),
-            choice_p: stack_head,
-            trail: Vec::with_capacity(32),
-        }
-    }
-    fn step(&mut self) -> bool {
-        if let Some(current_instr) = self.instructions.get(self.counter) {
-            match current_instr {
-                WamInstr::PutAtom { name, reg } => {
-                    let cell = Cell::Atom(name.clone());
-                    match reg {
-                        crate::compiler_bytecode::WamReg::A(index) => {
-                            self.arg_registers.insert(*index, cell);
-                            true
-                        }
-                        crate::compiler_bytecode::WamReg::X(index) => {
-                            self.other_registers.insert(*index, cell);
-                            true
-                        }
+fn step_machine(
+    _heap: &mut Vec<Rc<Cell>>,
+    _stack: &mut Vec<Rc<Frame>>,
+    arg_registers: &mut Vec<Cell>,
+    other_registers: &mut Vec<Cell>,
+    instructions: &[WamInstr],
+    program_counter: &mut usize,
+    _env_p: &mut Rc<Frame>,
+    _choice_p: &mut Rc<Frame>,
+    _trail: &mut Vec<TrailEntry>,
+) -> bool {
+    if let Some(current_instr) = instructions.get(*program_counter) {
+        match current_instr {
+            WamInstr::PutAtom { name, reg } => {
+                let cell = Cell::Atom(name.clone());
+                match reg {
+                    WamReg::A(index) => {
+                        set_register(arg_registers, *index, cell);
+                        true
+                    }
+                    WamReg::X(index) => {
+                        set_register(other_registers, *index, cell);
+                        true
                     }
                 }
-                WamInstr::GetAtom { name, reg } => {
-                    let derefed = self.deref_reg(&reg);
-                    match derefed {
-                        Cell::Empty => {
-                            // レジスタが空の場合、アトムを設定
-                            let cell = Cell::Atom(name.clone());
-                            match reg {
-                                crate::compiler_bytecode::WamReg::A(index) => {
-                                    self.arg_registers.insert(*index, cell);
-                                    true
-                                }
-                                crate::compiler_bytecode::WamReg::X(index) => {
-                                    self.other_registers.insert(*index, cell);
-                                    true
-                                }
+            }
+            WamInstr::GetAtom { name, reg } => {
+                let derefed = deref_reg(arg_registers, other_registers, reg);
+                match derefed {
+                    Cell::Empty => {
+                        // レジスタが空の場合、アトムを設定
+                        let cell = Cell::Atom(name.clone());
+                        match reg {
+                            WamReg::A(index) => {
+                                set_register(arg_registers, *index, cell);
+                                true
+                            }
+                            WamReg::X(index) => {
+                                set_register(other_registers, *index, cell);
+                                true
                             }
                         }
-                        Cell::Atom(ref existing_name) if existing_name == name => true,
-                        _ => false,
                     }
-                }
-                _ => {
-                    todo!();
+                    Cell::Atom(ref existing_name) if existing_name == name => true,
+                    _ => false,
                 }
             }
-        } else {
-            false
-        }
-    }
-
-    fn deref_reg(&self, wamreg: &WamReg) -> Cell {
-        let reg = match wamreg {
-            WamReg::A(index) => self.arg_registers.get(*index).clone(),
-            WamReg::X(index) => self.other_registers.get(*index).clone(),
-        };
-
-        match reg {
-            Cell::Ref(rc_cell) => {
-                let deref_cell = rc_cell.as_ref();
-                self.deref_cell(deref_cell)
+            _ => {
+                todo!();
             }
-            _ => reg.clone(),
         }
+    } else {
+        false
     }
-    fn deref_cell(&self, cell: &Cell) -> Cell {
-        match cell {
-            Cell::Ref(rc_cell) => self.deref_cell(&rc_cell),
-            _ => cell.clone(),
+}
+
+fn deref_reg(arg_registers: &[Cell], other_registers: &[Cell], wamreg: &WamReg) -> Cell {
+    let reg = match wamreg {
+        WamReg::A(index) => get_register(arg_registers, *index).clone(),
+        WamReg::X(index) => get_register(other_registers, *index).clone(),
+    };
+
+    match reg {
+        Cell::Ref(rc_cell) => {
+            let deref_cell = rc_cell.as_ref();
+            deref_cell_recursive(deref_cell)
         }
+        _ => reg.clone(),
     }
+}
+
+fn deref_cell_recursive(cell: &Cell) -> Cell {
+    match cell {
+        Cell::Ref(rc_cell) => deref_cell_recursive(&rc_cell),
+        _ => cell.clone(),
+    }
+}
+
+pub fn execute_and_step(instructions: Vec<WamInstr>) -> (Cell, bool) {
+    let mut heap = Vec::<Rc<Cell>>::with_capacity(32);
+    let stack_head = Rc::new(Frame::Base {});
+    let mut stack = vec![stack_head.clone()];
+    let mut arg_registers = vec![Cell::Empty; 32];
+    let mut other_registers = vec![Cell::Empty; 32];
+    let mut program_counter = 0;
+    let mut env_p = stack_head.clone();
+    let mut choice_p = stack_head;
+    let mut trail = Vec::<TrailEntry>::with_capacity(32);
+
+    let success = step_machine(
+        &mut heap,
+        &mut stack,
+        &mut arg_registers,
+        &mut other_registers,
+        &instructions,
+        &mut program_counter,
+        &mut env_p,
+        &mut choice_p,
+        &mut trail,
+    );
+
+    let result = get_register(&arg_registers, 0).clone();
+    (result, success)
+}
+
+pub fn execute_instructions(instructions: Vec<WamInstr>) -> Cell {
+    let (result, _) = execute_and_step(instructions);
+    result
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::compile_db;
-
     use super::*;
 
     fn test(db_str: String, query_str: String, _expect_todo: ()) {
         let db_clauses = crate::parse::database(&db_str).unwrap();
         let (_, query_terms) = crate::parse::query(&query_str).unwrap();
-        let db = compile_db::Compiler::new().compile_db(db_clauses);
-        let _query = crate::compile_query::Compiler::new().compile(query_terms);
-        let mut machine = Machine::new(db);
-        // 以下TODO
-        machine.step();
+        let db = crate::compile_db::compile_db(db_clauses);
+        let _query = crate::compile_query::compile_query(query_terms);
+        let result = execute_instructions(db);
         let expected = Cell::Atom("hello".to_string());
-        assert_eq!(machine.arg_registers.get(0), &expected);
+        assert_eq!(result, expected);
     }
     #[test]
     fn test_simple_put_atom() {
