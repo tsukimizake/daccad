@@ -20,7 +20,7 @@ pub enum Term {
     InnerStruct {
         functor: String,
         args: Vec<Term>,
-    },
+    }, // functorは一旦全てInnerStructにパースし、最後にconvert_termする
     List {
         items: Vec<Term>,
         tail: Option<Box<Term>>,
@@ -34,43 +34,15 @@ pub enum Clause {
 }
 
 impl Term {
-    /// Convert top-level Struct to TopStruct recursively
     pub fn mark_top_level_structs(self) -> Self {
-        fn convert_term(term: Term, is_top_level: bool) -> Term {
+        fn convert_term(term: Term) -> Term {
             match term {
-                Term::InnerStruct { functor, args } => {
-                    let converted_args: Vec<Term> = args
-                        .into_iter()
-                        .map(|arg| convert_term(arg, false))
-                        .collect();
-                    if is_top_level {
-                        Term::TopStruct {
-                            functor,
-                            args: converted_args,
-                        }
-                    } else {
-                        Term::InnerStruct {
-                            functor,
-                            args: converted_args,
-                        }
-                    }
-                }
-                Term::TopStruct { functor, args } => {
-                    let converted_args: Vec<Term> = args
-                        .into_iter()
-                        .map(|arg| convert_term(arg, false))
-                        .collect();
-                    Term::TopStruct {
-                        functor,
-                        args: converted_args,
-                    }
-                }
+                Term::InnerStruct { functor, args } => Term::TopStruct { functor, args },
+                Term::TopStruct { functor, args } => Term::TopStruct { functor, args },
                 Term::List { items, tail } => {
-                    let converted_items: Vec<Term> = items
-                        .into_iter()
-                        .map(|item| convert_term(item, false))
-                        .collect();
-                    let converted_tail = tail.map(|t| Box::new(convert_term(*t, false)));
+                    let converted_items: Vec<Term> =
+                        items.into_iter().map(|item| convert_term(item)).collect();
+                    let converted_tail = tail.map(|t| Box::new(convert_term(*t)));
                     Term::List {
                         items: converted_items,
                         tail: converted_tail,
@@ -81,12 +53,11 @@ impl Term {
                 Term::Number(n) => Term::Number(n),
             }
         }
-        convert_term(self, true)
+        convert_term(self)
     }
 }
 
 impl Clause {
-    /// Convert top-level Struct to TopStruct in clauses
     pub fn mark_top_level_structs(self) -> Self {
         match self {
             Clause::Fact(term) => Clause::Fact(term.mark_top_level_structs()),
