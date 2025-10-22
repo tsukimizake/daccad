@@ -53,13 +53,14 @@ fn compile_db_term(
             }
         }
 
-        Term::TopStruct { functor: _, args } => {
+        Term::TopStruct { functor, args } => {
+            let head = WamInstr::Label { name: functor };
             let last = WamInstr::Proceed;
 
             let rest = args
                 .into_iter()
                 .flat_map(|arg| compile_db_term(arg, declared_vars, arg_register_manager));
-            rest.chain(once(last)).collect()
+            once(head).chain(rest).chain(once(last)).collect()
         }
 
         Term::InnerStruct { functor, args } => {
