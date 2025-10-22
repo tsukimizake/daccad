@@ -6,24 +6,30 @@ use crate::register_managers::ArgRegisterManager;
 
 pub fn compile_query(query_terms: Vec<Term>) -> Vec<WamInstr> {
     let mut declared_vars = HashMap::new();
-    let mut arg_register_manager = ArgRegisterManager::new();
-    
+    let mut arg_reg_manager = ArgRegisterManager::new();
+
     query_terms
         .into_iter()
-        .flat_map(|term| compile_query_term(term, &mut declared_vars, &mut arg_register_manager))
+        .flat_map(|term| compile_query_term(term, &mut declared_vars, &mut arg_reg_manager))
         .collect()
 }
 
 fn compile_query_term(
     term: Term,
     _declared_vars: &mut HashMap<String, WamReg>,
-    arg_register_manager: &mut ArgRegisterManager,
+    arg_reg_manager: &mut ArgRegisterManager,
 ) -> Vec<WamInstr> {
     match term {
         Term::Atom(name) => {
             vec![WamInstr::PutAtom {
-                reg: arg_register_manager.get_next(),
+                reg: arg_reg_manager.get_next(),
                 name,
+            }]
+        }
+        Term::Var(name) => {
+            vec![WamInstr::PutVar {
+                name: name,
+                reg: arg_reg_manager.get_next(),
             }]
         }
         _ => {

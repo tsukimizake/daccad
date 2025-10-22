@@ -76,6 +76,18 @@ fn exectute_impl(
                     }
                 }
             }
+
+            WamInstr::PutVar { name: _, reg } => match reg {
+                WamReg::A(index) => {
+                    set_register(arg_registers, *index, Cell::Empty);
+                    true
+                }
+                WamReg::X(index) => {
+                    set_register(other_registers, *index, Cell::Empty);
+                    true
+                }
+            },
+
             WamInstr::GetAtom { name, reg } => {
                 let derefed = deref_reg(arg_registers, other_registers, reg);
                 match derefed {
@@ -167,7 +179,10 @@ mod tests {
         let (_, query_terms) = crate::parse::query(&query_str).unwrap();
         let db = crate::compile_db::compile_db(db_clauses);
         let query = crate::compile_query::compile_query(query_terms);
-        let (regs, result) = execute_instructions(db);
+        print!("{:?}", query);
+        print!("{:?}", db);
+        let (regs, result) =
+            execute_instructions(query.into_iter().chain(db.into_iter()).collect());
         assert_eq!(result, expect_res);
         assert_eq!(regs.arg_registers, expect_regs);
     }
