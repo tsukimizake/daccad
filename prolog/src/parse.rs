@@ -11,7 +11,8 @@ use nom::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Term {
     Var(String),
-    Atom(String),
+    TopAtom(String),
+    InnerAtom(String),
     Number(i64),
     TopStruct {
         functor: String,
@@ -38,6 +39,7 @@ impl Term {
         fn convert_term(term: Term) -> Term {
             match term {
                 Term::InnerStruct { functor, args } => Term::TopStruct { functor, args },
+                Term::InnerAtom(name) => Term::TopAtom(name),
                 Term::TopStruct { functor, args } => Term::TopStruct { functor, args },
                 Term::List { items, tail } => {
                     let converted_items: Vec<Term> =
@@ -48,9 +50,7 @@ impl Term {
                         tail: converted_tail,
                     }
                 }
-                Term::Var(name) => Term::Var(name),
-                Term::Atom(name) => Term::Atom(name),
-                Term::Number(n) => Term::Number(n),
+                other => other,
             }
         }
         convert_term(self)
@@ -79,7 +79,7 @@ pub(super) fn v(name: impl Into<String>) -> Term {
 
 #[allow(unused)]
 pub(super) fn a(name: impl Into<String>) -> Term {
-    Term::Atom(name.into())
+    Term::InnerAtom(name.into())
 }
 
 pub(super) type PResult<'a, T> = IResult<&'a str, T>;
@@ -233,7 +233,7 @@ fn atom_term(input: &str) -> PResult<'_, Term> {
                 functor: name,
                 args,
             },
-            None => Term::Atom(name),
+            None => Term::InnerAtom(name),
         },
     ))
     .parse(input)
@@ -392,7 +392,6 @@ mod tests {
 
     #[test]
     fn test_top_struct_vs_struct() {
-        // Test that top-level structs become TopStruct
         let src = "parent(alice, f(nested)).";
         let (_, clause) = clause(src).unwrap();
         let converted = clause.mark_top_level_structs();
@@ -401,19 +400,31 @@ mod tests {
             Clause::Fact(Term::TopStruct { functor, args }) => {
                 assert_eq!(functor, "parent");
                 assert_eq!(args.len(), 2);
-                // First arg should be Atom
-                assert!(matches!(args[0], Term::Atom(_)));
-                // Second arg should be nested Struct (not TopStruct)
+                assert!(matches!(args[0], Term::InnerAtom(_)));
                 match &args[1] {
                     Term::InnerStruct { functor, args } => {
                         assert_eq!(functor, "f");
                         assert_eq!(args.len(), 1);
-                        assert!(matches!(args[0], Term::Atom(_)));
+                        assert!(matches!(args[0], Term::InnerAtom(_)));
                     }
                     _ => panic!("Expected nested Struct, got {:?}", args[1]),
                 }
             }
             _ => panic!("Expected TopStruct fact, got {:?}", converted),
+        }
+    }
+
+    #[test]
+    fn test_top_atom() {
+        let src = "hello.";
+        let (_, clause) = clause(src).unwrap();
+        let converted = clause.mark_top_level_structs();
+
+        match converted {
+            Clause::Fact(Term::TopAtom(name)) => {
+                assert_eq!(name, "hello");
+            }
+            _ => panic!("Expected TopAtom fact, got {:?}", converted),
         }
     }
 }

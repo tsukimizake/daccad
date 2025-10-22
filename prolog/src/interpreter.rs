@@ -236,7 +236,7 @@ mod tests {
         test(
             "hello.".to_string(),
             "hello.".to_string(),
-            pad_empties_to_32(vec![Cell::Atom("hello".into())]),
+            pad_empties_to_32(vec![]), // TopAtomは引数レジスタに値を設定しない
             true,
         );
     }

@@ -21,7 +21,13 @@ fn compile_query_term(
     arg_reg_manager: &mut ArgRegisterManager,
 ) -> Vec<WamInstr> {
     match term {
-        Term::Atom(name) => {
+        Term::TopAtom(name) => {
+            vec![WamInstr::CallTemp {
+                predicate: name,
+                arity: 0,
+            }]
+        }
+        Term::InnerAtom(name) => {
             vec![WamInstr::PutAtom {
                 reg: arg_reg_manager.get_next(),
                 name,
@@ -67,7 +73,7 @@ fn compile_query_term(
 mod tests {
     use super::*;
     use crate::{
-        compiler_bytecode::{WamInstr, WamReg},
+        compiler_bytecode::WamInstr,
         parse::query,
     };
 
@@ -81,9 +87,20 @@ mod tests {
     fn query_atom() {
         test_compile_query_helper(
             "parent.",
-            vec![WamInstr::PutAtom {
-                name: "parent".to_string(),
-                reg: WamReg::A(0),
+            vec![WamInstr::CallTemp {
+                predicate: "parent".to_string(),
+                arity: 0,
+            }],
+        );
+    }
+
+    #[test]
+    fn query_top_atom() {
+        test_compile_query_helper(
+            "hello.",
+            vec![WamInstr::CallTemp {
+                predicate: "hello".to_string(),
+                arity: 0,
             }],
         );
     }

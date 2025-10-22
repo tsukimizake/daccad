@@ -22,6 +22,7 @@ pub fn compile_link(
             }
         })
         .collect::<Vec<WamInstr>>();
+    println!("dict: {:?}", label_to_line);
     all_instructions
         .into_iter()
         .map(|instr| match instr {
@@ -33,7 +34,8 @@ pub fn compile_link(
                         to_linum: target_line,
                     }
                 } else {
-                    panic!("target line not found");
+                    // TODO error on runtime?
+                    panic!("call target line not found");
                 }
             }
             other => other,

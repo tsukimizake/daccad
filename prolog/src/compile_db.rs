@@ -34,7 +34,11 @@ fn compile_db_term(
         Term::Number(val) => {
             vec![WamInstr::UnifyNumber { val }]
         }
-        Term::Atom(name) => {
+        Term::TopAtom(name) => {
+            let head = WamInstr::Label { name, arity: 0 };
+            vec![head, WamInstr::Proceed]
+        }
+        Term::InnerAtom(name) => {
             if let Some(&reg) = declared_vars.get(&name) {
                 vec![WamInstr::UnifyAtom { reg }]
             } else {
@@ -89,11 +93,11 @@ fn compile_db_term(
 mod tests {
     use super::*;
     use crate::compiler_bytecode::WamReg;
-    use crate::parse::clause;
+    use crate::parse::database;
 
     fn test_compile_db_helper(source: &str, expected: Vec<WamInstr>) {
-        let parsed_clause = clause(source).unwrap().1;
-        let instructions = compile_db(vec![parsed_clause]);
+        let parsed = database(source).unwrap();
+        let instructions = compile_db(parsed.clone());
         assert_eq!(instructions, expected);
     }
 
@@ -101,10 +105,13 @@ mod tests {
     fn db_atom() {
         test_compile_db_helper(
             "parent.",
-            vec![WamInstr::GetAtom {
-                name: "parent".to_string(),
-                reg: WamReg::A(0),
-            }],
+            vec![
+                WamInstr::Label {
+                    name: "parent".to_string(),
+                    arity: 0,
+                },
+                WamInstr::Proceed,
+            ],
         );
     }
 
@@ -113,19 +120,19 @@ mod tests {
         test_compile_db_helper(
             "parent(john, doe).",
             vec![
-                WamInstr::GetStruct {
-                    functor: "parent".to_string(),
+                WamInstr::Label {
+                    name: "parent".to_string(),
                     arity: 2,
-                    reg: WamReg::A(0),
                 },
                 WamInstr::GetAtom {
                     name: "john".to_string(),
-                    reg: WamReg::A(1),
+                    reg: WamReg::A(0),
                 },
                 WamInstr::GetAtom {
                     name: "doe".to_string(),
-                    reg: WamReg::A(2),
+                    reg: WamReg::A(1),
                 },
+                WamInstr::Proceed,
             ],
         );
     }
@@ -135,16 +142,30 @@ mod tests {
         test_compile_db_helper(
             "a(X, X).",
             vec![
-                WamInstr::GetStruct {
-                    functor: "a".to_string(),
+                WamInstr::Label {
+                    name: "a".to_string(),
                     arity: 2,
-                    reg: WamReg::A(0),
                 },
                 WamInstr::GetVar {
                     name: "X".to_string(),
-                    reg: WamReg::A(1),
+                    reg: WamReg::A(0),
                 },
-                WamInstr::UnifyVar { reg: WamReg::A(1) },
+                WamInstr::UnifyVar { reg: WamReg::A(0) },
+                WamInstr::Proceed,
+            ],
+        );
+    }
+
+    #[test]
+    fn db_top_atom() {
+        test_compile_db_helper(
+            "hello.",
+            vec![
+                WamInstr::Label {
+                    name: "hello".to_string(),
+                    arity: 0,
+                },
+                WamInstr::Proceed,
             ],
         );
     }
