@@ -84,4 +84,7 @@ pub enum WamInstr {
         target: u32,
     },
     TrustMeElseFail,
+    Label {
+        name: String,
+    },
 }

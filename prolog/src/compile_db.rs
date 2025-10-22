@@ -52,6 +52,16 @@ fn compile_db_term(
                 vec![WamInstr::GetVar { name, reg }]
             }
         }
+
+        Term::TopStruct { functor: _, args } => {
+            let last = WamInstr::Proceed;
+
+            let rest = args
+                .into_iter()
+                .flat_map(|arg| compile_db_term(arg, declared_vars, arg_register_manager));
+            rest.chain(once(last)).collect()
+        }
+
         Term::InnerStruct { functor, args } => {
             let arity = args.len();
             let head = WamInstr::GetStruct {
@@ -63,9 +73,7 @@ fn compile_db_term(
             let tail = args
                 .into_iter()
                 .flat_map(|arg| compile_db_term(arg, declared_vars, arg_register_manager));
-            let res = once(head).chain(tail).collect::<Vec<WamInstr>>();
-
-            res
+            once(head).chain(tail).collect()
         }
         _ => {
             todo!()
