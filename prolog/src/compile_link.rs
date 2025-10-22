@@ -22,7 +22,6 @@ pub fn compile_link(
             }
         })
         .collect::<Vec<WamInstr>>();
-    println!("dict: {:?}", label_to_line);
     all_instructions
         .into_iter()
         .map(|instr| match instr {

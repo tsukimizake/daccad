@@ -68,9 +68,7 @@ fn exectute_impl(
     _choice_p: &mut Rc<Frame>,
     _trail: &mut Vec<TrailEntry>,
 ) -> ExecMode {
-    println!("{:?}", *program_counter);
     if let Some(current_instr) = instructions.get(*program_counter) {
-        println!("{:?}", current_instr);
         match current_instr {
             WamInstr::PutAtom { name, reg } => {
                 let cell = Cell::Atom(name.clone());
@@ -101,7 +99,6 @@ fn exectute_impl(
                 let derefed = deref_reg(arg_registers, other_registers, reg);
                 match derefed {
                     Cell::Empty => {
-                        // レジスタが空の場合、アトムを設定
                         let cell = Cell::Atom(name.clone());
                         match reg {
                             WamReg::A(index) => {
@@ -134,7 +131,7 @@ fn exectute_impl(
             }
             WamInstr::Label { name: _, arity: _ } => ExecMode::Continue,
             WamInstr::Proceed => {
-                ExecMode::ResolvedToTrue // TODO check?
+                ExecMode::ResolvedToTrue // TODO stackをたどるか何かして解決すべきpredicateが残っていないかcheck
             }
             WamInstr::Error { message } => {
                 println!("{}", message);
@@ -223,7 +220,6 @@ mod tests {
         let db = crate::compile_db::compile_db(db_clauses);
         let query = crate::compile_query::compile_query(query_terms);
         let all_instructions = compile_link::compile_link(query, db);
-        print!("{:?}", all_instructions);
         let (regs, result) = execute_instructions(all_instructions);
         assert_eq!(result, expect_res);
         assert_eq!(regs.arg_registers, expect_regs);
