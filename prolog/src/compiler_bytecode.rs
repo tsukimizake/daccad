@@ -91,5 +91,6 @@ pub enum WamInstr {
     TrustMeElseFail,
     Label {
         name: String,
+        arity: usize,
     },
 }

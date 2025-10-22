@@ -54,7 +54,10 @@ fn compile_db_term(
         }
 
         Term::TopStruct { functor, args } => {
-            let head = WamInstr::Label { name: functor };
+            let head = WamInstr::Label {
+                name: functor,
+                arity: args.len(),
+            };
             let last = WamInstr::Proceed;
 
             let rest = args
