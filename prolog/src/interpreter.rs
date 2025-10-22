@@ -50,7 +50,7 @@ fn set_register(registers: &mut Vec<Cell>, index: usize, value: Cell) {
     registers[index] = value;
 }
 
-fn step_machine(
+fn exectute_impl(
     _heap: &mut Vec<Rc<Cell>>,
     _stack: &mut Vec<Rc<Frame>>,
     arg_registers: &mut Vec<Cell>,
@@ -139,7 +139,7 @@ pub fn execute_instructions(instructions: Vec<WamInstr>) -> (Registers, bool) {
     let mut choice_p = stack_head;
     let mut trail = Vec::<TrailEntry>::with_capacity(32);
 
-    let success = step_machine(
+    let success = exectute_impl(
         &mut heap,
         &mut stack,
         &mut arg_registers,
@@ -151,11 +151,11 @@ pub fn execute_instructions(instructions: Vec<WamInstr>) -> (Registers, bool) {
         &mut trail,
     );
 
-    let registers = Registers {
+    let res_registers = Registers {
         arg_registers,
         other_registers,
     };
-    (registers, success)
+    (res_registers, success)
 }
 
 #[cfg(test)]
@@ -167,12 +167,11 @@ mod tests {
         let (_, query_terms) = crate::parse::query(&query_str).unwrap();
         let db = crate::compile_db::compile_db(db_clauses);
         let query = crate::compile_query::compile_query(query_terms);
-        print!("{:?}", query);
         let (regs, result) = execute_instructions(db);
         assert_eq!(result, expect_res);
         assert_eq!(regs.arg_registers, expect_regs);
     }
-    fn pad_empties(regs: Vec<Cell>) -> Vec<Cell> {
+    fn pad_empties_to_32(regs: Vec<Cell>) -> Vec<Cell> {
         let len = regs.len();
         regs.into_iter()
             .chain(std::iter::repeat(Cell::Empty).take(32 - len))
@@ -184,7 +183,7 @@ mod tests {
         test(
             "hello.".to_string(),
             "hello.".to_string(),
-            pad_empties(vec![Cell::Atom("hello".to_string())]),
+            pad_empties_to_32(vec![Cell::Atom("hello".to_string())]),
             true,
         );
     }
