@@ -3,7 +3,7 @@ use std::rc::Rc;
 use crate::compiler_bytecode::{WamInstr, WamReg};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Cell {
+pub enum Cell {
     Empty,
     Ref(Rc<Cell>),
     Struct { functor: String, arity: usize },
@@ -11,6 +11,7 @@ enum Cell {
     Number(i64),
 }
 
+#[allow(unused)]
 enum Frame {
     Base {},
     Environment {
@@ -23,6 +24,7 @@ enum Frame {
     },
 }
 
+#[allow(unused)]
 struct TrailEntry {
     cells_to_revert: Vec<Cell>,
 }
