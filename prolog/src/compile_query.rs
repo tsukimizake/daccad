@@ -32,6 +32,14 @@ fn compile_query_term(
                 reg: arg_reg_manager.get_next(),
             }]
         }
+
+        Term::Struct { functor, args } => {
+            vec![WamInstr::PutStruct {
+                functor: functor,
+                arity: args.len(),
+                reg: arg_reg_manager.get_next(),
+            }]
+        }
         _ => {
             todo!();
         }

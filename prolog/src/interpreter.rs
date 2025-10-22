@@ -203,11 +203,21 @@ mod tests {
         );
     }
 
-    #[allow(unused)]
-    //TODO #[test]
-    fn test_socrates() {
+    #[test]
+    fn test_socrates_who() {
         test(
-            r#"human(socrates). mortal(X) :- human(X)."#.to_string(),
+            r#"mortal(socrates)."#.to_string(),
+            "mortal(X).".to_string(),
+            vec![],
+            true,
+        );
+    }
+
+    //#[test]
+    #[allow(unused)]
+    fn test_socrates_all_mortal() {
+        test(
+            r#"mortal(X)."#.to_string(),
             "mortal(socrates).".to_string(),
             vec![],
             true,
