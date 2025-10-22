@@ -33,7 +33,7 @@ pub fn compile_link(
                         to_linum: target_line,
                     }
                 } else {
-                    todo!("target line not found")
+                    panic!("target line not found");
                 }
             }
             other => other,

@@ -105,7 +105,7 @@ fn exectute_impl(
                             }
                         }
                     }
-                    Cell::Atom(ref existing_name) if existing_name == name => true,
+                    Cell::Atom(existing_name) if existing_name == name => true,
                     _ => false,
                 }
             }
@@ -118,10 +118,14 @@ fn exectute_impl(
     }
 }
 
-fn deref_reg(arg_registers: &[Cell], other_registers: &[Cell], wamreg: &WamReg) -> Cell {
+fn deref_reg<'a>(
+    arg_registers: &'a [Cell],
+    other_registers: &'a [Cell],
+    wamreg: &WamReg,
+) -> &'a Cell {
     let reg = match wamreg {
-        WamReg::A(index) => get_register(arg_registers, *index).clone(),
-        WamReg::X(index) => get_register(other_registers, *index).clone(),
+        WamReg::A(index) => get_register(arg_registers, *index),
+        WamReg::X(index) => get_register(other_registers, *index),
     };
 
     match reg {
@@ -129,14 +133,14 @@ fn deref_reg(arg_registers: &[Cell], other_registers: &[Cell], wamreg: &WamReg) 
             let deref_cell = rc_cell.as_ref();
             deref_cell_recursive(deref_cell)
         }
-        _ => reg.clone(),
+        _ => reg,
     }
 }
 
-fn deref_cell_recursive(cell: &Cell) -> Cell {
+fn deref_cell_recursive<'a>(cell: &'a Cell) -> &'a Cell {
     match cell {
         Cell::Ref(rc_cell) => deref_cell_recursive(&rc_cell),
-        _ => cell.clone(),
+        _ => cell,
     }
 }
 
@@ -172,6 +176,8 @@ pub fn execute_instructions(instructions: Vec<WamInstr>) -> (Registers, bool) {
 
 #[cfg(test)]
 mod tests {
+    use crate::compile_link;
+
     use super::*;
 
     fn test(db_str: String, query_str: String, expect_regs: Vec<Cell>, expect_res: bool) {
@@ -179,10 +185,9 @@ mod tests {
         let (_, query_terms) = crate::parse::query(&query_str).unwrap();
         let db = crate::compile_db::compile_db(db_clauses);
         let query = crate::compile_query::compile_query(query_terms);
-        print!("{:?}", query);
-        print!("{:?}", db);
-        let (regs, result) =
-            execute_instructions(query.into_iter().chain(db.into_iter()).collect());
+        let all_instructions = compile_link::compile_link(query, db);
+        print!("{:?}", all_instructions);
+        let (regs, result) = execute_instructions(all_instructions);
         assert_eq!(result, expect_res);
         assert_eq!(regs.arg_registers, expect_regs);
     }
@@ -208,7 +213,7 @@ mod tests {
         test(
             r#"mortal(socrates)."#.to_string(),
             "mortal(X).".to_string(),
-            vec![],
+            pad_empties_to_32(vec![]),
             true,
         );
     }
