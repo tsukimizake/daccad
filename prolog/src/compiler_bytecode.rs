@@ -63,9 +63,14 @@ pub enum WamInstr {
         reg: WamReg,
     },
 
+    CallTemp {
+        predicate: String,
+        arity: usize,
+    },
     Call {
         predicate: String,
         arity: usize,
+        to_linum: usize,
     },
     Execute {
         predicate: u32,

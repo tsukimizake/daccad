@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::iter::once;
 
 use crate::compiler_bytecode::{WamInstr, WamReg};
 use crate::parse::Term;
@@ -16,7 +17,7 @@ pub fn compile_query(query_terms: Vec<Term>) -> Vec<WamInstr> {
 
 fn compile_query_term(
     term: Term,
-    _declared_vars: &mut HashMap<String, WamReg>,
+    declared_vars: &mut HashMap<String, WamReg>,
     arg_reg_manager: &mut ArgRegisterManager,
 ) -> Vec<WamInstr> {
     match term {
@@ -33,12 +34,28 @@ fn compile_query_term(
             }]
         }
 
+        Term::TopStruct { functor, args } => {
+            let last = WamInstr::CallTemp {
+                predicate: functor,
+                arity: args.len(),
+            };
+            let rest = args
+                .into_iter()
+                .flat_map(|arg| compile_query_term(arg, declared_vars, arg_reg_manager));
+            rest.chain(once(last)).collect()
+        }
+
         Term::InnerStruct { functor, args } => {
-            vec![WamInstr::PutStruct {
+            let head = WamInstr::PutStruct {
                 functor: functor,
                 arity: args.len(),
                 reg: arg_reg_manager.get_next(),
-            }]
+            };
+            let rest = args
+                .into_iter()
+                .flat_map(|arg| compile_query_term(arg, declared_vars, arg_reg_manager));
+
+            once(head).chain(rest).collect()
         }
         _ => {
             todo!();
