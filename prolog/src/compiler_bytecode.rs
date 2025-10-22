@@ -93,4 +93,7 @@ pub enum WamInstr {
         name: String,
         arity: usize,
     },
+    Error {
+        message: String,
+    },
 }

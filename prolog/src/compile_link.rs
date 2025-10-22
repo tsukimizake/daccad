@@ -34,8 +34,9 @@ pub fn compile_link(
                         to_linum: target_line,
                     }
                 } else {
-                    // TODO error on runtime?
-                    panic!("call target line not found");
+                    WamInstr::Error {
+                        message: format!("error: predicate {} not found", predicate),
+                    }
                 }
             }
             other => other,

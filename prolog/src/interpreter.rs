@@ -136,6 +136,10 @@ fn exectute_impl(
             WamInstr::Proceed => {
                 ExecMode::ResolvedToTrue // TODO check?
             }
+            WamInstr::Error { message } => {
+                println!("{}", message);
+                ExecMode::ResolvedToFalse
+            }
 
             _ => {
                 todo!();
@@ -238,6 +242,12 @@ mod tests {
             "hello.".to_string(),
             pad_empties_to_32(vec![]), // TopAtomは引数レジスタに値を設定しない
             true,
+        );
+        test(
+            "hello.".to_string(),
+            "bye.".to_string(),
+            pad_empties_to_32(vec![]), // TopAtomは引数レジスタに値を設定しない
+            false,
         );
     }
 
