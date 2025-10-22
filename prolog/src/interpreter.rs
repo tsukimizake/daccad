@@ -50,6 +50,13 @@ fn set_register(registers: &mut Vec<Cell>, index: usize, value: Cell) {
     registers[index] = value;
 }
 
+#[derive(PartialEq, Eq, Debug)]
+enum ExecMode {
+    Continue,
+    ResolvedToTrue,
+    ResolvedToFalse,
+}
+
 fn exectute_impl(
     _heap: &mut Vec<Rc<Cell>>,
     _stack: &mut Vec<Rc<Frame>>,
@@ -60,19 +67,21 @@ fn exectute_impl(
     _env_p: &mut Rc<Frame>,
     _choice_p: &mut Rc<Frame>,
     _trail: &mut Vec<TrailEntry>,
-) -> bool {
+) -> ExecMode {
+    println!("{:?}", *program_counter);
     if let Some(current_instr) = instructions.get(*program_counter) {
+        println!("{:?}", current_instr);
         match current_instr {
             WamInstr::PutAtom { name, reg } => {
                 let cell = Cell::Atom(name.clone());
                 match reg {
                     WamReg::A(index) => {
                         set_register(arg_registers, *index, cell);
-                        true
+                        ExecMode::Continue
                     }
                     WamReg::X(index) => {
                         set_register(other_registers, *index, cell);
-                        true
+                        ExecMode::Continue
                     }
                 }
             }
@@ -80,11 +89,11 @@ fn exectute_impl(
             WamInstr::PutVar { name: _, reg } => match reg {
                 WamReg::A(index) => {
                     set_register(arg_registers, *index, Cell::Empty);
-                    true
+                    ExecMode::Continue
                 }
                 WamReg::X(index) => {
                     set_register(other_registers, *index, Cell::Empty);
-                    true
+                    ExecMode::Continue
                 }
             },
 
@@ -97,24 +106,43 @@ fn exectute_impl(
                         match reg {
                             WamReg::A(index) => {
                                 set_register(arg_registers, *index, cell);
-                                true
+                                ExecMode::Continue
                             }
                             WamReg::X(index) => {
                                 set_register(other_registers, *index, cell);
-                                true
+                                ExecMode::Continue
                             }
                         }
                     }
-                    Cell::Atom(existing_name) if existing_name == name => true,
-                    _ => false,
+                    Cell::Atom(existing_name) => {
+                        if existing_name == name {
+                            ExecMode::Continue
+                        } else {
+                            ExecMode::ResolvedToFalse
+                        }
+                    }
+                    _ => todo!(),
                 }
             }
+            WamInstr::Call {
+                predicate: _,
+                arity: _,
+                to_linum,
+            } => {
+                *program_counter = *to_linum;
+                ExecMode::Continue
+            }
+            WamInstr::Label { name: _, arity: _ } => ExecMode::Continue,
+            WamInstr::Proceed => {
+                ExecMode::ResolvedToTrue // TODO check?
+            }
+
             _ => {
                 todo!();
             }
         }
     } else {
-        false
+        todo!();
     }
 }
 
@@ -155,23 +183,28 @@ pub fn execute_instructions(instructions: Vec<WamInstr>) -> (Registers, bool) {
     let mut choice_p = stack_head;
     let mut trail = Vec::<TrailEntry>::with_capacity(32);
 
-    let success = exectute_impl(
-        &mut heap,
-        &mut stack,
-        &mut arg_registers,
-        &mut other_registers,
-        &instructions,
-        &mut program_counter,
-        &mut env_p,
-        &mut choice_p,
-        &mut trail,
-    );
+    let mut exec_mode = ExecMode::Continue;
+
+    while exec_mode == ExecMode::Continue {
+        exec_mode = exectute_impl(
+            &mut heap,
+            &mut stack,
+            &mut arg_registers,
+            &mut other_registers,
+            &instructions,
+            &mut program_counter,
+            &mut env_p,
+            &mut choice_p,
+            &mut trail,
+        );
+        program_counter += 1;
+    }
 
     let res_registers = Registers {
         arg_registers,
         other_registers,
     };
-    (res_registers, success)
+    (res_registers, exec_mode == ExecMode::ResolvedToTrue)
 }
 
 #[cfg(test)]
@@ -203,7 +236,7 @@ mod tests {
         test(
             "hello.".to_string(),
             "hello.".to_string(),
-            pad_empties_to_32(vec![Cell::Atom("hello".to_string())]),
+            pad_empties_to_32(vec![Cell::Atom("hello".into())]),
             true,
         );
     }
@@ -213,11 +246,20 @@ mod tests {
         test(
             r#"mortal(socrates)."#.to_string(),
             "mortal(X).".to_string(),
-            pad_empties_to_32(vec![]),
+            pad_empties_to_32(vec![Cell::Atom("socrates".into())]),
             true,
         );
     }
 
+    #[test]
+    fn test_socrates_immortal() {
+        test(
+            r#"mortal(socrates)."#.to_string(),
+            "mortal(dracle).".to_string(),
+            pad_empties_to_32(vec![Cell::Atom("dracle".into())]),
+            false,
+        );
+    }
     //#[test]
     #[allow(unused)]
     fn test_socrates_all_mortal() {
