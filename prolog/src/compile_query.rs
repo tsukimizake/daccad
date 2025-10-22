@@ -33,7 +33,7 @@ fn compile_query_term(
             }]
         }
 
-        Term::Struct { functor, args } => {
+        Term::InnerStruct { functor, args } => {
             vec![WamInstr::PutStruct {
                 functor: functor,
                 arity: args.len(),

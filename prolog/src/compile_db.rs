@@ -9,7 +9,7 @@ use crate::{
 pub fn compile_db(db: Vec<Clause>) -> Vec<WamInstr> {
     let mut declared_vars = HashMap::new();
     let mut arg_register_manager = ArgRegisterManager::new();
-    
+
     db.into_iter()
         .flat_map(|clause| match clause {
             Clause::Fact(term) => {
@@ -52,7 +52,7 @@ fn compile_db_term(
                 vec![WamInstr::GetVar { name, reg }]
             }
         }
-        Term::Struct { functor, args } => {
+        Term::InnerStruct { functor, args } => {
             let arity = args.len();
             let head = WamInstr::GetStruct {
                 functor,
