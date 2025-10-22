@@ -11,6 +11,12 @@ pub enum Cell {
     Number(i64),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Registers {
+    pub arg_registers: Vec<Cell>,
+    pub other_registers: Vec<Cell>,
+}
+
 #[allow(unused)]
 enum Frame {
     Base {},
@@ -122,7 +128,7 @@ fn deref_cell_recursive(cell: &Cell) -> Cell {
     }
 }
 
-pub fn execute_and_step(instructions: Vec<WamInstr>) -> (Cell, bool) {
+pub fn execute_instructions(instructions: Vec<WamInstr>) -> (Registers, bool) {
     let mut heap = Vec::<Rc<Cell>>::with_capacity(32);
     let stack_head = Rc::new(Frame::Base {});
     let mut stack = vec![stack_head.clone()];
@@ -145,31 +151,42 @@ pub fn execute_and_step(instructions: Vec<WamInstr>) -> (Cell, bool) {
         &mut trail,
     );
 
-    let result = get_register(&arg_registers, 0).clone();
-    (result, success)
-}
-
-pub fn execute_instructions(instructions: Vec<WamInstr>) -> Cell {
-    let (result, _) = execute_and_step(instructions);
-    result
+    let registers = Registers {
+        arg_registers,
+        other_registers,
+    };
+    (registers, success)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn test(db_str: String, query_str: String, _expect_todo: ()) {
+    fn test(db_str: String, query_str: String, expect_regs: Vec<Cell>, expect_res: bool) {
         let db_clauses = crate::parse::database(&db_str).unwrap();
         let (_, query_terms) = crate::parse::query(&query_str).unwrap();
         let db = crate::compile_db::compile_db(db_clauses);
-        let _query = crate::compile_query::compile_query(query_terms);
-        let result = execute_instructions(db);
-        let expected = Cell::Atom("hello".to_string());
-        assert_eq!(result, expected);
+        let query = crate::compile_query::compile_query(query_terms);
+        print!("{:?}", query);
+        let (regs, result) = execute_instructions(db);
+        assert_eq!(result, expect_res);
+        assert_eq!(regs.arg_registers, expect_regs);
     }
+    fn pad_empties(regs: Vec<Cell>) -> Vec<Cell> {
+        let len = regs.len();
+        regs.into_iter()
+            .chain(std::iter::repeat(Cell::Empty).take(32 - len))
+            .collect()
+    }
+
     #[test]
     fn test_simple_put_atom() {
-        test("hello.".to_string(), "hello.".to_string(), ());
+        test(
+            "hello.".to_string(),
+            "hello.".to_string(),
+            pad_empties(vec![Cell::Atom("hello".to_string())]),
+            true,
+        );
     }
 
     #[allow(unused)]
@@ -178,7 +195,8 @@ mod tests {
         test(
             r#"human(socrates). mortal(X) :- human(X)."#.to_string(),
             "mortal(socrates).".to_string(),
-            (),
+            vec![],
+            true,
         );
     }
 }
