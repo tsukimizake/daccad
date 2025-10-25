@@ -57,6 +57,12 @@ enum ExecMode {
     ResolvedToFalse,
 }
 
+#[derive(PartialEq, Eq, Debug)]
+enum ReadWriteMode {
+    Read,
+    Write,
+}
+
 fn exectute_impl(
     _heap: &mut Vec<Rc<Cell>>,
     _stack: &mut Vec<Rc<Frame>>,
@@ -67,6 +73,7 @@ fn exectute_impl(
     _env_p: &mut Rc<Frame>,
     _choice_p: &mut Rc<Frame>,
     _trail: &mut Vec<TrailEntry>,
+    read_write_mode: &mut ReadWriteMode,
 ) -> ExecMode {
     if let Some(current_instr) = instructions.get(*program_counter) {
         match current_instr {
@@ -99,6 +106,7 @@ fn exectute_impl(
                 let derefed = deref_reg(arg_registers, other_registers, reg);
                 match derefed {
                     Cell::Empty => {
+                        *read_write_mode = ReadWriteMode::Write;
                         let cell = Cell::Atom(name.clone());
                         match reg {
                             WamReg::A(index) => {
@@ -113,6 +121,7 @@ fn exectute_impl(
                     }
                     Cell::Atom(existing_name) => {
                         if existing_name == name {
+                            *read_write_mode = ReadWriteMode::Read;
                             ExecMode::Continue
                         } else {
                             ExecMode::ResolvedToFalse
@@ -197,6 +206,7 @@ pub fn execute_instructions(instructions: Vec<WamInstr>) -> (Registers, bool) {
             &mut env_p,
             &mut choice_p,
             &mut trail,
+            &mut ReadWriteMode::Read,
         );
         program_counter += 1;
     }
