@@ -66,13 +66,18 @@ enum ReadWriteMode {
 fn exectute_impl(
     _heap: &mut Vec<Rc<Cell>>,
     _stack: &mut Vec<Rc<Frame>>,
+    _trail: &mut Vec<TrailEntry>,
     arg_registers: &mut Vec<Cell>,
     other_registers: &mut Vec<Cell>,
     instructions: &[WamInstr],
     program_counter: &mut usize,
-    _env_p: &mut Rc<Frame>,
-    _choice_p: &mut Rc<Frame>,
-    _trail: &mut Vec<TrailEntry>,
+    return_address: &mut usize,
+    subterm_reg: &mut Rc<Cell>,
+    heap_backtrack_reg: &mut Rc<Cell>,
+    heap_reg: &mut Rc<Cell>,
+    backtrack_cut_reg: &mut Rc<Frame>,
+    backtrack_reg: &mut Rc<Frame>,
+    _env_reg: &mut Rc<Frame>,
     read_write_mode: &mut ReadWriteMode,
 ) -> ExecMode {
     if let Some(current_instr) = instructions.get(*program_counter) {
@@ -190,8 +195,15 @@ pub fn execute_instructions(instructions: Vec<WamInstr>) -> (Registers, bool) {
     let mut other_registers = vec![Cell::Empty; 32];
     let mut program_counter = 0;
     let mut env_p = stack_head.clone();
-    let mut choice_p = stack_head;
+    let mut choice_p = stack_head.clone();
     let mut trail = Vec::<TrailEntry>::with_capacity(32);
+    let mut return_address = 0;
+    let mut subterm_reg = Rc::new(Cell::Empty);
+    let mut heap_backtrack_reg = Rc::new(Cell::Empty);
+    let mut heap_reg = Rc::new(Cell::Empty);
+    let mut backtrack_cut_reg = stack_head.clone();
+    let mut backtrack_reg = stack_head;
+    let mut read_write_mode = ReadWriteMode::Read;
 
     let mut exec_mode = ExecMode::Continue;
 
@@ -199,14 +211,19 @@ pub fn execute_instructions(instructions: Vec<WamInstr>) -> (Registers, bool) {
         exec_mode = exectute_impl(
             &mut heap,
             &mut stack,
+            &mut trail,
             &mut arg_registers,
             &mut other_registers,
             &instructions,
             &mut program_counter,
+            &mut return_address,
+            &mut subterm_reg,
+            &mut heap_backtrack_reg,
+            &mut heap_reg,
+            &mut backtrack_cut_reg,
+            &mut backtrack_reg,
             &mut env_p,
-            &mut choice_p,
-            &mut trail,
-            &mut ReadWriteMode::Read,
+            &mut read_write_mode,
         );
         program_counter += 1;
     }
