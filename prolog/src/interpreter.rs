@@ -64,9 +64,9 @@ enum ReadWriteMode {
 }
 
 fn exectute_impl(
-    _heap: &mut Vec<Rc<Cell>>,
-    _stack: &mut Vec<Rc<Frame>>,
-    _trail: &mut Vec<TrailEntry>,
+    heap: &mut Vec<Rc<Cell>>,
+    stack: &mut Vec<Rc<Frame>>,
+    trail: &mut Vec<TrailEntry>,
     arg_registers: &mut Vec<Cell>,
     other_registers: &mut Vec<Cell>,
     instructions: &[WamInstr],
@@ -94,6 +94,20 @@ fn exectute_impl(
                         ExecMode::Continue
                     }
                 }
+            }
+
+            WamInstr::PutStruct {
+                functor,
+                arity,
+                reg,
+            } => {
+                let obj = Rc::new(Cell::Struct {
+                    functor: functor.clone(),
+                    arity: *arity,
+                });
+                heap.push(obj.clone());
+                set_register(other_registers, reg, Cell::Ref(obj));
+                ExecMode::Continue
             }
 
             WamInstr::PutVar { name: _, reg } => match reg {
