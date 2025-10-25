@@ -98,13 +98,13 @@ fn exectute_impl(
     backtrack_reg: &mut Rc<Frame>,
     _env_reg: &mut Rc<Frame>,
     read_write_mode: &mut ReadWriteMode,
-) -> ExecMode {
+    exec_mode: &mut ExecMode,
+) {
     if let Some(current_instr) = instructions.get(*program_counter) {
         match current_instr {
             WamInstr::PutAtom { name, reg } => {
                 let cell = Cell::Atom(name.clone());
                 registers.set_register(reg, cell);
-                ExecMode::Continue
             }
 
             WamInstr::PutStruct {
@@ -118,18 +118,15 @@ fn exectute_impl(
                 });
                 heap.push(ob.clone());
                 registers.set_register(reg, Cell::Ref(ob));
-                ExecMode::Continue
             }
 
             WamInstr::SetVar { reg } => {
                 let ob = Rc::new(Cell::Empty);
                 heap.push(ob.clone());
                 registers.set_register(reg, Cell::Ref(ob));
-                ExecMode::Continue
             }
             WamInstr::PutVar { name: _, reg } => {
                 registers.set_register(reg, Cell::Empty);
-                ExecMode::Continue
             }
 
             WamInstr::GetAtom { name, reg } => {
@@ -139,14 +136,12 @@ fn exectute_impl(
                         *read_write_mode = ReadWriteMode::Write;
                         let cell = Cell::Atom(name.clone());
                         registers.set_register(reg, cell);
-                        ExecMode::Continue
                     }
                     Cell::Atom(existing_name) => {
                         if existing_name == name {
                             *read_write_mode = ReadWriteMode::Read;
-                            ExecMode::Continue
                         } else {
-                            ExecMode::ResolvedToFalse
+                            *exec_mode = ExecMode::ResolvedToFalse;
                         }
                     }
                     _ => todo!(),
@@ -158,15 +153,14 @@ fn exectute_impl(
                 to_linum,
             } => {
                 *program_counter = *to_linum;
-                ExecMode::Continue
             }
-            WamInstr::Label { name: _, arity: _ } => ExecMode::Continue,
+            WamInstr::Label { name: _, arity: _ } => {}
             WamInstr::Proceed => {
-                ExecMode::ResolvedToTrue // TODO stackをたどるか何かして解決すべきpredicateが残っていないかcheck
+                *exec_mode = ExecMode::ResolvedToTrue; // TODO stackをたどるか何かして解決すべきpredicateが残っていないかcheck
             }
             WamInstr::Error { message } => {
                 println!("{}", message);
-                ExecMode::ResolvedToFalse
+                *exec_mode = ExecMode::ResolvedToFalse;
             }
 
             _ => {
@@ -217,7 +211,7 @@ pub fn execute_instructions(instructions: Vec<WamInstr>) -> (Registers, bool) {
     let mut exec_mode = ExecMode::Continue;
 
     while exec_mode == ExecMode::Continue {
-        exec_mode = exectute_impl(
+        exectute_impl(
             &mut heap,
             &mut stack,
             &mut trail,
@@ -232,6 +226,7 @@ pub fn execute_instructions(instructions: Vec<WamInstr>) -> (Registers, bool) {
             &mut backtrack_reg,
             &mut env_p,
             &mut read_write_mode,
+            &mut exec_mode,
         );
         program_counter += 1;
     }
