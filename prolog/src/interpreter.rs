@@ -112,15 +112,21 @@ fn exectute_impl(
                 arity,
                 reg,
             } => {
-                let obj = Rc::new(Cell::Struct {
+                let ob = Rc::new(Cell::Struct {
                     functor: functor.clone(),
                     arity: *arity,
                 });
-                heap.push(obj.clone());
-                registers.set_register(reg, Cell::Ref(obj));
+                heap.push(ob.clone());
+                registers.set_register(reg, Cell::Ref(ob));
                 ExecMode::Continue
             }
 
+            WamInstr::SetVar { reg } => {
+                let ob = Rc::new(Cell::Empty);
+                heap.push(ob.clone());
+                registers.set_register(reg, Cell::Ref(ob));
+                ExecMode::Continue
+            }
             WamInstr::PutVar { name: _, reg } => {
                 registers.set_register(reg, Cell::Empty);
                 ExecMode::Continue
