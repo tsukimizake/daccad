@@ -13,8 +13,43 @@ pub enum Cell {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Registers {
-    pub arg_registers: Vec<Cell>,
-    pub other_registers: Vec<Cell>,
+    arg_registers: Vec<Cell>,
+    other_registers: Vec<Cell>,
+}
+
+impl Registers {
+    fn new() -> Self {
+        Self {
+            arg_registers: vec![Cell::Empty; 32],
+            other_registers: vec![Cell::Empty; 32],
+        }
+    }
+
+    pub fn get_arg_registers(&self) -> &[Cell] {
+        &self.arg_registers
+    }
+    pub fn get_register<'a>(&'a self, reg: &WamReg) -> &'a Cell {
+        let (vec, index) = match reg {
+            WamReg::A(index) => (&self.arg_registers, *index),
+            WamReg::X(index) => (&self.other_registers, *index),
+        };
+        if index < vec.len() {
+            &vec[index]
+        } else {
+            &Cell::Empty
+        }
+    }
+
+    pub fn set_register(&mut self, reg: &WamReg, value: Cell) {
+        let (vec, index) = match reg {
+            WamReg::A(index) => (&mut self.arg_registers, *index),
+            WamReg::X(index) => (&mut self.other_registers, *index),
+        };
+        if index >= vec.len() {
+            vec.resize(index + 1, Cell::Empty);
+        }
+        vec[index] = value;
+    }
 }
 
 #[allow(unused)]
@@ -35,21 +70,6 @@ struct TrailEntry {
     cells_to_revert: Vec<Cell>,
 }
 
-fn get_register(registers: &[Cell], index: usize) -> &Cell {
-    if index < registers.len() {
-        &registers[index]
-    } else {
-        &Cell::Empty
-    }
-}
-
-fn set_register(registers: &mut Vec<Cell>, index: usize, value: Cell) {
-    if index >= registers.len() {
-        registers.resize(index + 1, Cell::Empty);
-    }
-    registers[index] = value;
-}
-
 #[derive(PartialEq, Eq, Debug)]
 enum ExecMode {
     Continue,
@@ -67,8 +87,7 @@ fn exectute_impl(
     heap: &mut Vec<Rc<Cell>>,
     stack: &mut Vec<Rc<Frame>>,
     trail: &mut Vec<TrailEntry>,
-    arg_registers: &mut Vec<Cell>,
-    other_registers: &mut Vec<Cell>,
+    registers: &mut Registers,
     instructions: &[WamInstr],
     program_counter: &mut usize,
     return_address: &mut usize,
@@ -84,16 +103,8 @@ fn exectute_impl(
         match current_instr {
             WamInstr::PutAtom { name, reg } => {
                 let cell = Cell::Atom(name.clone());
-                match reg {
-                    WamReg::A(index) => {
-                        set_register(arg_registers, *index, cell);
-                        ExecMode::Continue
-                    }
-                    WamReg::X(index) => {
-                        set_register(other_registers, *index, cell);
-                        ExecMode::Continue
-                    }
-                }
+                registers.set_register(reg, cell);
+                ExecMode::Continue
             }
 
             WamInstr::PutStruct {
@@ -106,37 +117,23 @@ fn exectute_impl(
                     arity: *arity,
                 });
                 heap.push(obj.clone());
-                set_register(other_registers, reg, Cell::Ref(obj));
+                registers.set_register(reg, Cell::Ref(obj));
                 ExecMode::Continue
             }
 
-            WamInstr::PutVar { name: _, reg } => match reg {
-                WamReg::A(index) => {
-                    set_register(arg_registers, *index, Cell::Empty);
-                    ExecMode::Continue
-                }
-                WamReg::X(index) => {
-                    set_register(other_registers, *index, Cell::Empty);
-                    ExecMode::Continue
-                }
-            },
+            WamInstr::PutVar { name: _, reg } => {
+                registers.set_register(reg, Cell::Empty);
+                ExecMode::Continue
+            }
 
             WamInstr::GetAtom { name, reg } => {
-                let derefed = deref_reg(arg_registers, other_registers, reg);
+                let derefed = deref_reg(registers, reg);
                 match derefed {
                     Cell::Empty => {
                         *read_write_mode = ReadWriteMode::Write;
                         let cell = Cell::Atom(name.clone());
-                        match reg {
-                            WamReg::A(index) => {
-                                set_register(arg_registers, *index, cell);
-                                ExecMode::Continue
-                            }
-                            WamReg::X(index) => {
-                                set_register(other_registers, *index, cell);
-                                ExecMode::Continue
-                            }
-                        }
+                        registers.set_register(reg, cell);
+                        ExecMode::Continue
                     }
                     Cell::Atom(existing_name) => {
                         if existing_name == name {
@@ -175,15 +172,8 @@ fn exectute_impl(
     }
 }
 
-fn deref_reg<'a>(
-    arg_registers: &'a [Cell],
-    other_registers: &'a [Cell],
-    wamreg: &WamReg,
-) -> &'a Cell {
-    let reg = match wamreg {
-        WamReg::A(index) => get_register(arg_registers, *index),
-        WamReg::X(index) => get_register(other_registers, *index),
-    };
+fn deref_reg<'a>(registers: &'a Registers, wamreg: &WamReg) -> &'a Cell {
+    let reg = registers.get_register(wamreg);
 
     match reg {
         Cell::Ref(rc_cell) => {
@@ -205,8 +195,7 @@ pub fn execute_instructions(instructions: Vec<WamInstr>) -> (Registers, bool) {
     let mut heap = Vec::<Rc<Cell>>::with_capacity(32);
     let stack_head = Rc::new(Frame::Base {});
     let mut stack = vec![stack_head.clone()];
-    let mut arg_registers = vec![Cell::Empty; 32];
-    let mut other_registers = vec![Cell::Empty; 32];
+    let mut registers = Registers::new();
     let mut program_counter = 0;
     let mut env_p = stack_head.clone();
     let mut choice_p = stack_head.clone();
@@ -226,8 +215,7 @@ pub fn execute_instructions(instructions: Vec<WamInstr>) -> (Registers, bool) {
             &mut heap,
             &mut stack,
             &mut trail,
-            &mut arg_registers,
-            &mut other_registers,
+            &mut registers,
             &instructions,
             &mut program_counter,
             &mut return_address,
@@ -242,11 +230,7 @@ pub fn execute_instructions(instructions: Vec<WamInstr>) -> (Registers, bool) {
         program_counter += 1;
     }
 
-    let res_registers = Registers {
-        arg_registers,
-        other_registers,
-    };
-    (res_registers, exec_mode == ExecMode::ResolvedToTrue)
+    (registers, exec_mode == ExecMode::ResolvedToTrue)
 }
 
 #[cfg(test)]
@@ -263,7 +247,7 @@ mod tests {
         let all_instructions = compile_link::compile_link(query, db);
         let (regs, result) = execute_instructions(all_instructions);
         assert_eq!(result, expect_res);
-        assert_eq!(regs.arg_registers, expect_regs);
+        assert_eq!(regs.get_arg_registers(), expect_regs);
     }
     fn pad_empties_to_32(regs: Vec<Cell>) -> Vec<Cell> {
         let len = regs.len();
