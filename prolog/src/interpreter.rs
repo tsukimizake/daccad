@@ -144,7 +144,9 @@ fn exectute_impl(
                             *exec_mode = ExecMode::ResolvedToFalse;
                         }
                     }
-                    _ => todo!(),
+                    _ => {
+                        *exec_mode = ExecMode::ResolvedToFalse;
+                    }
                 }
             }
             WamInstr::Call {
