@@ -10,56 +10,13 @@ impl RegisterManager {
         RegisterManager { count: 0 }
     }
 
-    pub fn get_next(&mut self) -> usize {
+    pub fn get_next(&mut self) -> WamReg {
         let current = self.count;
         self.count += 1;
-        current
+        WamReg::X(current)
     }
 
     pub fn reset(&mut self) {
         self.count = 0;
     }
 }
-
-pub(crate) struct ArgRegisterManager {
-    inner: RegisterManager,
-}
-
-impl ArgRegisterManager {
-    pub fn new() -> Self {
-        ArgRegisterManager {
-            inner: RegisterManager::new(),
-        }
-    }
-
-    pub fn get_next(&mut self) -> WamReg {
-        WamReg::X(self.inner.get_next())
-    }
-
-    pub fn reset(&mut self) {
-        self.inner.reset();
-    }
-}
-
-pub(crate) struct XRegisterManager {
-    inner: RegisterManager,
-    arity: usize,
-}
-
-impl XRegisterManager {
-    pub fn new(arity: usize) -> Self {
-        XRegisterManager {
-            inner: RegisterManager::new(),
-            arity,
-        }
-    }
-
-    pub fn get_next(&mut self) -> WamReg {
-        WamReg::X(self.arity + self.inner.get_next())
-    }
-
-    pub fn reset(&mut self) {
-        self.inner.reset();
-    }
-}
-

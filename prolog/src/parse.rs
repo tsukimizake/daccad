@@ -10,6 +10,7 @@ use nom::{
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Term {
+    Atom(String),
     Var(String),
     TopAtom(String),
     InnerAtom(String),

@@ -3,12 +3,12 @@ use std::{collections::HashMap, iter::once};
 use crate::{
     compiler_bytecode::{WamInstr, WamReg},
     parse::{Clause, Term},
-    register_managers::ArgRegisterManager,
+    register_managers::RegisterManager,
 };
 
 pub fn compile_db(db: Vec<Clause>) -> Vec<WamInstr> {
     let mut declared_vars = HashMap::new();
-    let mut arg_register_manager = ArgRegisterManager::new();
+    let mut arg_register_manager = RegisterManager::new();
 
     db.into_iter()
         .flat_map(|clause| match clause {
@@ -28,7 +28,7 @@ pub fn compile_db(db: Vec<Clause>) -> Vec<WamInstr> {
 fn compile_db_term(
     term: Term,
     declared_vars: &mut HashMap<String, WamReg>,
-    arg_register_manager: &mut ArgRegisterManager,
+    arg_register_manager: &mut RegisterManager,
 ) -> Vec<WamInstr> {
     match term {
         Term::Number(val) => {
