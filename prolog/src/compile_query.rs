@@ -258,7 +258,7 @@ mod tests {
     }
 
     #[test]
-    fn query_atom() {
+    fn top_atom() {
         test_compile_query_helper(
             "parent.",
             vec![WamInstr::SetVar {
@@ -269,7 +269,7 @@ mod tests {
     }
 
     #[test]
-    fn query_example() {
+    fn book_example() {
         test_compile_query_helper(
             "p(Z, h(Z,W), f(W)).",
             vec![
@@ -314,5 +314,44 @@ mod tests {
                 },
             ],
         )
+    }
+    #[test]
+    fn same_functor_other_arg() {
+        test_compile_query_helper(
+            "p(a(X), a(Y)).",
+            vec![
+                WamInstr::PutStruct {
+                    functor: "a".to_string(),
+                    arity: 1,
+                    reg: WamReg::X(1),
+                },
+                WamInstr::SetVal {
+                    name: "X".to_string(),
+                    reg: WamReg::X(2),
+                },
+                WamInstr::PutStruct {
+                    functor: "a".to_string(),
+                    arity: 1,
+                    reg: WamReg::X(3),
+                },
+                WamInstr::SetVal {
+                    name: "Y".to_string(),
+                    reg: WamReg::X(4),
+                },
+                WamInstr::PutStruct {
+                    functor: "p".to_string(),
+                    arity: 2,
+                    reg: WamReg::X(0),
+                },
+                WamInstr::SetVal {
+                    name: "a".to_string(),
+                    reg: WamReg::X(1),
+                },
+                WamInstr::SetVal {
+                    name: "a".to_string(),
+                    reg: WamReg::X(3),
+                },
+            ],
+        );
     }
 }
