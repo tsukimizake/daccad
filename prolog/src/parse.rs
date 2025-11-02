@@ -56,6 +56,16 @@ impl Term {
         }
         convert_term(self)
     }
+    pub fn get_name(&self) -> &str {
+        match self {
+            Term::Atom(name) | Term::Var(name) | Term::TopAtom(name) | Term::InnerAtom(name) => {
+                name
+            }
+            Term::TopStruct { functor, .. } | Term::InnerStruct { functor, .. } => functor,
+            Term::Number(_) => "<number>",
+            Term::List { .. } => "<list>",
+        }
+    }
 }
 
 impl Clause {

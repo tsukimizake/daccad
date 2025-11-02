@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::iter::once;
 
 use crate::compiler_bytecode::{WamInstr, WamReg};
 use crate::parse::Term;
@@ -15,7 +16,7 @@ fn compile_query_term(term: Term) -> Vec<WamInstr> {
     let mut declared_vars = HashMap::new();
     let mut reg_manager = RegisterManager::new();
     alloc_registers(&term, &mut declared_vars, &mut reg_manager);
-    compile_defs(&declared_vars).collect()
+    compile_defs(&term, &declared_vars)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -103,36 +104,103 @@ fn alloc_registers(
     }
 }
 
-fn compile_defs(reg_map: &HashMap<RegKey, WamReg>) -> impl Iterator<Item = WamInstr> {
-    let (top, rest): (Vec<_>, Vec<_>) = reg_map
-        .into_iter()
-        .partition(|(key, _)| matches!(key, RegKey::TopFunctor { .. }));
-    rest.into_iter()
-        .map(|(key, &reg)| match key {
-            RegKey::Functor {
-                name,
-                arity,
-                args: _,
-            } => WamInstr::PutStruct {
-                functor: name.clone(),
-                arity: *arity,
-                reg,
-            },
-            RegKey::Var(_) => WamInstr::SetVar { reg },
-            _ => unreachable!(),
-        })
-        .chain(top.into_iter().map(|(key, &reg)| match key {
-            RegKey::TopFunctor {
-                name,
-                arity,
-                args: _,
-            } => WamInstr::PutStruct {
-                functor: name.clone(),
-                arity: *arity,
-                reg,
-            },
-            _ => unreachable!(),
-        }))
+fn compile_defs(term: &Term, reg_map: &HashMap<RegKey, WamReg>) -> Vec<WamInstr> {
+    match term {
+        Term::TopStruct { functor, args } => {
+            let functor_children = args
+                .iter()
+                .filter(|arg| matches!(arg, Term::InnerStruct { .. }))
+                .flat_map(|arg| compile_defs(arg, reg_map));
+
+            let key = to_regkey(term, reg_map);
+
+            functor_children
+                .chain(once(WamInstr::PutStruct {
+                    functor: functor.clone(),
+                    arity: args.len(),
+                    reg: reg_map[&key],
+                }))
+                .chain(args.iter().map(|arg| {
+                    let reg = reg_map[&to_regkey(arg, reg_map)];
+                    WamInstr::SetVal {
+                        name: arg.get_name().to_string(),
+                        reg,
+                    }
+                }))
+                .collect()
+        }
+        Term::InnerStruct { functor, args } => {
+            let functor_children = args
+                .iter()
+                .filter(|arg| matches!(arg, Term::InnerStruct { .. }))
+                .flat_map(|arg| compile_defs(arg, reg_map));
+
+            let key = to_regkey(term, reg_map);
+
+            functor_children
+                .chain(once(WamInstr::PutStruct {
+                    functor: functor.clone(),
+                    arity: args.len(),
+                    reg: reg_map[&key],
+                }))
+                .chain(args.iter().map(|arg| {
+                    let reg = reg_map[&to_regkey(arg, reg_map)];
+                    WamInstr::SetVal {
+                        name: arg.get_name().to_string(),
+                        reg,
+                    }
+                }))
+                .collect()
+        }
+        Term::InnerAtom(name) => {
+            let key = to_regkey(term, reg_map);
+            vec![WamInstr::SetVar {
+                name: name.clone(),
+                reg: reg_map[&key],
+            }]
+        }
+        Term::Var(name) => {
+            let key = to_regkey(term, reg_map);
+            vec![WamInstr::SetVar {
+                name: name.clone(),
+                reg: reg_map[&key],
+            }]
+        }
+        Term::TopAtom(name) => {
+            let key = to_regkey(term, reg_map);
+            vec![WamInstr::SetVar {
+                name: name.clone(),
+                reg: reg_map[&key],
+            }]
+        }
+
+        _ => todo!("{:?}", term),
+    }
+}
+
+fn to_regkey(term: &Term, reg_map: &HashMap<RegKey, WamReg>) -> RegKey {
+    match term {
+        Term::TopStruct { functor, args } => RegKey::TopFunctor {
+            name: functor.clone(),
+            arity: args.len(),
+            args: args
+                .iter()
+                .map(|arg| to_regkey(arg, reg_map))
+                .map(|k| reg_map[&k])
+                .collect(),
+        },
+        Term::InnerStruct { functor, args } => RegKey::Functor {
+            name: functor.clone(),
+            arity: args.len(),
+            args: args
+                .iter()
+                .map(|arg| to_regkey(arg, reg_map))
+                .map(|k| reg_map[&k])
+                .collect(),
+        },
+        Term::InnerAtom(name) | Term::Var(name) | Term::TopAtom(name) => RegKey::Var(name.clone()),
+        _ => panic!("Unsupported term for RegKey: {:?}", term),
+    }
 }
 
 #[cfg(test)]
@@ -193,20 +261,9 @@ mod tests {
     fn query_atom() {
         test_compile_query_helper(
             "parent.",
-            vec![WamInstr::CallTemp {
-                predicate: "parent".to_string(),
-                arity: 0,
-            }],
-        );
-    }
-
-    #[test]
-    fn query_top_atom() {
-        test_compile_query_helper(
-            "hello.",
-            vec![WamInstr::CallTemp {
-                predicate: "hello".to_string(),
-                arity: 0,
+            vec![WamInstr::SetVar {
+                name: "parent".to_string(),
+                reg: WamReg::X(0),
             }],
         );
     }
@@ -219,24 +276,42 @@ mod tests {
                 WamInstr::PutStruct {
                     functor: "h".to_string(),
                     arity: 2,
+                    reg: WamReg::X(2),
+                },
+                WamInstr::SetVal {
+                    name: "Z".to_string(),
+                    reg: WamReg::X(1),
+                },
+                WamInstr::SetVal {
+                    name: "W".to_string(),
                     reg: WamReg::X(3),
                 },
-                WamInstr::SetVar { reg: WamReg::X(2) },
-                WamInstr::SetVar { reg: WamReg::X(5) },
                 WamInstr::PutStruct {
                     functor: "f".to_string(),
                     arity: 1,
                     reg: WamReg::X(4),
                 },
-                WamInstr::SetVal { reg: WamReg::X(5) },
+                WamInstr::SetVal {
+                    name: "W".to_string(),
+                    reg: WamReg::X(3),
+                },
                 WamInstr::PutStruct {
                     functor: "p".to_string(),
                     arity: 3,
+                    reg: WamReg::X(0),
+                },
+                WamInstr::SetVal {
+                    name: "Z".to_string(),
                     reg: WamReg::X(1),
                 },
-                WamInstr::SetVal { reg: WamReg::X(5) },
-                WamInstr::SetVal { reg: WamReg::X(3) },
-                WamInstr::SetVal { reg: WamReg::X(4) },
+                WamInstr::SetVal {
+                    name: "h".to_string(),
+                    reg: WamReg::X(2),
+                },
+                WamInstr::SetVal {
+                    name: "f".to_string(),
+                    reg: WamReg::X(4),
+                },
             ],
         )
     }

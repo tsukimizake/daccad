@@ -43,9 +43,11 @@ pub enum WamInstr {
     },
 
     SetVar {
+        name: String,
         reg: WamReg,
     },
     SetVal {
+        name: String,
         reg: WamReg,
     },
     SetAtom {
