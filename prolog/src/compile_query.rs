@@ -15,11 +15,16 @@ fn compile_query_term(term: Term) -> Vec<WamInstr> {
     let mut declared_vars = HashMap::new();
     let mut reg_manager = RegisterManager::new();
     alloc_registers(&term, &mut declared_vars, &mut reg_manager);
-    todo!()
+    compile_defs(&declared_vars).collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum RegKey {
+    TopFunctor {
+        name: String,
+        arity: usize,
+        args: Vec<WamReg>,
+    },
     Functor {
         name: String,
         arity: usize,
@@ -40,7 +45,7 @@ fn alloc_registers(
                 .iter()
                 .map(|arg| alloc_registers(arg, declared_vars, reg_manager))
                 .collect();
-            let f = RegKey::Functor {
+            let f = RegKey::TopFunctor {
                 name: functor.clone(),
                 arity: args.len(),
                 args: arg_keys,
@@ -84,8 +89,50 @@ fn alloc_registers(
                 reg
             }
         }
-        _ => todo!(),
+        Term::TopAtom(name) => {
+            let k = RegKey::Var(name.clone());
+            if let Some(&reg) = declared_vars.get(&k) {
+                reg
+            } else {
+                let reg = reg_manager.get_next();
+                declared_vars.insert(k.clone(), reg);
+                reg
+            }
+        }
+        _ => todo!("{:?}", term),
     }
+}
+
+fn compile_defs(reg_map: &HashMap<RegKey, WamReg>) -> impl Iterator<Item = WamInstr> {
+    let (top, rest): (Vec<_>, Vec<_>) = reg_map
+        .into_iter()
+        .partition(|(key, _)| matches!(key, RegKey::TopFunctor { .. }));
+    rest.into_iter()
+        .map(|(key, &reg)| match key {
+            RegKey::Functor {
+                name,
+                arity,
+                args: _,
+            } => WamInstr::PutStruct {
+                functor: name.clone(),
+                arity: *arity,
+                reg,
+            },
+            RegKey::Var(_) => WamInstr::SetVar { reg },
+            _ => unreachable!(),
+        })
+        .chain(top.into_iter().map(|(key, &reg)| match key {
+            RegKey::TopFunctor {
+                name,
+                arity,
+                args: _,
+            } => WamInstr::PutStruct {
+                functor: name.clone(),
+                arity: *arity,
+                reg,
+            },
+            _ => unreachable!(),
+        }))
 }
 
 #[cfg(test)]
@@ -107,7 +154,7 @@ mod tests {
         test_alloc_registers_helper("p(Z, h(Z,W), f(W)).", {
             let mut map = HashMap::new();
             map.insert(
-                RegKey::Functor {
+                RegKey::TopFunctor {
                     name: "p".to_string(),
                     arity: 3,
                     args: vec![WamReg::X(1), WamReg::X(2), WamReg::X(4)],
