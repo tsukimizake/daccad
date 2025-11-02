@@ -72,10 +72,7 @@ fn compile_query_term(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        compiler_bytecode::WamInstr,
-        parse::query,
-    };
+    use crate::{compiler_bytecode::WamInstr, parse::query};
 
     fn test_compile_query_helper(source: &str, expected: Vec<WamInstr>) {
         let parsed_query = query(source).unwrap().1;
@@ -103,5 +100,35 @@ mod tests {
                 arity: 0,
             }],
         );
+    }
+
+    #[test]
+    fn query_example() {
+        test_compile_query_helper(
+            "p(Z, h(Z,W), f(W)).",
+            vec![
+                WamInstr::PutStruct {
+                    functor: "h".to_string(),
+                    arity: 2,
+                    reg: WamReg::X(3),
+                },
+                WamInstr::SetVar { reg: WamReg::X(2) },
+                WamInstr::SetVar { reg: WamReg::X(5) },
+                WamInstr::PutStruct {
+                    functor: "f".to_string(),
+                    arity: 1,
+                    reg: WamReg::X(4),
+                },
+                WamInstr::SetVal { reg: WamReg::X(5) },
+                WamInstr::PutStruct {
+                    functor: "p".to_string(),
+                    arity: 3,
+                    reg: WamReg::X(1),
+                },
+                WamInstr::SetVal { reg: WamReg::X(5) },
+                WamInstr::SetVal { reg: WamReg::X(3) },
+                WamInstr::SetVal { reg: WamReg::X(4) },
+            ],
+        )
     }
 }

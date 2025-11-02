@@ -57,7 +57,7 @@ mod tests {
             },
             WamInstr::GetAtom {
                 name: "john".to_string(),
-                reg: WamReg::A(0),
+                reg: WamReg::X(0),
             },
             WamInstr::Proceed,
         ];
@@ -65,7 +65,7 @@ mod tests {
         let query_instructions = vec![
             WamInstr::PutAtom {
                 name: "john".to_string(),
-                reg: WamReg::A(0),
+                reg: WamReg::X(0),
             },
             WamInstr::CallTemp {
                 predicate: "parent".to_string(),
@@ -78,7 +78,7 @@ mod tests {
         let expected = vec![
             WamInstr::PutAtom {
                 name: "john".to_string(),
-                reg: WamReg::A(0),
+                reg: WamReg::X(0),
             },
             WamInstr::Call {
                 predicate: "parent".to_string(),
@@ -91,7 +91,7 @@ mod tests {
             },
             WamInstr::GetAtom {
                 name: "john".to_string(),
-                reg: WamReg::A(0),
+                reg: WamReg::X(0),
             },
             WamInstr::Proceed,
         ];

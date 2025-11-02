@@ -33,7 +33,7 @@ impl ArgRegisterManager {
     }
 
     pub fn get_next(&mut self) -> WamReg {
-        WamReg::A(self.inner.get_next())
+        WamReg::X(self.inner.get_next())
     }
 
     pub fn reset(&mut self) {
@@ -43,17 +43,19 @@ impl ArgRegisterManager {
 
 pub(crate) struct XRegisterManager {
     inner: RegisterManager,
+    arity: usize,
 }
 
 impl XRegisterManager {
-    pub fn new() -> Self {
+    pub fn new(arity: usize) -> Self {
         XRegisterManager {
             inner: RegisterManager::new(),
+            arity,
         }
     }
 
     pub fn get_next(&mut self) -> WamReg {
-        WamReg::X(self.inner.get_next())
+        WamReg::X(self.arity + self.inner.get_next())
     }
 
     pub fn reset(&mut self) {

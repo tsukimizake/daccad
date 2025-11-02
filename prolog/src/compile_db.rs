@@ -126,11 +126,11 @@ mod tests {
                 },
                 WamInstr::GetAtom {
                     name: "john".to_string(),
-                    reg: WamReg::A(0),
+                    reg: WamReg::X(0),
                 },
                 WamInstr::GetAtom {
                     name: "doe".to_string(),
-                    reg: WamReg::A(1),
+                    reg: WamReg::X(1),
                 },
                 WamInstr::Proceed,
             ],
@@ -148,9 +148,9 @@ mod tests {
                 },
                 WamInstr::GetVar {
                     name: "X".to_string(),
-                    reg: WamReg::A(0),
+                    reg: WamReg::X(0),
                 },
-                WamInstr::UnifyVar { reg: WamReg::A(0) },
+                WamInstr::UnifyVar { reg: WamReg::X(0) },
                 WamInstr::Proceed,
             ],
         );

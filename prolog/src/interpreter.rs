@@ -13,42 +13,38 @@ pub enum Cell {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Registers {
-    arg_registers: Vec<Cell>,
-    other_registers: Vec<Cell>,
+    registers: Vec<Cell>,
 }
 
 impl Registers {
     fn new() -> Self {
         Self {
-            arg_registers: vec![Cell::Empty; 32],
-            other_registers: vec![Cell::Empty; 32],
+            registers: vec![Cell::Empty; 32],
         }
     }
 
     pub fn get_arg_registers(&self) -> &[Cell] {
-        &self.arg_registers
+        &self.registers
     }
     pub fn get_register<'a>(&'a self, reg: &WamReg) -> &'a Cell {
-        let (vec, index) = match reg {
-            WamReg::A(index) => (&self.arg_registers, *index),
-            WamReg::X(index) => (&self.other_registers, *index),
+        let index = match reg {
+            WamReg::X(index) => *index,
         };
-        if index < vec.len() {
-            &vec[index]
+        if index < self.registers.len() {
+            &self.registers[index]
         } else {
             &Cell::Empty
         }
     }
 
     pub fn set_register(&mut self, reg: &WamReg, value: Cell) {
-        let (vec, index) = match reg {
-            WamReg::A(index) => (&mut self.arg_registers, *index),
-            WamReg::X(index) => (&mut self.other_registers, *index),
+        let index = match reg {
+            WamReg::X(index) => *index,
         };
-        if index >= vec.len() {
-            vec.resize(index + 1, Cell::Empty);
+        if index >= self.registers.len() {
+            self.registers.resize(index + 1, Cell::Empty);
         }
-        vec[index] = value;
+        self.registers[index] = value;
     }
 }
 
@@ -120,11 +116,16 @@ fn exectute_impl(
                 registers.set_register(reg, Cell::Ref(ob));
             }
 
-            WamInstr::SetVar { reg } => {
+            WamInstr::SetVal { reg } => {
                 let ob = Rc::new(Cell::Empty);
                 heap.push(ob.clone());
                 registers.set_register(reg, Cell::Ref(ob));
             }
+            WamInstr::SetVal { reg } => {
+                let value = registers.get_register(reg).clone();
+                heap.push(Rc::new(value));
+            }
+
             WamInstr::PutVar { name: _, reg } => {
                 registers.set_register(reg, Cell::Empty);
             }
@@ -264,13 +265,13 @@ mod tests {
         test(
             "hello.".to_string(),
             "hello.".to_string(),
-            pad_empties_to_32(vec![]), // TopAtomは引数レジスタに値を設定しない
+            pad_empties_to_32(vec![]), // PutAtomは引数レジスタに値を設定しない
             true,
         );
         test(
             "hello.".to_string(),
             "bye.".to_string(),
-            pad_empties_to_32(vec![]), // TopAtomは引数レジスタに値を設定しない
+            pad_empties_to_32(vec![]), // PutAtomは引数レジスタに値を設定しない
             false,
         );
     }

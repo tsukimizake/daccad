@@ -1,7 +1,6 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WamReg {
-    A(usize), // Argument register
-    X(usize), // Temporary register
+    X(usize),
 }
 
 #[allow(unused)]
@@ -44,6 +43,9 @@ pub enum WamInstr {
     },
 
     SetVar {
+        reg: WamReg,
+    },
+    SetVal {
         reg: WamReg,
     },
     SetAtom {
