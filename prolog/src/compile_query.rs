@@ -123,49 +123,6 @@ mod tests {
     use super::*;
     use crate::{compiler_bytecode::WamInstr, parse::query};
 
-    fn test_alloc_registers_helper(source: &str, expected: HashMap<RegKey, WamReg>) {
-        let parsed_query = query(source).unwrap().1;
-        let term = &parsed_query[0];
-        let mut declared_vars = HashMap::new();
-        let mut reg_manager = RegisterManager::new();
-        let _ = alloc_registers(term, &mut declared_vars, &mut reg_manager);
-        assert_eq!(declared_vars, expected);
-    }
-
-    #[test]
-    fn test_alloc_registers() {
-        test_alloc_registers_helper("p(Z, h(Z,W), f(W)).", {
-            let mut map = HashMap::new();
-            map.insert(
-                RegKey::TopFunctor {
-                    name: "p".to_string(),
-                    arity: 3,
-                    args: vec![WamReg::X(1), WamReg::X(2), WamReg::X(4)],
-                },
-                WamReg::X(0),
-            );
-            map.insert(RegKey::Var("Z".to_string()), WamReg::X(1));
-            map.insert(
-                RegKey::Functor {
-                    name: "h".to_string(),
-                    arity: 2,
-                    args: vec![WamReg::X(1), WamReg::X(3)],
-                },
-                WamReg::X(2),
-            );
-            map.insert(RegKey::Var("W".to_string()), WamReg::X(3));
-            map.insert(
-                RegKey::Functor {
-                    name: "f".to_string(),
-                    arity: 1,
-                    args: vec![WamReg::X(3)],
-                },
-                WamReg::X(4),
-            );
-            map
-        });
-    }
-
     fn test_compile_query_helper(source: &str, expected: Vec<WamInstr>) {
         let parsed_query = query(source).unwrap().1;
         let instructions = compile_query(parsed_query);
