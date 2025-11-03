@@ -3,7 +3,7 @@ use std::iter::once;
 
 use crate::compiler_bytecode::{WamInstr, WamReg};
 use crate::parse::Term;
-use crate::register_managers::RegisterManager;
+use crate::register_managers::{alloc_registers, RegKey, RegisterManager};
 
 pub fn compile_query(query_terms: Vec<Term>) -> Vec<WamInstr> {
     query_terms
@@ -17,91 +17,6 @@ fn compile_query_term(term: Term) -> Vec<WamInstr> {
     let mut reg_manager = RegisterManager::new();
     alloc_registers(&term, &mut declared_vars, &mut reg_manager);
     compile_defs(&term, &declared_vars)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum RegKey {
-    TopFunctor {
-        name: String,
-        arity: usize,
-        args: Vec<WamReg>,
-    },
-    Functor {
-        name: String,
-        arity: usize,
-        args: Vec<WamReg>,
-    },
-    Var(String),
-}
-
-fn alloc_registers(
-    term: &Term,
-    declared_vars: &mut HashMap<RegKey, WamReg>,
-    reg_manager: &mut RegisterManager,
-) -> WamReg {
-    match term {
-        Term::TopStruct { functor, args } => {
-            let reg = reg_manager.get_next();
-            let arg_keys = args
-                .iter()
-                .map(|arg| alloc_registers(arg, declared_vars, reg_manager))
-                .collect();
-            let f = RegKey::TopFunctor {
-                name: functor.clone(),
-                arity: args.len(),
-                args: arg_keys,
-            };
-            declared_vars.insert(f.clone(), reg);
-            reg
-        }
-
-        Term::InnerStruct { functor, args } => {
-            let reg = reg_manager.get_next();
-            let arg_keys = args
-                .iter()
-                .map(|arg| alloc_registers(arg, declared_vars, reg_manager))
-                .collect();
-            let f = RegKey::Functor {
-                name: functor.clone(),
-                arity: args.len(),
-                args: arg_keys,
-            };
-            declared_vars.insert(f.clone(), reg);
-            reg
-        }
-
-        Term::InnerAtom(name) => {
-            let k = RegKey::Var(name.clone());
-            if let Some(&reg) = declared_vars.get(&k) {
-                reg
-            } else {
-                let reg = reg_manager.get_next();
-                declared_vars.insert(k.clone(), reg);
-                reg
-            }
-        }
-        Term::Var(name) => {
-            let k = RegKey::Var(name.clone());
-            if let Some(&reg) = declared_vars.get(&k) {
-                reg
-            } else {
-                let reg = reg_manager.get_next();
-                declared_vars.insert(k.clone(), reg);
-                reg
-            }
-        }
-        Term::TopAtom(name) => {
-            let k = RegKey::Var(name.clone());
-            if let Some(&reg) = declared_vars.get(&k) {
-                reg
-            } else {
-                let reg = reg_manager.get_next();
-                declared_vars.insert(k.clone(), reg);
-                reg
-            }
-        }
-        _ => todo!("{:?}", term),
-    }
 }
 
 fn compile_defs(term: &Term, reg_map: &HashMap<RegKey, WamReg>) -> Vec<WamInstr> {
