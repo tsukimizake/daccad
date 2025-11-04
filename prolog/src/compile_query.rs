@@ -3,7 +3,7 @@ use std::iter::once;
 
 use crate::compiler_bytecode::{WamInstr, WamReg};
 use crate::parse::Term;
-use crate::register_managers::{alloc_registers, RegKey, RegisterManager};
+use crate::register_managers::{RegKey, RegisterManager, alloc_registers, to_regkey};
 
 pub fn compile_query(query_terms: Vec<Term>) -> Vec<WamInstr> {
     query_terms
@@ -90,31 +90,6 @@ fn compile_defs(term: &Term, reg_map: &HashMap<RegKey, WamReg>) -> Vec<WamInstr>
         }
 
         _ => todo!("{:?}", term),
-    }
-}
-
-fn to_regkey(term: &Term, reg_map: &HashMap<RegKey, WamReg>) -> RegKey {
-    match term {
-        Term::TopStruct { functor, args } => RegKey::TopFunctor {
-            name: functor.clone(),
-            arity: args.len(),
-            args: args
-                .iter()
-                .map(|arg| to_regkey(arg, reg_map))
-                .map(|k| reg_map[&k])
-                .collect(),
-        },
-        Term::InnerStruct { functor, args } => RegKey::Functor {
-            name: functor.clone(),
-            arity: args.len(),
-            args: args
-                .iter()
-                .map(|arg| to_regkey(arg, reg_map))
-                .map(|k| reg_map[&k])
-                .collect(),
-        },
-        Term::InnerAtom(name) | Term::Var(name) | Term::TopAtom(name) => RegKey::Var(name.clone()),
-        _ => panic!("Unsupported term for RegKey: {:?}", term),
     }
 }
 

@@ -1,21 +1,23 @@
-use std::{collections::HashMap, iter::once};
+use std::{
+    collections::{HashMap, HashSet},
+    iter::once,
+};
 
 use crate::{
     compiler_bytecode::{WamInstr, WamReg},
     parse::{Clause, Term},
-    register_managers::RegisterManager,
+    register_managers::{RegKey, RegisterManager, alloc_registers, to_regkey},
 };
 
 pub fn compile_db(db: Vec<Clause>) -> Vec<WamInstr> {
-    let mut declared_vars = HashMap::new();
-    let mut arg_register_manager = RegisterManager::new();
-
     db.into_iter()
         .flat_map(|clause| match clause {
             Clause::Fact(term) => {
-                let res = compile_db_term(term, &mut declared_vars, &mut arg_register_manager);
-                declared_vars.clear();
-                arg_register_manager.reset();
+                let mut reg_map = HashMap::new();
+                let mut reg_manager = RegisterManager::new();
+                alloc_registers(&term, &mut reg_map, &mut reg_manager);
+                let mut declared_vars = HashSet::new();
+                let res = compile_db_term(&term, &reg_map, &mut declared_vars);
                 res
             }
             Clause::Rule { head: _, body: _ } => {
@@ -26,65 +28,105 @@ pub fn compile_db(db: Vec<Clause>) -> Vec<WamInstr> {
 }
 
 fn compile_db_term(
-    term: Term,
-    declared_vars: &mut HashMap<String, WamReg>,
-    arg_register_manager: &mut RegisterManager,
+    term: &Term,
+    reg_map: &HashMap<RegKey, WamReg>,
+    declared_vars: &mut HashSet<RegKey>,
 ) -> Vec<WamInstr> {
     match term {
-        Term::Number(val) => {
-            vec![WamInstr::UnifyNumber { val }]
+        Term::TopStruct { functor, args } => {
+            let functor_children = args.iter().filter(|arg| {
+                matches!(arg, Term::InnerStruct { .. }) | matches!(arg, Term::InnerAtom { .. })
+            });
+            let key = to_regkey(term, reg_map);
+            once(WamInstr::GetStruct {
+                functor: functor.clone(),
+                arity: args.len(),
+                reg: reg_map[&key],
+            })
+            .chain(args.iter().map(|functor_child| {
+                let key = to_regkey(functor_child, reg_map);
+                if declared_vars.contains(&key) {
+                    WamInstr::UnifyVal {
+                        name: functor_child.get_name().to_string(),
+                        reg: reg_map[&key],
+                    }
+                } else {
+                    declared_vars.insert(key.clone());
+                    WamInstr::UnifyVar {
+                        name: functor_child.get_name().to_string(),
+                        reg: reg_map[&key],
+                    }
+                }
+            }))
+            .collect::<Vec<WamInstr>>()
+            .into_iter()
+            .chain(functor_children.flat_map(|arg| compile_db_term(arg, reg_map, declared_vars)))
+            .collect()
         }
-        Term::TopAtom(name) => {
-            let head = WamInstr::Label { name, arity: 0 };
-            vec![head, WamInstr::Proceed]
-        }
-        Term::InnerAtom(name) => {
-            if let Some(&reg) = declared_vars.get(&name) {
-                vec![WamInstr::UnifyAtom { reg }]
-            } else {
-                let reg = arg_register_manager.get_next();
-                declared_vars.insert(name.clone(), reg);
-                vec![WamInstr::GetAtom { name, reg }]
-            }
+        Term::InnerStruct { functor, args } => {
+            let functor_children = args.iter().filter(|arg| {
+                matches!(arg, Term::InnerStruct { .. }) | matches!(arg, Term::InnerAtom { .. })
+            });
+            let key = to_regkey(term, reg_map);
+            once(WamInstr::GetStruct {
+                functor: functor.clone(),
+                arity: args.len(),
+                reg: reg_map[&key],
+            })
+            .chain(args.iter().map(|functor_child| {
+                let key = to_regkey(functor_child, reg_map);
+                if declared_vars.contains(&key) {
+                    WamInstr::UnifyVal {
+                        name: functor_child.get_name().to_string(),
+                        reg: reg_map[&key],
+                    }
+                } else {
+                    declared_vars.insert(key.clone());
+                    WamInstr::UnifyVar {
+                        name: functor_child.get_name().to_string(),
+                        reg: reg_map[&key],
+                    }
+                }
+            }))
+            .collect::<Vec<WamInstr>>()
+            .into_iter()
+            .chain(functor_children.flat_map(|arg| compile_db_term(arg, reg_map, declared_vars)))
+            .collect()
         }
         Term::Var(name) => {
-            if let Some(&reg) = declared_vars.get(&name) {
-                vec![WamInstr::UnifyVar { reg }]
+            let key = RegKey::Var(name.clone());
+            if declared_vars.contains(&key) {
+                vec![WamInstr::UnifyVal {
+                    name: name.clone(),
+                    reg: reg_map[&key],
+                }]
             } else {
-                let reg = arg_register_manager.get_next();
-                declared_vars.insert(name.clone(), reg);
-                vec![WamInstr::GetVar { name, reg }]
+                declared_vars.insert(key.clone());
+                vec![WamInstr::UnifyVar {
+                    name: name.clone(),
+                    reg: reg_map[&key],
+                }]
             }
         }
-
-        Term::TopStruct { functor, args } => {
-            let head = WamInstr::Label {
-                name: functor,
-                arity: args.len(),
-            };
-            let last = WamInstr::Proceed;
-
-            let rest = args
-                .into_iter()
-                .flat_map(|arg| compile_db_term(arg, declared_vars, arg_register_manager));
-            once(head).chain(rest).chain(once(last)).collect()
-        }
-
-        Term::InnerStruct { functor, args } => {
-            let arity = args.len();
-            let head = WamInstr::GetStruct {
-                functor,
-                arity,
-                reg: arg_register_manager.get_next(),
-            };
-
-            let tail = args
-                .into_iter()
-                .flat_map(|arg| compile_db_term(arg, declared_vars, arg_register_manager));
-            once(head).chain(tail).collect()
+        Term::InnerAtom(name) => {
+            let key = RegKey::Var(name.clone());
+            if declared_vars.contains(&key) {
+                vec![WamInstr::GetStruct {
+                    functor: name.clone(),
+                    arity: 0,
+                    reg: reg_map[&key],
+                }]
+            } else {
+                declared_vars.insert(key.clone());
+                vec![WamInstr::GetStruct {
+                    functor: name.clone(),
+                    arity: 0,
+                    reg: reg_map[&key],
+                }]
+            }
         }
         _ => {
-            todo!()
+            todo!("{:?}", term)
         }
     }
 }
@@ -102,70 +144,63 @@ mod tests {
     }
 
     #[test]
-    fn db_atom() {
+    fn sample_code() {
         test_compile_db_helper(
-            "parent.",
+            "p(f(X),h(Y,f(a)), Y).",
             vec![
-                WamInstr::Label {
-                    name: "parent".to_string(),
-                    arity: 0,
-                },
-                WamInstr::Proceed,
-            ],
-        );
-    }
-
-    #[test]
-    fn db_clause() {
-        test_compile_db_helper(
-            "parent(john, doe).",
-            vec![
-                WamInstr::Label {
-                    name: "parent".to_string(),
-                    arity: 2,
-                },
-                WamInstr::GetAtom {
-                    name: "john".to_string(),
+                WamInstr::GetStruct {
+                    functor: "p".to_string(),
+                    arity: 3,
                     reg: WamReg::X(0),
                 },
-                WamInstr::GetAtom {
-                    name: "doe".to_string(),
+                WamInstr::UnifyVar {
+                    name: "f".to_string(),
                     reg: WamReg::X(1),
                 },
-                WamInstr::Proceed,
-            ],
-        );
-    }
-
-    #[test]
-    fn db_clause_var_shared() {
-        test_compile_db_helper(
-            "a(X, X).",
-            vec![
-                WamInstr::Label {
-                    name: "a".to_string(),
-                    arity: 2,
+                WamInstr::UnifyVar {
+                    name: "h".to_string(),
+                    reg: WamReg::X(3),
                 },
-                WamInstr::GetVar {
+                WamInstr::UnifyVar {
+                    name: "Y".to_string(),
+                    reg: WamReg::X(4),
+                },
+                WamInstr::GetStruct {
+                    functor: "f".to_string(),
+                    arity: 1,
+                    reg: WamReg::X(1),
+                },
+                WamInstr::UnifyVar {
                     name: "X".to_string(),
-                    reg: WamReg::X(0),
+                    reg: WamReg::X(2),
                 },
-                WamInstr::UnifyVar { reg: WamReg::X(0) },
-                WamInstr::Proceed,
-            ],
-        );
-    }
-
-    #[test]
-    fn db_top_atom() {
-        test_compile_db_helper(
-            "hello.",
-            vec![
-                WamInstr::Label {
-                    name: "hello".to_string(),
+                WamInstr::GetStruct {
+                    functor: "h".to_string(),
+                    arity: 2,
+                    reg: WamReg::X(3),
+                },
+                WamInstr::UnifyVal {
+                    name: "Y".to_string(),
+                    reg: WamReg::X(4),
+                },
+                WamInstr::UnifyVar {
+                    name: "f".to_string(),
+                    reg: WamReg::X(5),
+                },
+                WamInstr::GetStruct {
+                    functor: "f".to_string(),
+                    arity: 1,
+                    reg: WamReg::X(5),
+                },
+                WamInstr::UnifyVar {
+                    name: "a".to_string(),
+                    reg: WamReg::X(6),
+                },
+                WamInstr::GetStruct {
+                    functor: "a".to_string(),
                     arity: 0,
+                    reg: WamReg::X(6),
                 },
-                WamInstr::Proceed,
             ],
         );
     }

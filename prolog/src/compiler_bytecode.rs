@@ -11,6 +11,8 @@ pub enum WamInstr {
         arity: usize,
         reg: WamReg,
     },
+
+    // TODO Atom系はobsolete getstructure/0にまとめる
     GetAtom {
         name: String,
         reg: WamReg,
@@ -57,13 +59,13 @@ pub enum WamInstr {
         val: i64,
     },
 
-    UnifyAtom {
+    UnifyVar {
+        name: String,
         reg: WamReg,
     },
-    UnifyNumber {
-        val: i64,
-    },
-    UnifyVar {
+
+    UnifyVal {
+        name: String,
         reg: WamReg,
     },
 

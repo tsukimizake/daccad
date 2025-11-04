@@ -108,6 +108,31 @@ pub(crate) fn alloc_registers(
     }
 }
 
+pub(crate) fn to_regkey(term: &Term, reg_map: &HashMap<RegKey, WamReg>) -> RegKey {
+    match term {
+        Term::TopStruct { functor, args } => RegKey::TopFunctor {
+            name: functor.clone(),
+            arity: args.len(),
+            args: args
+                .iter()
+                .map(|arg| to_regkey(arg, reg_map))
+                .map(|k| reg_map[&k])
+                .collect(),
+        },
+        Term::InnerStruct { functor, args } => RegKey::Functor {
+            name: functor.clone(),
+            arity: args.len(),
+            args: args
+                .iter()
+                .map(|arg| to_regkey(arg, reg_map))
+                .map(|k| reg_map[&k])
+                .collect(),
+        },
+        Term::InnerAtom(name) | Term::Var(name) | Term::TopAtom(name) => RegKey::Var(name.clone()),
+        _ => panic!("Unsupported term for RegKey: {:?}", term),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
