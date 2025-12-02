@@ -114,6 +114,7 @@ fn exectute_impl(
                 });
                 heap.push(ob.clone());
                 registers.set_register(reg, Cell::Ref(ob));
+                exec_put_struct_children(instructions, program_counter, registers, heap, *arity);
             }
 
             WamInstr::SetVar { reg, name: _ } => {
@@ -172,6 +173,33 @@ fn exectute_impl(
         }
     } else {
         todo!();
+    }
+}
+
+fn exec_put_struct_children(
+    instructions: &[WamInstr],
+    program_counter: &mut usize,
+    registers: &mut Registers,
+    heap: &mut Vec<Rc<Cell>>,
+    arity: usize,
+) {
+    for _ in 0..arity {
+        *program_counter += 1;
+        let current_instr = instructions.get(*program_counter).unwrap();
+        match current_instr {
+            WamInstr::SetVar { reg, name: _ } => {
+                let ob = Rc::new(Cell::Empty);
+                heap.push(ob.clone());
+                registers.set_register(reg, Cell::Ref(ob));
+            }
+            WamInstr::SetVal { reg, name: _ } => {
+                let value = registers.get_register(reg).clone();
+                heap.push(Rc::new(value));
+            }
+            _ => {
+                panic!("Expected SetVar or SetVal in struct children");
+            }
+        }
     }
 }
 
