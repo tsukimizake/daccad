@@ -33,39 +33,9 @@ fn compile_db_term(
     declared_vars: &mut HashSet<RegKey>,
 ) -> Vec<WamInstr> {
     match term {
-        Term::TopStruct { functor, args } => {
+        Term::Struct { functor, args } => {
             let functor_children = args.iter().filter(|arg| {
-                matches!(arg, Term::InnerStruct { .. }) | matches!(arg, Term::InnerAtom { .. })
-            });
-            let key = to_regkey(term, reg_map);
-            once(WamInstr::GetStruct {
-                functor: functor.clone(),
-                arity: args.len(),
-                reg: reg_map[&key],
-            })
-            .chain(args.iter().map(|functor_child| {
-                let key = to_regkey(functor_child, reg_map);
-                if declared_vars.contains(&key) {
-                    WamInstr::UnifyVal {
-                        name: functor_child.get_name().to_string(),
-                        reg: reg_map[&key],
-                    }
-                } else {
-                    declared_vars.insert(key.clone());
-                    WamInstr::UnifyVar {
-                        name: functor_child.get_name().to_string(),
-                        reg: reg_map[&key],
-                    }
-                }
-            }))
-            .collect::<Vec<WamInstr>>()
-            .into_iter()
-            .chain(functor_children.flat_map(|arg| compile_db_term(arg, reg_map, declared_vars)))
-            .collect()
-        }
-        Term::InnerStruct { functor, args } => {
-            let functor_children = args.iter().filter(|arg| {
-                matches!(arg, Term::InnerStruct { .. }) | matches!(arg, Term::InnerAtom { .. })
+                matches!(arg, Term::Struct { .. }) | matches!(arg, Term::Atom { .. })
             });
             let key = to_regkey(term, reg_map);
             once(WamInstr::GetStruct {
@@ -108,7 +78,7 @@ fn compile_db_term(
                 }]
             }
         }
-        Term::InnerAtom(name) => {
+        Term::Atom(name) => {
             let key = RegKey::Var(name.clone());
             if declared_vars.contains(&key) {
                 vec![WamInstr::GetStruct {

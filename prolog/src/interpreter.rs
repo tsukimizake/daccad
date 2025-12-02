@@ -167,8 +167,8 @@ fn exectute_impl(
                 *exec_mode = ExecMode::ResolvedToFalse;
             }
 
-            _ => {
-                todo!();
+            instr => {
+                todo!("{:?}", instr);
             }
         }
     } else {

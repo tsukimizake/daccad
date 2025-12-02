@@ -21,10 +21,10 @@ fn compile_query_term(term: Term) -> Vec<WamInstr> {
 
 fn compile_defs(term: &Term, reg_map: &HashMap<RegKey, WamReg>) -> Vec<WamInstr> {
     match term {
-        Term::TopStruct { functor, args } => {
+        Term::Struct { functor, args } => {
             let functor_children = args
                 .iter()
-                .filter(|arg| matches!(arg, Term::InnerStruct { .. }))
+                .filter(|arg| matches!(arg, Term::Struct { .. }))
                 .flat_map(|arg| compile_defs(arg, reg_map));
 
             let key = to_regkey(term, reg_map);
@@ -44,30 +44,7 @@ fn compile_defs(term: &Term, reg_map: &HashMap<RegKey, WamReg>) -> Vec<WamInstr>
                 }))
                 .collect()
         }
-        Term::InnerStruct { functor, args } => {
-            let functor_children = args
-                .iter()
-                .filter(|arg| matches!(arg, Term::InnerStruct { .. }))
-                .flat_map(|arg| compile_defs(arg, reg_map));
-
-            let key = to_regkey(term, reg_map);
-
-            functor_children
-                .chain(once(WamInstr::PutStruct {
-                    functor: functor.clone(),
-                    arity: args.len(),
-                    reg: reg_map[&key],
-                }))
-                .chain(args.iter().map(|arg| {
-                    let reg = reg_map[&to_regkey(arg, reg_map)];
-                    WamInstr::SetVal {
-                        name: arg.get_name().to_string(),
-                        reg,
-                    }
-                }))
-                .collect()
-        }
-        Term::InnerAtom(name) => {
+        Term::Atom(name) => {
             let key = to_regkey(term, reg_map);
             vec![WamInstr::SetVar {
                 name: name.clone(),
@@ -75,13 +52,6 @@ fn compile_defs(term: &Term, reg_map: &HashMap<RegKey, WamReg>) -> Vec<WamInstr>
             }]
         }
         Term::Var(name) => {
-            let key = to_regkey(term, reg_map);
-            vec![WamInstr::SetVar {
-                name: name.clone(),
-                reg: reg_map[&key],
-            }]
-        }
-        Term::TopAtom(name) => {
             let key = to_regkey(term, reg_map);
             vec![WamInstr::SetVar {
                 name: name.clone(),

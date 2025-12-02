@@ -12,14 +12,8 @@ use nom::{
 pub enum Term {
     Atom(String),
     Var(String),
-    TopAtom(String),
-    InnerAtom(String),
     Number(i64),
-    TopStruct {
-        functor: String,
-        args: Vec<Term>,
-    },
-    InnerStruct {
+    Struct {
         functor: String,
         args: Vec<Term>,
     }, // functorは一旦全てInnerStructにパースし、最後にconvert_termする
@@ -36,32 +30,10 @@ pub enum Clause {
 }
 
 impl Term {
-    pub fn mark_top_level_structs(self) -> Self {
-        fn convert_term(term: Term) -> Term {
-            match term {
-                Term::InnerStruct { functor, args } => Term::TopStruct { functor, args },
-                Term::InnerAtom(name) => Term::TopAtom(name),
-                Term::TopStruct { functor, args } => Term::TopStruct { functor, args },
-                Term::List { items, tail } => {
-                    let converted_items: Vec<Term> =
-                        items.into_iter().map(|item| convert_term(item)).collect();
-                    let converted_tail = tail.map(|t| Box::new(convert_term(*t)));
-                    Term::List {
-                        items: converted_items,
-                        tail: converted_tail,
-                    }
-                }
-                other => other,
-            }
-        }
-        convert_term(self)
-    }
     pub fn get_name(&self) -> &str {
         match self {
-            Term::Atom(name) | Term::Var(name) | Term::TopAtom(name) | Term::InnerAtom(name) => {
-                name
-            }
-            Term::TopStruct { functor, .. } | Term::InnerStruct { functor, .. } => functor,
+            Term::Var(name) | Term::Atom(name) => name,
+            Term::Struct { functor, .. } => functor,
             Term::Number(_) => "<number>",
             Term::List { .. } => "<list>",
         }
@@ -71,13 +43,10 @@ impl Term {
 impl Clause {
     pub fn mark_top_level_structs(self) -> Self {
         match self {
-            Clause::Fact(term) => Clause::Fact(term.mark_top_level_structs()),
+            Clause::Fact(term) => Clause::Fact(term),
             Clause::Rule { head, body } => Clause::Rule {
-                head: head.mark_top_level_structs(),
-                body: body
-                    .into_iter()
-                    .map(|term| term.mark_top_level_structs())
-                    .collect(),
+                head: head,
+                body: body,
             },
         }
     }
@@ -90,7 +59,7 @@ pub(super) fn v(name: impl Into<String>) -> Term {
 
 #[allow(unused)]
 pub(super) fn a(name: impl Into<String>) -> Term {
-    Term::InnerAtom(name.into())
+    Term::Atom(name.into())
 }
 
 pub(super) type PResult<'a, T> = IResult<&'a str, T>;
@@ -240,11 +209,11 @@ fn atom_term(input: &str) -> PResult<'_, Term> {
             ))),
         ),
         |(name, maybe_args)| match maybe_args {
-            Some(args) => Term::InnerStruct {
+            Some(args) => Term::Struct {
                 functor: name,
                 args,
             },
-            None => Term::InnerAtom(name),
+            None => Term::Atom(name),
         },
     ))
     .parse(input)
@@ -299,10 +268,7 @@ pub fn database(input: &str) -> Result<Vec<Clause>, nom::Err<nom::error::Error<&
 
 pub fn query(input: &str) -> PResult<'_, Vec<Term>> {
     map(ws(terminated(goals, cut(ws(char('.'))))), |terms| {
-        terms
-            .into_iter()
-            .map(|term| term.mark_top_level_structs())
-            .collect()
+        terms.into_iter().map(|term| term).collect()
     })
     .parse(input)
 }
@@ -321,7 +287,7 @@ mod tests {
     fn parse_fact() {
         assert_clause(
             "parent(alice, bob).",
-            Clause::Fact(Term::TopStruct {
+            Clause::Fact(Term::Struct {
                 functor: "parent".to_string(),
                 args: vec![a("alice"), a("bob")],
             }),
@@ -333,16 +299,16 @@ mod tests {
         assert_clause(
             "grandparent(X, Y) :- parent(X, Z), parent(Z, Y).",
             Clause::Rule {
-                head: Term::TopStruct {
+                head: Term::Struct {
                     functor: "grandparent".to_string(),
                     args: vec![v("X"), v("Y")],
                 },
                 body: vec![
-                    Term::TopStruct {
+                    Term::Struct {
                         functor: "parent".to_string(),
                         args: vec![v("X"), v("Z")],
                     },
-                    Term::TopStruct {
+                    Term::Struct {
                         functor: "parent".to_string(),
                         args: vec![v("Z"), v("Y")],
                     },
@@ -355,7 +321,7 @@ mod tests {
     fn parse_list() {
         assert_clause(
             "member(X, [X|_]).",
-            Clause::Fact(Term::TopStruct {
+            Clause::Fact(Term::Struct {
                 functor: "member".to_string(),
                 args: vec![
                     v("X"),
@@ -374,7 +340,7 @@ mod tests {
         let (_, qs) = query(src).unwrap();
         assert_eq!(
             qs,
-            vec![Term::TopStruct {
+            vec![Term::Struct {
                 functor: "member".to_string(),
                 args: vec![
                     v("X"),
@@ -408,15 +374,15 @@ mod tests {
         let converted = clause.mark_top_level_structs();
 
         match converted {
-            Clause::Fact(Term::TopStruct { functor, args }) => {
+            Clause::Fact(Term::Struct { functor, args }) => {
                 assert_eq!(functor, "parent");
                 assert_eq!(args.len(), 2);
-                assert!(matches!(args[0], Term::InnerAtom(_)));
+                assert!(matches!(args[0], Term::Atom(_)));
                 match &args[1] {
-                    Term::InnerStruct { functor, args } => {
+                    Term::Struct { functor, args } => {
                         assert_eq!(functor, "f");
                         assert_eq!(args.len(), 1);
-                        assert!(matches!(args[0], Term::InnerAtom(_)));
+                        assert!(matches!(args[0], Term::Atom(_)));
                     }
                     _ => panic!("Expected nested Struct, got {:?}", args[1]),
                 }
@@ -432,7 +398,7 @@ mod tests {
         let converted = clause.mark_top_level_structs();
 
         match converted {
-            Clause::Fact(Term::TopAtom(name)) => {
+            Clause::Fact(Term::Atom(name)) => {
                 assert_eq!(name, "hello");
             }
             _ => panic!("Expected TopAtom fact, got {:?}", converted),

@@ -25,11 +25,6 @@ impl RegisterManager {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum RegKey {
-    TopFunctor {
-        name: String,
-        arity: usize,
-        args: Vec<WamReg>,
-    },
     Functor {
         name: String,
         arity: usize,
@@ -44,22 +39,7 @@ pub(crate) fn alloc_registers(
     reg_manager: &mut RegisterManager,
 ) -> WamReg {
     match term {
-        Term::TopStruct { functor, args } => {
-            let reg = reg_manager.get_next();
-            let arg_keys = args
-                .iter()
-                .map(|arg| alloc_registers(arg, declared_vars, reg_manager))
-                .collect();
-            let f = RegKey::TopFunctor {
-                name: functor.clone(),
-                arity: args.len(),
-                args: arg_keys,
-            };
-            declared_vars.insert(f.clone(), reg);
-            reg
-        }
-
-        Term::InnerStruct { functor, args } => {
+        Term::Struct { functor, args } => {
             let reg = reg_manager.get_next();
             let arg_keys = args
                 .iter()
@@ -74,7 +54,7 @@ pub(crate) fn alloc_registers(
             reg
         }
 
-        Term::InnerAtom(name) => {
+        Term::Atom(name) => {
             let k = RegKey::Var(name.clone());
             if let Some(&reg) = declared_vars.get(&k) {
                 reg
@@ -94,23 +74,13 @@ pub(crate) fn alloc_registers(
                 reg
             }
         }
-        Term::TopAtom(name) => {
-            let k = RegKey::Var(name.clone());
-            if let Some(&reg) = declared_vars.get(&k) {
-                reg
-            } else {
-                let reg = reg_manager.get_next();
-                declared_vars.insert(k.clone(), reg);
-                reg
-            }
-        }
         _ => todo!("{:?}", term),
     }
 }
 
 pub(crate) fn to_regkey(term: &Term, reg_map: &HashMap<RegKey, WamReg>) -> RegKey {
     match term {
-        Term::TopStruct { functor, args } => RegKey::TopFunctor {
+        Term::Struct { functor, args } => RegKey::Functor {
             name: functor.clone(),
             arity: args.len(),
             args: args
@@ -119,16 +89,7 @@ pub(crate) fn to_regkey(term: &Term, reg_map: &HashMap<RegKey, WamReg>) -> RegKe
                 .map(|k| reg_map[&k])
                 .collect(),
         },
-        Term::InnerStruct { functor, args } => RegKey::Functor {
-            name: functor.clone(),
-            arity: args.len(),
-            args: args
-                .iter()
-                .map(|arg| to_regkey(arg, reg_map))
-                .map(|k| reg_map[&k])
-                .collect(),
-        },
-        Term::InnerAtom(name) | Term::Var(name) | Term::TopAtom(name) => RegKey::Var(name.clone()),
+        Term::Atom(name) | Term::Var(name) => RegKey::Var(name.clone()),
         _ => panic!("Unsupported term for RegKey: {:?}", term),
     }
 }
@@ -152,7 +113,7 @@ mod tests {
         test_alloc_registers_helper("p(Z, h(Z,W), f(W)).", {
             let mut map = HashMap::new();
             map.insert(
-                RegKey::TopFunctor {
+                RegKey::Functor {
                     name: "p".to_string(),
                     arity: 3,
                     args: vec![WamReg::X(1), WamReg::X(2), WamReg::X(4)],
@@ -186,7 +147,7 @@ mod tests {
         test_alloc_registers_helper("p(f(X), h(Y, f(a)), Y).", {
             let mut map = HashMap::new();
             map.insert(
-                RegKey::TopFunctor {
+                RegKey::Functor {
                     name: "p".to_string(),
                     arity: 3,
                     args: vec![WamReg::X(1), WamReg::X(3), WamReg::X(4)],
