@@ -116,7 +116,7 @@ fn exectute_impl(
                 registers.set_register(reg, Cell::Ref(ob));
             }
 
-            WamInstr::SetVal { reg, name: _ } => {
+            WamInstr::SetVar { reg, name: _ } => {
                 let ob = Rc::new(Cell::Empty);
                 heap.push(ob.clone());
                 registers.set_register(reg, Cell::Ref(ob));
