@@ -73,12 +73,6 @@ enum ExecMode {
     ResolvedToFalse,
 }
 
-#[derive(PartialEq, Eq, Debug)]
-enum ReadWriteMode {
-    Read,
-    Write,
-}
-
 fn exectute_impl(
     heap: &mut Vec<Rc<Cell>>,
     stack: &mut Vec<Rc<Frame>>,
@@ -93,7 +87,6 @@ fn exectute_impl(
     backtrack_cut_reg: &mut Rc<Frame>,
     backtrack_reg: &mut Rc<Frame>,
     _env_reg: &mut Rc<Frame>,
-    read_write_mode: &mut ReadWriteMode,
     exec_mode: &mut ExecMode,
 ) {
     if let Some(current_instr) = instructions.get(*program_counter) {
@@ -131,17 +124,25 @@ fn exectute_impl(
                 registers.set_register(reg, Cell::Empty);
             }
 
-            WamInstr::GetAtom { name, reg } => {
+            WamInstr::GetStruct {
+                functor,
+                arity,
+                reg,
+            } => {
                 let derefed = deref_reg(registers, reg);
                 match derefed {
                     Cell::Empty => {
-                        *read_write_mode = ReadWriteMode::Write;
-                        let cell = Cell::Atom(name.clone());
+                        // write mode
+                        let cell = Cell::Atom(functor.clone());
                         registers.set_register(reg, cell);
                     }
-                    Cell::Atom(existing_name) => {
-                        if existing_name == name {
-                            *read_write_mode = ReadWriteMode::Read;
+                    Cell::Struct {
+                        functor: existing_functor,
+                        arity: existing_arity,
+                    } => {
+                        // read mode
+                        if existing_functor == functor && existing_arity == arity {
+                            // proceed to unify children
                         } else {
                             *exec_mode = ExecMode::ResolvedToFalse;
                         }
@@ -229,7 +230,7 @@ pub fn execute_instructions(instructions: Vec<WamInstr>) -> (Registers, bool) {
     let mut registers = Registers::new();
     let mut program_counter = 0;
     let mut env_p = stack_head.clone();
-    let mut choice_p = stack_head.clone();
+    // let mut choice_p = stack_head.clone();
     let mut trail = Vec::<TrailEntry>::with_capacity(32);
     let mut return_address = 0;
     let mut subterm_reg = Rc::new(Cell::Empty);
@@ -237,7 +238,6 @@ pub fn execute_instructions(instructions: Vec<WamInstr>) -> (Registers, bool) {
     let mut heap_reg = Rc::new(Cell::Empty);
     let mut backtrack_cut_reg = stack_head.clone();
     let mut backtrack_reg = stack_head;
-    let mut read_write_mode = ReadWriteMode::Read;
 
     let mut exec_mode = ExecMode::Continue;
 
@@ -256,7 +256,6 @@ pub fn execute_instructions(instructions: Vec<WamInstr>) -> (Registers, bool) {
             &mut backtrack_cut_reg,
             &mut backtrack_reg,
             &mut env_p,
-            &mut read_write_mode,
             &mut exec_mode,
         );
         program_counter += 1;
