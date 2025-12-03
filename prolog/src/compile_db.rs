@@ -17,7 +17,8 @@ pub fn compile_db(db: Vec<Clause>) -> Vec<WamInstr> {
                 let mut reg_manager = RegisterManager::new();
                 alloc_registers(&term, &mut reg_map, &mut reg_manager);
                 let mut declared_vars = HashSet::new();
-                let res = compile_db_term(&term, &reg_map, &mut declared_vars);
+                let mut res = compile_db_term(&term, &reg_map, &mut declared_vars);
+                res.push(WamInstr::Proceed);
                 res
             }
             Clause::Rule { head: _, body: _ } => {
@@ -35,7 +36,7 @@ fn compile_db_term(
     match term {
         Term::Struct { functor, args } => {
             let functor_children = args.iter().filter(|arg| {
-                matches!(arg, Term::Struct { .. }) | matches!(arg, Term::Atom { .. })
+                matches!(arg, Term::Struct { .. })
             });
             let key = to_regkey(term, reg_map);
             once(WamInstr::GetStruct {
@@ -74,23 +75,6 @@ fn compile_db_term(
                 declared_vars.insert(key.clone());
                 vec![WamInstr::UnifyVar {
                     name: name.clone(),
-                    reg: reg_map[&key],
-                }]
-            }
-        }
-        Term::Atom(name) => {
-            let key = RegKey::Var(name.clone());
-            if declared_vars.contains(&key) {
-                vec![WamInstr::GetStruct {
-                    functor: name.clone(),
-                    arity: 0,
-                    reg: reg_map[&key],
-                }]
-            } else {
-                declared_vars.insert(key.clone());
-                vec![WamInstr::GetStruct {
-                    functor: name.clone(),
-                    arity: 0,
                     reg: reg_map[&key],
                 }]
             }
@@ -171,6 +155,7 @@ mod tests {
                     arity: 0,
                     reg: WamReg::X(6),
                 },
+                WamInstr::Proceed,
             ],
         );
     }

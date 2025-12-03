@@ -44,13 +44,6 @@ fn compile_defs(term: &Term, reg_map: &HashMap<RegKey, WamReg>) -> Vec<WamInstr>
                 }))
                 .collect()
         }
-        Term::Atom(name) => {
-            let key = to_regkey(term, reg_map);
-            vec![WamInstr::SetVar {
-                name: name.clone(),
-                reg: reg_map[&key],
-            }]
-        }
         Term::Var(name) => {
             let key = to_regkey(term, reg_map);
             vec![WamInstr::SetVar {
@@ -78,8 +71,9 @@ mod tests {
     fn top_atom() {
         test_compile_query_helper(
             "parent.",
-            vec![WamInstr::SetVar {
-                name: "parent".to_string(),
+            vec![WamInstr::PutStruct {
+                functor: "parent".to_string(),
+                arity: 0,
                 reg: WamReg::X(0),
             }],
         );

@@ -10,13 +10,12 @@ use nom::{
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Term {
-    Atom(String),
     Var(String),
     Number(i64),
     Struct {
         functor: String,
         args: Vec<Term>,
-    }, // functorは一旦全てInnerStructにパースし、最後にconvert_termする
+    },
     List {
         items: Vec<Term>,
         tail: Option<Box<Term>>,
@@ -32,7 +31,7 @@ pub enum Clause {
 impl Term {
     pub fn get_name(&self) -> &str {
         match self {
-            Term::Var(name) | Term::Atom(name) => name,
+            Term::Var(name) => name,
             Term::Struct { functor, .. } => functor,
             Term::Number(_) => "<number>",
             Term::List { .. } => "<list>",
@@ -59,7 +58,10 @@ pub(super) fn v(name: impl Into<String>) -> Term {
 
 #[allow(unused)]
 pub(super) fn a(name: impl Into<String>) -> Term {
-    Term::Atom(name.into())
+    Term::Struct {
+        functor: name.into(),
+        args: vec![],
+    }
 }
 
 pub(super) type PResult<'a, T> = IResult<&'a str, T>;
@@ -213,7 +215,10 @@ fn atom_term(input: &str) -> PResult<'_, Term> {
                 functor: name,
                 args,
             },
-            None => Term::Atom(name),
+            None => Term::Struct {
+                functor: name,
+                args: vec![],
+            },
         },
     ))
     .parse(input)
@@ -377,12 +382,12 @@ mod tests {
             Clause::Fact(Term::Struct { functor, args }) => {
                 assert_eq!(functor, "parent");
                 assert_eq!(args.len(), 2);
-                assert!(matches!(args[0], Term::Atom(_)));
+                assert!(matches!(&args[0], Term::Struct { args, .. } if args.is_empty()));
                 match &args[1] {
                     Term::Struct { functor, args } => {
                         assert_eq!(functor, "f");
                         assert_eq!(args.len(), 1);
-                        assert!(matches!(args[0], Term::Atom(_)));
+                        assert!(matches!(&args[0], Term::Struct { args, .. } if args.is_empty()));
                     }
                     _ => panic!("Expected nested Struct, got {:?}", args[1]),
                 }
@@ -398,10 +403,11 @@ mod tests {
         let converted = clause.mark_top_level_structs();
 
         match converted {
-            Clause::Fact(Term::Atom(name)) => {
-                assert_eq!(name, "hello");
+            Clause::Fact(Term::Struct { functor, args }) => {
+                assert_eq!(functor, "hello");
+                assert_eq!(args.len(), 0);
             }
-            _ => panic!("Expected TopAtom fact, got {:?}", converted),
+            _ => panic!("Expected Struct with arity 0 fact, got {:?}", converted),
         }
     }
 }

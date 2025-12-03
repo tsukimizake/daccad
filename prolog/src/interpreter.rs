@@ -173,7 +173,7 @@ fn exectute_impl(
             }
         }
     } else {
-        todo!();
+        todo!("current_instr is None");
     }
 }
 
@@ -292,13 +292,19 @@ mod tests {
         test(
             "hello.".to_string(),
             "hello.".to_string(),
-            pad_empties_to_32(vec![]), // PutAtomは引数レジスタに値を設定しない
+            pad_empties_to_32(vec![Cell::Ref(Rc::new(Cell::Struct {
+                functor: "hello".to_string(),
+                arity: 0,
+            }))]),
             true,
         );
         test(
             "hello.".to_string(),
             "bye.".to_string(),
-            pad_empties_to_32(vec![]), // PutAtomは引数レジスタに値を設定しない
+            pad_empties_to_32(vec![Cell::Ref(Rc::new(Cell::Struct {
+                functor: "bye".to_string(),
+                arity: 0,
+            }))]),
             false,
         );
     }

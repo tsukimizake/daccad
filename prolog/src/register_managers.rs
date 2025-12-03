@@ -54,16 +54,6 @@ pub(crate) fn alloc_registers(
             reg
         }
 
-        Term::Atom(name) => {
-            let k = RegKey::Var(name.clone());
-            if let Some(&reg) = declared_vars.get(&k) {
-                reg
-            } else {
-                let reg = reg_manager.get_next();
-                declared_vars.insert(k.clone(), reg);
-                reg
-            }
-        }
         Term::Var(name) => {
             let k = RegKey::Var(name.clone());
             if let Some(&reg) = declared_vars.get(&k) {
@@ -89,7 +79,7 @@ pub(crate) fn to_regkey(term: &Term, reg_map: &HashMap<RegKey, WamReg>) -> RegKe
                 .map(|k| reg_map[&k])
                 .collect(),
         },
-        Term::Atom(name) | Term::Var(name) => RegKey::Var(name.clone()),
+        Term::Var(name) => RegKey::Var(name.clone()),
         _ => panic!("Unsupported term for RegKey: {:?}", term),
     }
 }
@@ -181,7 +171,14 @@ mod tests {
                 WamReg::X(1),
             );
             map.insert(RegKey::Var("Y".to_string()), WamReg::X(4));
-            map.insert(RegKey::Var("a".to_string()), WamReg::X(6));
+            map.insert(
+                RegKey::Functor {
+                    name: "a".to_string(),
+                    arity: 0,
+                    args: vec![],
+                },
+                WamReg::X(6),
+            );
             map
         });
     }
