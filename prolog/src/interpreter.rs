@@ -1,14 +1,37 @@
-use std::rc::Rc;
+use std::{cell::RefCell, rc::Rc};
 
 use crate::compiler_bytecode::{WamInstr, WamReg};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Var {
+    Unbound,
+    Bound(Rc<Cell>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Cell {
-    Empty,
+    Var(RefCell<Var>),
     Ref(Rc<Cell>),
-    Struct { functor: String, arity: usize },
-    Atom(String),
+    Struct {
+        functor: String,
+        arity: usize,
+        children: Vec<Rc<Cell>>,
+    },
     Number(i64),
+}
+
+impl Cell {
+    pub fn new_var() -> Self {
+        Cell::Var(RefCell::new(Var::Unbound))
+    }
+
+    pub fn unsafe_replace_var(&self, new_value: Cell) {
+        if let Cell::Var(var_cell) = self {
+            *var_cell.borrow_mut() = Var::Bound(Rc::new(new_value));
+        } else {
+            panic!("replace_var called on non-var cell");
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,21 +42,23 @@ pub struct Registers {
 impl Registers {
     fn new() -> Self {
         Self {
-            registers: vec![Cell::Empty; 32],
+            registers: vec![Cell::new_var(); 32],
         }
     }
 
     pub fn get_arg_registers(&self) -> &[Cell] {
         &self.registers
     }
-    pub fn get_register<'a>(&'a self, reg: &WamReg) -> &'a Cell {
+    pub fn get_register<'a>(&'a mut self, reg: &WamReg) -> &'a Cell {
         let index = match reg {
             WamReg::X(index) => *index,
         };
         if index < self.registers.len() {
             &self.registers[index]
         } else {
-            &Cell::Empty
+            let r = Cell::new_var();
+            self.registers.push(r);
+            &self.registers[index]
         }
     }
 
@@ -42,7 +67,7 @@ impl Registers {
             WamReg::X(index) => *index,
         };
         if index >= self.registers.len() {
-            self.registers.resize(index + 1, Cell::Empty);
+            self.registers.resize(index + 1, Cell::new_var());
         }
         self.registers[index] = value;
     }
@@ -75,43 +100,50 @@ enum ExecMode {
 
 fn exectute_impl(
     heap: &mut Vec<Rc<Cell>>,
-    stack: &mut Vec<Rc<Frame>>,
-    trail: &mut Vec<TrailEntry>,
+    _stack: &mut Vec<Rc<Frame>>,
+    _trail: &mut Vec<TrailEntry>,
     registers: &mut Registers,
     instructions: &[WamInstr],
     program_counter: &mut usize,
-    return_address: &mut usize,
-    subterm_reg: &mut Rc<Cell>,
-    heap_backtrack_reg: &mut Rc<Cell>,
-    heap_reg: &mut Rc<Cell>,
-    backtrack_cut_reg: &mut Rc<Frame>,
-    backtrack_reg: &mut Rc<Frame>,
+    _return_address: &mut usize,
+    _subterm_reg: &mut Rc<Cell>,
+    _heap_backtrack_reg: &mut Rc<Cell>,
+    _heap_reg: &mut Rc<Cell>,
+    _backtrack_cut_reg: &mut Rc<Frame>,
+    _backtrack_reg: &mut Rc<Frame>,
     _env_reg: &mut Rc<Frame>,
     exec_mode: &mut ExecMode,
 ) {
     if let Some(current_instr) = instructions.get(*program_counter) {
         match current_instr {
-            WamInstr::PutAtom { name, reg } => {
-                let cell = Cell::Atom(name.clone());
-                registers.set_register(reg, cell);
-            }
-
             WamInstr::PutStruct {
                 functor,
                 arity,
                 reg,
             } => {
-                let ob = Rc::new(Cell::Struct {
+                // TODO arity0なら即座に構造体を作成
+                let ob = Rc::new(Cell::new_var());
+                let mut subterms = Vec::new();
+                heap.push(ob.clone());
+                registers.set_register(reg, Cell::Ref(ob.clone()));
+                eval_put_struct_children(
+                    instructions,
+                    program_counter,
+                    registers,
+                    heap,
+                    *arity,
+                    &mut subterms,
+                );
+                let structure = Rc::new(Cell::Struct {
                     functor: functor.clone(),
                     arity: *arity,
+                    children: subterms,
                 });
-                heap.push(ob.clone());
-                registers.set_register(reg, Cell::Ref(ob));
-                exec_put_struct_children(instructions, program_counter, registers, heap, *arity);
+                ob.unsafe_replace_var((*structure).clone());
             }
 
             WamInstr::SetVar { reg, name: _ } => {
-                let ob = Rc::new(Cell::Empty);
+                let ob = Rc::new(Cell::new_var());
                 heap.push(ob.clone());
                 registers.set_register(reg, Cell::Ref(ob));
             }
@@ -121,7 +153,7 @@ fn exectute_impl(
             }
 
             WamInstr::PutVar { name: _, reg } => {
-                registers.set_register(reg, Cell::Empty);
+                registers.set_register(reg, Cell::new_var());
             }
 
             WamInstr::GetStruct {
@@ -131,19 +163,41 @@ fn exectute_impl(
             } => {
                 let derefed = deref_reg(registers, reg);
                 match derefed {
-                    Cell::Empty => {
-                        // write mode
-                        let cell = Cell::Atom(functor.clone());
-                        registers.set_register(reg, cell);
+                    Cell::Var(v) => {
+                        let is_unbound = matches!(*v.borrow(), Var::Unbound);
+                        if is_unbound {
+                            // write mode
+                            let cell = Cell::Ref(Rc::new(Cell::Struct {
+                                functor: functor.clone(),
+                                arity: *arity,
+                                children: Vec::with_capacity(*arity),
+                            }));
+                            derefed.unsafe_replace_var(cell.clone());
+                            registers.set_register(reg, cell.clone());
+                        } else {
+                            if let Var::Bound(bound) = &*v.borrow() {
+                                if let Cell::Struct {
+                                    functor: existing_functor,
+                                    arity: existing_arity,
+                                    children: _,
+                                } = bound.as_ref()
+                                {
+                                    // read mode
+                                    if *existing_functor != *functor || *existing_arity != *arity {
+                                        *exec_mode = ExecMode::ResolvedToFalse;
+                                    }
+                                }
+                            }
+                        }
                     }
                     Cell::Struct {
                         functor: existing_functor,
                         arity: existing_arity,
+                        children: _,
                     } => {
                         // read mode
-                        if existing_functor == functor && existing_arity == arity {
-                            // proceed to unify children
-                        } else {
+                        // TODO unify children
+                        if existing_functor != functor || existing_arity != arity {
                             *exec_mode = ExecMode::ResolvedToFalse;
                         }
                     }
@@ -177,25 +231,28 @@ fn exectute_impl(
     }
 }
 
-fn exec_put_struct_children(
+fn eval_put_struct_children(
     instructions: &[WamInstr],
     program_counter: &mut usize,
     registers: &mut Registers,
     heap: &mut Vec<Rc<Cell>>,
     arity: usize,
+    subterms: &mut Vec<Rc<Cell>>,
 ) {
     for _ in 0..arity {
         *program_counter += 1;
         let current_instr = instructions.get(*program_counter).unwrap();
         match current_instr {
             WamInstr::SetVar { reg, name: _ } => {
-                let ob = Rc::new(Cell::Empty);
+                let ob = Rc::new(Cell::new_var());
                 heap.push(ob.clone());
-                registers.set_register(reg, Cell::Ref(ob));
+                registers.set_register(reg, Cell::Ref(ob.clone()));
+                subterms.push(ob);
             }
             WamInstr::SetVal { reg, name: _ } => {
-                let value = registers.get_register(reg).clone();
-                heap.push(Rc::new(value));
+                let value = Rc::new(registers.get_register(reg).clone());
+                heap.push(value.clone());
+                subterms.push(value);
             }
             _ => {
                 panic!("Expected SetVar or SetVal in struct children");
@@ -204,7 +261,7 @@ fn exec_put_struct_children(
     }
 }
 
-fn deref_reg<'a>(registers: &'a Registers, wamreg: &WamReg) -> &'a Cell {
+fn deref_reg<'a>(registers: &'a mut Registers, wamreg: &WamReg) -> &'a Cell {
     let reg = registers.get_register(wamreg);
 
     match reg {
@@ -233,9 +290,9 @@ pub fn execute_instructions(instructions: Vec<WamInstr>) -> (Registers, bool) {
     // let mut choice_p = stack_head.clone();
     let mut trail = Vec::<TrailEntry>::with_capacity(32);
     let mut return_address = 0;
-    let mut subterm_reg = Rc::new(Cell::Empty);
-    let mut heap_backtrack_reg = Rc::new(Cell::Empty);
-    let mut heap_reg = Rc::new(Cell::Empty);
+    let mut subterm_reg = Rc::new(Cell::new_var());
+    let mut heap_backtrack_reg = Rc::new(Cell::new_var());
+    let mut heap_reg = Rc::new(Cell::new_var());
     let mut backtrack_cut_reg = stack_head.clone();
     let mut backtrack_reg = stack_head;
 
@@ -270,6 +327,29 @@ mod tests {
 
     use super::*;
 
+    fn normalize_cell(cell: &Cell) -> Cell {
+        match cell {
+            Cell::Var(v) => match &*v.borrow() {
+                Var::Unbound => Cell::new_var(),
+                Var::Bound(bound) => normalize_cell(bound),
+            },
+            Cell::Ref(rc_cell) => normalize_cell(rc_cell),
+            Cell::Struct {
+                functor,
+                arity,
+                children,
+            } => Cell::Struct {
+                functor: functor.clone(),
+                arity: *arity,
+                children: children
+                    .iter()
+                    .map(|c| Rc::new(normalize_cell(c)))
+                    .collect(),
+            },
+            Cell::Number(n) => Cell::Number(*n),
+        }
+    }
+
     fn test(db_str: String, query_str: String, expect_regs: Vec<Cell>, expect_res: bool) {
         let db_clauses = crate::parse::database(&db_str).unwrap();
         let (_, query_terms) = crate::parse::query(&query_str).unwrap();
@@ -278,12 +358,18 @@ mod tests {
         let all_instructions = compile_link::compile_link(query, db);
         let (regs, result) = execute_instructions(all_instructions);
         assert_eq!(result, expect_res);
-        assert_eq!(regs.get_arg_registers(), expect_regs);
+        let normalized_actual: Vec<Cell> = regs
+            .get_arg_registers()
+            .iter()
+            .map(normalize_cell)
+            .collect();
+        let normalized_expected: Vec<Cell> = expect_regs.iter().map(normalize_cell).collect();
+        assert_eq!(normalized_actual, normalized_expected);
     }
     fn pad_empties_to_32(regs: Vec<Cell>) -> Vec<Cell> {
         let len = regs.len();
         regs.into_iter()
-            .chain(std::iter::repeat(Cell::Empty).take(32 - len))
+            .chain(std::iter::repeat(Cell::new_var()).take(32 - len))
             .collect()
     }
 
@@ -292,19 +378,21 @@ mod tests {
         test(
             "hello.".to_string(),
             "hello.".to_string(),
-            pad_empties_to_32(vec![Cell::Ref(Rc::new(Cell::Struct {
+            pad_empties_to_32(vec![Cell::Struct {
                 functor: "hello".to_string(),
                 arity: 0,
-            }))]),
+                children: vec![],
+            }]),
             true,
         );
         test(
             "hello.".to_string(),
             "bye.".to_string(),
-            pad_empties_to_32(vec![Cell::Ref(Rc::new(Cell::Struct {
+            pad_empties_to_32(vec![Cell::Struct {
                 functor: "bye".to_string(),
                 arity: 0,
-            }))]),
+                children: vec![],
+            }]),
             false,
         );
     }
@@ -314,7 +402,11 @@ mod tests {
         test(
             r#"mortal(socrates)."#.to_string(),
             "mortal(X).".to_string(),
-            pad_empties_to_32(vec![Cell::Atom("socrates".into())]),
+            pad_empties_to_32(vec![Cell::Struct {
+                functor: "socrates".into(),
+                arity: 0,
+                children: vec![],
+            }]),
             true,
         );
     }
@@ -324,7 +416,11 @@ mod tests {
         test(
             r#"mortal(socrates)."#.to_string(),
             "mortal(dracle).".to_string(),
-            pad_empties_to_32(vec![Cell::Atom("dracle".into())]),
+            pad_empties_to_32(vec![Cell::Struct {
+                functor: "dracle".into(),
+                arity: 0,
+                children: vec![],
+            }]),
             false,
         );
     }
