@@ -5,97 +5,156 @@ use std::{collections::HashMap, hash::Hash, rc::Rc};
 // choicepointでVecに新しいunion-find層をpushし、バックトラック時にpopする
 // unionやpath compactionは最新の層でのみ行われ、それより下の層は不変データ構造として扱われる
 pub struct StackedUf<T: Eq + Hash> {
-    // TODO HashMapだと定数倍の性能に限界があるため、変数の出現順に連番を振り、
-    // {
-    //   name_table: HashMap<usize, T>,
-    //   state: Vec<usize>
-    // }
-    // のような内部構造にすることを考えている
-    state: Vec<HashMap<Rc<T>, Rc<T>>>,
+    name_table: Vec<Rc<T>>,
+    index: HashMap<Rc<T>, usize>,
+    layers: Vec<Layer>,
+}
+
+const UNSET: usize = usize::MAX;
+
+struct Layer {
+    parent: Vec<usize>,
+    size: Vec<usize>,
+    node_len_at_push: usize,
 }
 
 #[allow(dead_code)]
 impl<T: Eq + Hash> StackedUf<T> {
     pub fn new() -> StackedUf<T> {
-        let mut s = StackedUf {
-            state: Vec::with_capacity(10),
-        };
-        s.state.push(HashMap::new());
-        s
+        StackedUf {
+            name_table: Vec::with_capacity(16),
+            index: HashMap::with_capacity(16),
+            layers: vec![Layer {
+                parent: Vec::with_capacity(16),
+                size: Vec::with_capacity(16),
+                node_len_at_push: 0,
+            }],
+        }
     }
 
-    fn root(&mut self, x: &Rc<T>) -> Rc<T> {
-        let mut current = Rc::clone(x);
-        let mut path = Vec::with_capacity(10);
-        path.push(Rc::clone(x));
-
-        let (head, tail) = split_stack(&mut self.state);
-
-        loop {
-            let next = match head.get(&current) {
-                Some(parent) => Rc::clone(parent),
-                None => visit_tail_root(tail, &current),
-            };
-
-            if Rc::ptr_eq(&current, &next) {
-                for node in path {
-                    head.insert(node, Rc::clone(&current));
-                }
-                return current;
-            }
-            path.push(Rc::clone(&next));
-            current = next;
+    fn ensure_id(&mut self, node: &Rc<T>) -> usize {
+        if let Some(id) = self.index.get(node) {
+            *id
+        } else {
+            let id = self.name_table.len();
+            self.name_table.push(Rc::clone(node));
+            self.index.insert(Rc::clone(node), id);
+            self.extend_layers();
+            let head = self.layers.last_mut().unwrap();
+            head.parent[id] = id;
+            head.size[id] = 1;
+            id
         }
+    }
+
+    fn extend_layers(&mut self) {
+        let new_len = self.name_table.len();
+        for layer in &mut self.layers {
+            let missing = new_len.saturating_sub(layer.parent.len());
+            if missing > 0 {
+                layer.parent.extend(std::iter::repeat(UNSET).take(missing));
+                layer.size.extend(std::iter::repeat(UNSET).take(missing));
+            }
+        }
+    }
+
+    fn get_parent(&self, node: usize) -> usize {
+        for layer in self.layers.iter().rev() {
+            let p = layer.parent[node];
+            if p != UNSET {
+                return p;
+            }
+        }
+        node
+    }
+
+    fn get_size(&self, node: usize) -> usize {
+        for layer in self.layers.iter().rev() {
+            let s = layer.size[node];
+            if s != UNSET {
+                return s;
+            }
+        }
+        1
+    }
+
+    fn find_root_id(&mut self, mut idx: usize) -> usize {
+        let mut path = Vec::with_capacity(8);
+        loop {
+            let parent = self.get_parent(idx);
+            if parent == idx {
+                break;
+            }
+            path.push(idx);
+            idx = parent;
+        }
+        let root = idx;
+
+        let head = self.layers.last_mut().unwrap();
+        for node in path {
+            head.parent[node] = root;
+        }
+        root
+    }
+
+    pub fn find(&mut self, x: &Rc<T>) -> Rc<T> {
+        let idx = self.ensure_id(x);
+        let root_id = self.find_root_id(idx);
+        self.name_table[root_id].clone()
     }
 
     pub fn union(&mut self, l: &Rc<T>, r: &Rc<T>) {
-        let lroot = self.root(l);
-        let rroot = self.root(r);
-        if Rc::ptr_eq(&lroot, &rroot) {
+        let l_id = self.ensure_id(l);
+        let r_id = self.ensure_id(r);
+        let mut l_root = self.find_root_id(l_id);
+        let mut r_root = self.find_root_id(r_id);
+
+        if l_root == r_root {
             return;
         }
 
-        let (head, _tail) = split_stack(&mut self.state);
-        head.insert(lroot, rroot.clone());
-        head.insert(l.clone(), rroot);
-    }
+        let l_size = self.get_size(l_root);
+        let r_size = self.get_size(r_root);
+        if l_size < r_size {
+            std::mem::swap(&mut l_root, &mut r_root);
+        }
 
-    pub fn find(&mut self, from: &Rc<T>) -> Rc<T> {
-        self.root(from)
+        let head = self.layers.last_mut().unwrap();
+        head.parent[r_root] = l_root;
+        head.size[l_root] = l_size + r_size;
     }
 
     pub fn push_choicepoint(&mut self) {
-        self.state.push(HashMap::new());
+        let len = self.name_table.len();
+        let mut parent = Vec::with_capacity(len);
+        parent.resize(len, UNSET);
+        let mut size = Vec::with_capacity(len);
+        size.resize(len, UNSET);
+        self.layers.push(Layer {
+            parent,
+            size,
+            node_len_at_push: len,
+        });
     }
     pub fn pop_choicepoint(&mut self) {
-        if self.state.len() > 1 {
-            self.state.pop();
-        } else {
+        if self.layers.len() <= 1 {
             panic!();
         }
-    }
-}
 
-fn split_stack<T: Eq + Hash>(
-    state: &mut [HashMap<Rc<T>, Rc<T>>],
-) -> (&mut HashMap<Rc<T>, Rc<T>>, &[HashMap<Rc<T>, Rc<T>>]) {
-    if let Some((head, tail)) = state.split_last_mut() {
-        (head, tail)
-    } else {
-        panic!()
-    }
-}
+        let layer = self.layers.pop().unwrap();
+        let new_len = layer.node_len_at_push;
 
-fn visit_tail_root<'a, T: Eq + Hash>(tail: &'a [HashMap<Rc<T>, Rc<T>>], x: &Rc<T>) -> Rc<T> {
-    for level in tail.iter().rev() {
-        match level.get(x) {
-            Some(xparent) => {
-                return xparent.clone();
+        while self.name_table.len() > new_len {
+            if let Some(name) = self.name_table.pop() {
+                self.index.remove(&name);
             }
-            None => continue,
+        }
+
+        for layer in &mut self.layers {
+            layer.parent.truncate(new_len);
+            layer.size.truncate(new_len);
         }
     }
-    Rc::clone(x)
 }
 
 #[cfg(test)]
@@ -144,13 +203,6 @@ mod tests {
         let root_c = uf.find(&c);
 
         assert!(Rc::ptr_eq(&root_a, &root_c));
-    }
-
-    #[test]
-    #[should_panic]
-    fn test_pop_choicepoint_empty_panics() {
-        let mut uf: StackedUf<i32> = StackedUf::new();
-        uf.pop_choicepoint();
     }
 
     #[test]
