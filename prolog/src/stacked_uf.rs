@@ -6,7 +6,7 @@ use std::{collections::HashMap, hash::Hash, rc::Rc};
 // unionやpath compactionは最新の層でのみ行われ、それより下の層は不変データ構造として扱われる
 pub struct StackedUf<T: Eq + Hash> {
     name_table: Vec<Rc<T>>,
-    index: HashMap<Rc<T>, usize>,
+    name_layers: Vec<HashMap<Rc<T>, usize>>,
     layers: Vec<Layer>,
 }
 
@@ -15,7 +15,6 @@ const UNSET: usize = usize::MAX;
 struct Layer {
     parent: Vec<usize>,
     size: Vec<usize>,
-    node_len_at_push: usize,
 }
 
 #[allow(dead_code)]
@@ -23,28 +22,44 @@ impl<T: Eq + Hash> StackedUf<T> {
     pub fn new() -> StackedUf<T> {
         StackedUf {
             name_table: Vec::with_capacity(16),
-            index: HashMap::with_capacity(16),
+            name_layers: vec![HashMap::with_capacity(16)],
             layers: vec![Layer {
                 parent: Vec::with_capacity(16),
                 size: Vec::with_capacity(16),
-                node_len_at_push: 0,
             }],
         }
     }
 
-    fn ensure_id(&mut self, node: &Rc<T>) -> usize {
-        if let Some(id) = self.index.get(node) {
-            *id
-        } else {
-            let id = self.name_table.len();
-            self.name_table.push(Rc::clone(node));
-            self.index.insert(Rc::clone(node), id);
-            self.extend_layers();
-            let head = self.layers.last_mut().unwrap();
-            head.parent[id] = id;
-            head.size[id] = 1;
-            id
+    fn lookup_id(&mut self, node: &Rc<T>) -> Option<usize> {
+        let len = self.name_layers.len();
+        for idx in (0..len).rev() {
+            if let Some(&id) = self.name_layers[idx].get(node) {
+                if idx + 1 != len {
+                    let head = self.name_layers.last_mut().unwrap();
+                    head.insert(Rc::clone(node), id);
+                }
+                return Some(id);
+            }
         }
+        None
+    }
+
+    fn ensure_id(&mut self, node: &Rc<T>) -> usize {
+        if let Some(id) = self.lookup_id(node) {
+            return id;
+        }
+
+        let id = self.name_table.len();
+        self.name_table.push(Rc::clone(node));
+        self.extend_layers();
+        let head = self.layers.last_mut().unwrap();
+        head.parent[id] = id;
+        head.size[id] = 1;
+        self.name_layers
+            .last_mut()
+            .unwrap()
+            .insert(Rc::clone(node), id);
+        id
     }
 
     fn extend_layers(&mut self) {
@@ -133,8 +148,8 @@ impl<T: Eq + Hash> StackedUf<T> {
         self.layers.push(Layer {
             parent,
             size,
-            node_len_at_push: len,
         });
+        self.name_layers.push(HashMap::with_capacity(8));
     }
     pub fn pop_choicepoint(&mut self) {
         if self.layers.len() <= 1 {
@@ -142,18 +157,8 @@ impl<T: Eq + Hash> StackedUf<T> {
         }
 
         let layer = self.layers.pop().unwrap();
-        let new_len = layer.node_len_at_push;
-
-        while self.name_table.len() > new_len {
-            if let Some(name) = self.name_table.pop() {
-                self.index.remove(&name);
-            }
-        }
-
-        for layer in &mut self.layers {
-            layer.parent.truncate(new_len);
-            layer.size.truncate(new_len);
-        }
+        self.name_layers.pop();
+        drop(layer);
     }
 }
 
@@ -203,6 +208,13 @@ mod tests {
         let root_c = uf.find(&c);
 
         assert!(Rc::ptr_eq(&root_a, &root_c));
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_pop_choicepoint_empty_panics() {
+        let mut uf: StackedUf<i32> = StackedUf::new();
+        uf.pop_choicepoint();
     }
 
     #[test]
