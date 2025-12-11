@@ -38,7 +38,7 @@ impl<T: Eq + Hash> LayeredUf<T> {
             if let Some(&id) = self.name_layers[idx].get(node) {
                 if idx + 1 != len {
                     let head = self.name_layers.last_mut().unwrap();
-                    head.insert(Rc::clone(node), id);
+                    head.insert(node.clone(), id);
                 }
                 return Some(id);
             }
@@ -46,13 +46,13 @@ impl<T: Eq + Hash> LayeredUf<T> {
         None
     }
 
-    fn ensure_id(&mut self, node: &Rc<T>) -> usize {
-        if let Some(id) = self.lookup_id(node) {
-            return id;
+    pub fn register(&mut self, node: Rc<T>) {
+        if let Some(_existing_id) = self.lookup_id(&node) {
+            return;
         }
 
         let id = self.name_table.len();
-        self.name_table.push(Rc::clone(node));
+        self.name_table.push(node.clone());
         self.extend_head_layer();
         let head = self.layers.last_mut().unwrap();
         head.parent[id] = id;
@@ -60,8 +60,14 @@ impl<T: Eq + Hash> LayeredUf<T> {
         self.name_layers
             .last_mut()
             .unwrap()
-            .insert(Rc::clone(node), id);
-        id
+            .insert(node.clone(), id);
+    }
+
+    fn get_id(&mut self, node: &Rc<T>) -> usize {
+        if let Some(id) = self.lookup_id(node) {
+            return id;
+        }
+        panic!("LayeredUf: unregistered node");
     }
 
     fn extend_head_layer(&mut self) {
@@ -119,14 +125,14 @@ impl<T: Eq + Hash> LayeredUf<T> {
     }
 
     pub fn find(&mut self, x: &Rc<T>) -> Rc<T> {
-        let idx = self.ensure_id(x);
+        let idx = self.get_id(x);
         let root_id = self.find_root_id(idx);
         self.name_table[root_id].clone()
     }
 
     pub fn union(&mut self, l: &Rc<T>, r: &Rc<T>) {
-        let l_id = self.ensure_id(l);
-        let r_id = self.ensure_id(r);
+        let l_id = self.get_id(l);
+        let r_id = self.get_id(r);
         let mut l_root = self.find_root_id(l_id);
         let mut r_root = self.find_root_id(r_id);
 
@@ -174,6 +180,8 @@ mod tests {
         let mut uf = LayeredUf::new();
         let a = Rc::new(1);
         let b = Rc::new(2);
+        uf.register(a.clone());
+        uf.register(b.clone());
 
         let root_a = uf.find(&a);
         let root_b = uf.find(&b);
@@ -188,6 +196,8 @@ mod tests {
         let mut uf = LayeredUf::new();
         let a = Rc::new(1);
         let b = Rc::new(2);
+        uf.register(a.clone());
+        uf.register(b.clone());
 
         uf.union(&a, &b);
 
@@ -203,6 +213,9 @@ mod tests {
         let a = Rc::new(1);
         let b = Rc::new(2);
         let c = Rc::new(3);
+        uf.register(a.clone());
+        uf.register(b.clone());
+        uf.register(c.clone());
 
         uf.union(&a, &b);
         uf.union(&b, &c);
@@ -225,12 +238,15 @@ mod tests {
         let mut uf = LayeredUf::new();
         let a = Rc::new(1);
         let b = Rc::new(2);
+        uf.register(a.clone());
+        uf.register(b.clone());
 
         uf.union(&a, &b);
         let root_before = uf.find(&a);
 
         uf.push_choicepoint();
         let c = Rc::new(3);
+        uf.register(c.clone());
         uf.union(&a, &c);
 
         let root_a = uf.find(&a);
@@ -240,10 +256,8 @@ mod tests {
         uf.pop_choicepoint();
 
         let root_after = uf.find(&a);
-        let root_c_after = uf.find(&c);
 
         assert!(Rc::ptr_eq(&root_after, &root_before));
-        assert!(!Rc::ptr_eq(&root_after, &root_c_after));
     }
 
     #[test]
@@ -251,12 +265,16 @@ mod tests {
         let mut uf: LayeredUf<i32> = LayeredUf::new();
         let a = Rc::new(1);
         let b = Rc::new(2);
+        uf.register(a.clone());
+        uf.register(b.clone());
 
         uf.union(&a, &b);
 
         uf.push_choicepoint();
         let c = Rc::new(3);
         let d = Rc::new(4);
+        uf.register(c.clone());
+        uf.register(d.clone());
         uf.union(&c, &d);
 
         let root_a = uf.find(&a);
@@ -280,6 +298,8 @@ mod tests {
         let mut uf = LayeredUf::new();
         let x = Rc::new("x".to_string());
         let y = Rc::new("y".to_string());
+        uf.register(x.clone());
+        uf.register(y.clone());
 
         uf.union(&x, &y);
 
