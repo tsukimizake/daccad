@@ -4,9 +4,11 @@ use std::{collections::HashMap, hash::Hash, rc::Rc};
 // wam互換prologバイトコードインタプリタ用の、union-findにスタックを加えたデータ構造
 // choicepointでVecに新しいunion-find層をpushし、バックトラック時にpopする
 // unionやpath compactionは最新の層でのみ行われ、それより下の層は不変データ構造として扱われる
-pub struct StackedUf<T: Eq + Hash> {
+pub struct LayeredUf<T: Eq + Hash> {
     name_table: Vec<Rc<T>>,
     name_layers: Vec<HashMap<Rc<T>, usize>>,
+    // layers are sparse overlays: each layer holds slots that existed when it was
+    // pushed (UNSET means “see older layer”). Newer nodes only extend the head layer
     layers: Vec<Layer>,
 }
 
@@ -18,9 +20,9 @@ struct Layer {
 }
 
 #[allow(dead_code)]
-impl<T: Eq + Hash> StackedUf<T> {
-    pub fn new() -> StackedUf<T> {
-        StackedUf {
+impl<T: Eq + Hash> LayeredUf<T> {
+    pub fn new() -> LayeredUf<T> {
+        LayeredUf {
             name_table: Vec::with_capacity(16),
             name_layers: vec![HashMap::with_capacity(16)],
             layers: vec![Layer {
@@ -149,10 +151,7 @@ impl<T: Eq + Hash> StackedUf<T> {
         parent.resize(len, UNSET);
         let mut size = Vec::with_capacity(len);
         size.resize(len, UNSET);
-        self.layers.push(Layer {
-            parent,
-            size,
-        });
+        self.layers.push(Layer { parent, size });
         self.name_layers.push(HashMap::with_capacity(8));
     }
     pub fn pop_choicepoint(&mut self) {
@@ -172,7 +171,7 @@ mod tests {
 
     #[test]
     fn test_find_unconnected() {
-        let mut uf = StackedUf::new();
+        let mut uf = LayeredUf::new();
         let a = Rc::new(1);
         let b = Rc::new(2);
 
@@ -186,7 +185,7 @@ mod tests {
 
     #[test]
     fn test_union_and_find() {
-        let mut uf = StackedUf::new();
+        let mut uf = LayeredUf::new();
         let a = Rc::new(1);
         let b = Rc::new(2);
 
@@ -200,7 +199,7 @@ mod tests {
 
     #[test]
     fn test_transitive_union() {
-        let mut uf = StackedUf::new();
+        let mut uf = LayeredUf::new();
         let a = Rc::new(1);
         let b = Rc::new(2);
         let c = Rc::new(3);
@@ -217,13 +216,13 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_pop_choicepoint_empty_panics() {
-        let mut uf: StackedUf<i32> = StackedUf::new();
+        let mut uf: LayeredUf<i32> = LayeredUf::new();
         uf.pop_choicepoint();
     }
 
     #[test]
     fn test_backtrack_undoes_union() {
-        let mut uf = StackedUf::new();
+        let mut uf = LayeredUf::new();
         let a = Rc::new(1);
         let b = Rc::new(2);
 
@@ -249,7 +248,7 @@ mod tests {
 
     #[test]
     fn test_choicepoint_isolation() {
-        let mut uf: StackedUf<i32> = StackedUf::new();
+        let mut uf: LayeredUf<i32> = LayeredUf::new();
         let a = Rc::new(1);
         let b = Rc::new(2);
 
@@ -278,7 +277,7 @@ mod tests {
 
     #[test]
     fn test_string_values() {
-        let mut uf = StackedUf::new();
+        let mut uf = LayeredUf::new();
         let x = Rc::new("x".to_string());
         let y = Rc::new("y".to_string());
 

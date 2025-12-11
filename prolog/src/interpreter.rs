@@ -1,16 +1,14 @@
+use crate::layered_uf::{self, LayeredUf};
 use std::{cell::RefCell, rc::Rc};
 
 use crate::compiler_bytecode::{WamInstr, WamReg};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Var {
-    Unbound,
-    Bound(Rc<Cell>),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Cell {
-    Var(RefCell<Var>),
+    Empty,
+    Var {
+        name: String,
+    },
     Ref(Rc<Cell>),
     Struct {
         functor: String,
@@ -18,20 +16,6 @@ pub enum Cell {
         children: Vec<Rc<Cell>>,
     },
     Number(i64),
-}
-
-impl Cell {
-    pub fn new_var() -> Self {
-        Cell::Var(RefCell::new(Var::Unbound))
-    }
-
-    pub fn unsafe_replace_var(&self, new_value: Cell) {
-        if let Cell::Var(var_cell) = self {
-            *var_cell.borrow_mut() = Var::Bound(Rc::new(new_value));
-        } else {
-            panic!("replace_var called on non-var cell");
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,7 +26,7 @@ pub struct Registers {
 impl Registers {
     fn new() -> Self {
         Self {
-            registers: vec![Cell::new_var(); 32],
+            registers: vec![Cell::Empty; 32],
         }
     }
 
@@ -56,7 +40,7 @@ impl Registers {
         if index < self.registers.len() {
             &self.registers[index]
         } else {
-            let r = Cell::new_var();
+            let r = Cell::Empty;
             self.registers.push(r);
             &self.registers[index]
         }
@@ -67,7 +51,7 @@ impl Registers {
             WamReg::X(index) => *index,
         };
         if index >= self.registers.len() {
-            self.registers.resize(index + 1, Cell::new_var());
+            self.registers.resize(index + 1, Cell::Empty);
         }
         self.registers[index] = value;
     }
@@ -86,11 +70,6 @@ enum Frame {
     },
 }
 
-#[allow(unused)]
-struct TrailEntry {
-    cells_to_revert: Vec<Cell>,
-}
-
 #[derive(PartialEq, Eq, Debug)]
 enum ExecMode {
     Continue,
@@ -99,19 +78,10 @@ enum ExecMode {
 }
 
 fn exectute_impl(
-    heap: &mut Vec<Rc<Cell>>,
-    _stack: &mut Vec<Rc<Frame>>,
-    _trail: &mut Vec<TrailEntry>,
-    registers: &mut Registers,
     instructions: &[WamInstr],
     program_counter: &mut usize,
-    _return_address: &mut usize,
-    _subterm_reg: &mut Rc<Cell>,
-    _heap_backtrack_reg: &mut Rc<Cell>,
-    _heap_reg: &mut Rc<Cell>,
-    _backtrack_cut_reg: &mut Rc<Frame>,
-    _backtrack_reg: &mut Rc<Frame>,
-    _env_reg: &mut Rc<Frame>,
+    stack: &mut Vec<Frame>,
+    stacked_uf: &mut LayeredUf<Cell>,
     exec_mode: &mut ExecMode,
 ) {
     if let Some(current_instr) = instructions.get(*program_counter) {
@@ -120,92 +90,18 @@ fn exectute_impl(
                 functor,
                 arity,
                 reg,
-            } => {
-                // TODO arity0なら即座に構造体を作成
-                let ob = Rc::new(Cell::new_var());
-                let mut subterms = Vec::new();
-                heap.push(ob.clone());
-                registers.set_register(reg, Cell::Ref(ob.clone()));
-                eval_put_struct_children(
-                    instructions,
-                    program_counter,
-                    registers,
-                    heap,
-                    *arity,
-                    &mut subterms,
-                );
-                let structure = Rc::new(Cell::Struct {
-                    functor: functor.clone(),
-                    arity: *arity,
-                    children: subterms,
-                });
-                ob.unsafe_replace_var((*structure).clone());
-            }
+            } => {}
 
-            WamInstr::SetVar { reg, name: _ } => {
-                let ob = Rc::new(Cell::new_var());
-                heap.push(ob.clone());
-                registers.set_register(reg, Cell::Ref(ob));
-            }
-            WamInstr::SetVal { reg, name: _ } => {
-                let value = registers.get_register(reg).clone();
-                heap.push(Rc::new(value));
-            }
+            WamInstr::SetVar { reg, name: _ } => {}
+            WamInstr::SetVal { reg, name: _ } => {}
 
-            WamInstr::PutVar { name: _, reg } => {
-                registers.set_register(reg, Cell::new_var());
-            }
+            WamInstr::PutVar { name: _, reg } => {}
 
             WamInstr::GetStruct {
                 functor,
                 arity,
                 reg,
-            } => {
-                let derefed = deref_reg(registers, reg);
-                match derefed {
-                    Cell::Var(v) => {
-                        let is_unbound = matches!(*v.borrow(), Var::Unbound);
-                        if is_unbound {
-                            // write mode
-                            let cell = Cell::Ref(Rc::new(Cell::Struct {
-                                functor: functor.clone(),
-                                arity: *arity,
-                                children: Vec::with_capacity(*arity),
-                            }));
-                            derefed.unsafe_replace_var(cell.clone());
-                            registers.set_register(reg, cell.clone());
-                        } else {
-                            if let Var::Bound(bound) = &*v.borrow() {
-                                if let Cell::Struct {
-                                    functor: existing_functor,
-                                    arity: existing_arity,
-                                    children: _,
-                                } = bound.as_ref()
-                                {
-                                    // read mode
-                                    if *existing_functor != *functor || *existing_arity != *arity {
-                                        *exec_mode = ExecMode::ResolvedToFalse;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Cell::Struct {
-                        functor: existing_functor,
-                        arity: existing_arity,
-                        children: _,
-                    } => {
-                        // read mode
-                        // TODO unify children
-                        if existing_functor != functor || existing_arity != arity {
-                            *exec_mode = ExecMode::ResolvedToFalse;
-                        }
-                    }
-                    _ => {
-                        *exec_mode = ExecMode::ResolvedToFalse;
-                    }
-                }
-            }
+            } => {}
             WamInstr::Call {
                 predicate: _,
                 arity: _,
@@ -244,7 +140,7 @@ fn eval_put_struct_children(
         let current_instr = instructions.get(*program_counter).unwrap();
         match current_instr {
             WamInstr::SetVar { reg, name: _ } => {
-                let ob = Rc::new(Cell::new_var());
+                let ob = Rc::new(Cell::Empty);
                 heap.push(ob.clone());
                 registers.set_register(reg, Cell::Ref(ob.clone()));
                 subterms.push(ob);
@@ -280,45 +176,24 @@ fn deref_cell_recursive<'a>(cell: &'a Cell) -> &'a Cell {
     }
 }
 
-pub fn execute_instructions(instructions: Vec<WamInstr>) -> (Registers, bool) {
-    let mut heap = Vec::<Rc<Cell>>::with_capacity(32);
-    let stack_head = Rc::new(Frame::Base {});
-    let mut stack = vec![stack_head.clone()];
-    let mut registers = Registers::new();
+pub fn execute_instructions(instructions: Vec<WamInstr>) -> bool {
     let mut program_counter = 0;
-    let mut env_p = stack_head.clone();
-    // let mut choice_p = stack_head.clone();
-    let mut trail = Vec::<TrailEntry>::with_capacity(32);
-    let mut return_address = 0;
-    let mut subterm_reg = Rc::new(Cell::new_var());
-    let mut heap_backtrack_reg = Rc::new(Cell::new_var());
-    let mut heap_reg = Rc::new(Cell::new_var());
-    let mut backtrack_cut_reg = stack_head.clone();
-    let mut backtrack_reg = stack_head;
-
     let mut exec_mode = ExecMode::Continue;
+    let mut stack = Vec::new();
+    let mut stacked_uf = LayeredUf::new();
 
     while exec_mode == ExecMode::Continue {
         exectute_impl(
-            &mut heap,
-            &mut stack,
-            &mut trail,
-            &mut registers,
             &instructions,
             &mut program_counter,
-            &mut return_address,
-            &mut subterm_reg,
-            &mut heap_backtrack_reg,
-            &mut heap_reg,
-            &mut backtrack_cut_reg,
-            &mut backtrack_reg,
-            &mut env_p,
+            &mut stack,
+            &mut stacked_uf,
             &mut exec_mode,
         );
         program_counter += 1;
     }
 
-    (registers, exec_mode == ExecMode::ResolvedToTrue)
+    exec_mode == ExecMode::ResolvedToTrue
 }
 
 #[cfg(test)]
