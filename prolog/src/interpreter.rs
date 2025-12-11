@@ -105,9 +105,9 @@ fn exectute_impl(
             WamInstr::Call {
                 predicate: _,
                 arity: _,
-                to_linum,
+                to_program_counter,
             } => {
-                *program_counter = *to_linum;
+                *program_counter = *to_program_counter;
             }
             WamInstr::Label { name: _, arity: _ } => {}
             WamInstr::Proceed => {

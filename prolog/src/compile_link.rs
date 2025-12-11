@@ -30,7 +30,7 @@ pub fn compile_link(
                     WamInstr::Call {
                         predicate,
                         arity,
-                        to_linum: target_line,
+                        to_program_counter: target_line,
                     }
                 } else {
                     WamInstr::Error {
@@ -83,7 +83,7 @@ mod tests {
             WamInstr::Call {
                 predicate: "parent".to_string(),
                 arity: 2,
-                to_linum: 2,
+                to_program_counter: 2,
             },
             WamInstr::Label {
                 name: "parent".to_string(),

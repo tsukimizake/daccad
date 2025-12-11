@@ -76,7 +76,7 @@ pub enum WamInstr {
     Call {
         predicate: String,
         arity: usize,
-        to_linum: usize,
+        to_program_counter: usize,
     },
     Execute {
         predicate: u32,

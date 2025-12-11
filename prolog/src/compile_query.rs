@@ -106,22 +106,10 @@ mod tests {
                     name: "W".to_string(),
                     reg: WamReg::X(3),
                 },
-                WamInstr::PutStruct {
-                    functor: "p".to_string(),
+                WamInstr::Call {
+                    predicate: "p".to_string(),
                     arity: 3,
-                    reg: WamReg::X(0),
-                },
-                WamInstr::SetVal {
-                    name: "Z".to_string(),
-                    reg: WamReg::X(1),
-                },
-                WamInstr::SetVal {
-                    name: "h".to_string(),
-                    reg: WamReg::X(2),
-                },
-                WamInstr::SetVal {
-                    name: "f".to_string(),
-                    reg: WamReg::X(4),
+                    to_program_counter: usize::MAX,
                 },
             ],
         )
@@ -149,18 +137,10 @@ mod tests {
                     name: "Y".to_string(),
                     reg: WamReg::X(4),
                 },
-                WamInstr::PutStruct {
-                    functor: "p".to_string(),
+                WamInstr::Call {
+                    predicate: "p".to_string(),
                     arity: 2,
-                    reg: WamReg::X(0),
-                },
-                WamInstr::SetVal {
-                    name: "a".to_string(),
-                    reg: WamReg::X(1),
-                },
-                WamInstr::SetVal {
-                    name: "a".to_string(),
-                    reg: WamReg::X(3),
+                    to_program_counter: usize::MAX,
                 },
             ],
         );
