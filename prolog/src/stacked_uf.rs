@@ -51,7 +51,7 @@ impl<T: Eq + Hash> StackedUf<T> {
 
         let id = self.name_table.len();
         self.name_table.push(Rc::clone(node));
-        self.extend_layers();
+        self.extend_head_layer();
         let head = self.layers.last_mut().unwrap();
         head.parent[id] = id;
         head.size[id] = 1;
@@ -62,22 +62,24 @@ impl<T: Eq + Hash> StackedUf<T> {
         id
     }
 
-    fn extend_layers(&mut self) {
+    fn extend_head_layer(&mut self) {
         let new_len = self.name_table.len();
-        for layer in &mut self.layers {
-            let missing = new_len.saturating_sub(layer.parent.len());
+        if let Some(head) = self.layers.last_mut() {
+            let missing = new_len.saturating_sub(head.parent.len());
             if missing > 0 {
-                layer.parent.extend(std::iter::repeat(UNSET).take(missing));
-                layer.size.extend(std::iter::repeat(UNSET).take(missing));
+                head.parent.extend(std::iter::repeat(UNSET).take(missing));
+                head.size.extend(std::iter::repeat(UNSET).take(missing));
             }
         }
     }
 
     fn get_parent(&self, node: usize) -> usize {
         for layer in self.layers.iter().rev() {
-            let p = layer.parent[node];
-            if p != UNSET {
-                return p;
+            if node < layer.parent.len() {
+                let p = layer.parent[node];
+                if p != UNSET {
+                    return p;
+                }
             }
         }
         node
@@ -85,9 +87,11 @@ impl<T: Eq + Hash> StackedUf<T> {
 
     fn get_size(&self, node: usize) -> usize {
         for layer in self.layers.iter().rev() {
-            let s = layer.size[node];
-            if s != UNSET {
-                return s;
+            if node < layer.size.len() {
+                let s = layer.size[node];
+                if s != UNSET {
+                    return s;
+                }
             }
         }
         1
