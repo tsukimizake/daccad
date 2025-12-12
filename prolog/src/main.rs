@@ -17,6 +17,10 @@ fn main() {
 
     // Compile database and query
     let db_instructions = compile_db(db_clauses);
+    let orig_query = query_terms
+        .first()
+        .cloned()
+        .expect("Query should contain at least one term");
     let query_instructions = compile_query(query_terms);
 
     println!("DB instructions: {:#?}", db_instructions);
@@ -28,8 +32,7 @@ fn main() {
     println!("Linked instructions: {:#?}", linked_instructions);
 
     // Execute through interpreter (uses the linked instructions)
-    let result = execute_instructions(linked_instructions);
+    let result = execute_instructions(linked_instructions, orig_query);
 
     println!("Execution result: {:?}", result);
 }
-
