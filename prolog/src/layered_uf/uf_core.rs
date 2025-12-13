@@ -1,3 +1,8 @@
+// レイヤ0は親参照も同じなのでこんな感じの普通UF
+// [(0,0), (0,0), (2,2)]
+// find_rootでレイヤ内参照をまず優先して見てpath compactionして、そののちrootを見に行って自分だけcompactionしてという動作をし、レイヤ1以降はこのようになる
+// [(0,0), (0,0), (2,2), | (0, 3), (3, 3), (5, 5), (2,6) | (6,7) | (8,8)]
+// note or fixme: 上記の場合に7にアクセスすると7,6,2と毎回たどり、path compactionが効かない。このような場合にtop layerに(7,9)のような参照を追加し、9でpath compactionを行えば改善する
 pub struct UfCore {
     // union-findの親ノードを示す配列 いつものやつ
     // 自分より新しいレイヤのノードは参照しない制約
@@ -17,7 +22,7 @@ struct Parent {
 impl UfCore {
     pub fn new() -> Self {
         Self {
-            parent: Vec::with_capacity(100),
+            parent: Vec::with_capacity(1000),
             layer_index: Vec::with_capacity(100),
         }
     }
@@ -36,7 +41,6 @@ impl UfCore {
     }
 
     // 渡ってくるnodeはregister_node済みであることが前提
-    // また、最新レイヤで登録されているならば、古いidで呼び出さないことが前提(破られるとメモリリーク)
     pub fn find_root(&mut self, node: usize) -> usize {
         let mut path = Vec::with_capacity(8);
 
@@ -80,7 +84,6 @@ impl UfCore {
         root
     }
 
-    // parent_id, child_idともに最新レイヤーにあるノードであることが前提(破られるとメモリリーク)
     pub fn union(&mut self, parent_id: usize, child_id: usize) {
         let parent_root = self.find_root(parent_id);
         let old_child_root = self.find_root(child_id);
