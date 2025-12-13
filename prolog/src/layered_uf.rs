@@ -1,22 +1,23 @@
 use std::{collections::HashMap, hash::Hash, rc::Rc};
 
-#[allow(dead_code)]
-// wam互換prologバイトコードインタプリタ用の、union-findにスタックを加えたデータ構造
-// choicepointでVecに新しいunion-find層をpushし、バックトラック時にpopする
-// unionやpath compactionは最新の層でのみ行われ、それより下の層は不変データ構造として扱われる
+const NONE: usize = usize::MAX;
+
+// 単一のバージョン配列に変更を積み、各バージョンに生成時のdepthを持たせてpopをO(1)にする
 pub struct LayeredUf<T: Eq + Hash> {
     name_table: Vec<Rc<T>>,
     name_layers: Vec<HashMap<Rc<T>, usize>>,
-    // layers are sparse overlays: each layer holds slots that existed when it was
-    // pushed (UNSET means “see older layer”). Newer nodes only extend the head layer
-    layers: Vec<Layer>,
+    versions: Vec<Version>,
+    current: Vec<usize>,
+    next_id: usize,
+    depth: usize,
 }
 
-const UNSET: usize = usize::MAX;
-
-struct Layer {
-    parent: Vec<usize>,
-    size: Vec<usize>,
+struct Version {
+    owner: usize,
+    parent: usize,
+    size: usize,
+    prev: usize,
+    depth: usize,
 }
 
 #[allow(dead_code)]
@@ -25,10 +26,10 @@ impl<T: Eq + Hash> LayeredUf<T> {
         LayeredUf {
             name_table: Vec::with_capacity(16),
             name_layers: vec![HashMap::with_capacity(16)],
-            layers: vec![Layer {
-                parent: Vec::with_capacity(16),
-                size: Vec::with_capacity(16),
-            }],
+            versions: Vec::with_capacity(16),
+            current: Vec::with_capacity(16),
+            next_id: 0,
+            depth: 0,
         }
     }
 
@@ -46,127 +47,128 @@ impl<T: Eq + Hash> LayeredUf<T> {
         None
     }
 
-    pub fn register(&mut self, node: Rc<T>) {
-        if let Some(_existing_id) = self.lookup_id(&node) {
-            return;
-        }
+    pub fn id_of(&mut self, node: &Rc<T>) -> Option<usize> {
+        self.lookup_id(node)
+    }
 
-        let id = self.name_table.len();
+    pub fn register(&mut self, node: Rc<T>) -> usize {
+        let id = self.next_id;
+        self.next_id += 1;
         self.name_table.push(node.clone());
-        self.extend_head_layer();
-        let head = self.layers.last_mut().unwrap();
-        head.parent[id] = id;
-        head.size[id] = 1;
+
+        let version_idx = self.versions.len();
+        self.versions.push(Version {
+            owner: id,
+            parent: id,
+            size: 1,
+            prev: NONE,
+            depth: self.depth,
+        });
+        self.current.push(version_idx);
+
         self.name_layers
             .last_mut()
             .unwrap()
             .insert(node.clone(), id);
+        id
     }
 
-    fn get_id(&mut self, node: &Rc<T>) -> usize {
-        if let Some(id) = self.lookup_id(node) {
-            return id;
-        }
-        panic!("LayeredUf: unregistered node");
-    }
-
-    fn extend_head_layer(&mut self) {
-        let new_len = self.name_table.len();
-        if let Some(head) = self.layers.last_mut() {
-            let missing = new_len.saturating_sub(head.parent.len());
-            if missing > 0 {
-                head.parent.extend(std::iter::repeat(UNSET).take(missing));
-                head.size.extend(std::iter::repeat(UNSET).take(missing));
-            }
-        }
-    }
-
-    fn get_parent(&self, node: usize) -> usize {
-        for layer in self.layers.iter().rev() {
-            if node < layer.parent.len() {
-                let p = layer.parent[node];
-                if p != UNSET {
-                    return p;
-                }
-            }
-        }
-        node
-    }
-
-    fn get_size(&self, node: usize) -> usize {
-        for layer in self.layers.iter().rev() {
-            if node < layer.size.len() {
-                let s = layer.size[node];
-                if s != UNSET {
-                    return s;
-                }
-            }
-        }
-        1
-    }
-
-    fn find_root_id(&mut self, mut idx: usize) -> usize {
-        let mut path = Vec::with_capacity(8);
-        loop {
-            let parent = self.get_parent(idx);
-            if parent == idx {
+    fn resolve_version(&mut self, node_id: usize) -> usize {
+        let mut idx = self.current[node_id];
+        while self.versions[idx].depth > self.depth {
+            let prev = self.versions[idx].prev;
+            if prev == NONE {
                 break;
             }
-            path.push(idx);
-            idx = parent;
+            idx = prev;
         }
-        let root = idx;
-
-        let head = self.layers.last_mut().unwrap();
-        for node in path {
-            head.parent[node] = root;
-        }
-        root
+        self.current[node_id] = idx;
+        idx
     }
 
-    pub fn find(&mut self, x: &Rc<T>) -> Rc<T> {
-        let idx = self.get_id(x);
-        let root_id = self.find_root_id(idx);
+    fn find_root_id(&mut self, node: usize) -> usize {
+        let mut version_idx = self.resolve_version(node);
+        let mut path = Vec::with_capacity(8);
+
+        loop {
+            let version = &self.versions[version_idx];
+            if version.parent == version.owner {
+                break;
+            }
+            path.push(version.owner);
+            version_idx = self.resolve_version(version.parent);
+        }
+
+        let root_owner = self.versions[version_idx].owner;
+        for n in path {
+            let prev = self.current[n];
+            let new_idx = self.versions.len();
+            self.versions.push(Version {
+                owner: n,
+                parent: root_owner,
+                size: 1,
+                prev,
+                depth: self.depth,
+            });
+            self.current[n] = new_idx;
+        }
+        root_owner
+    }
+
+    pub fn find(&mut self, id: usize) -> Rc<T> {
+        let root_id = self.find_root_id(id);
         self.name_table[root_id].clone()
     }
 
-    pub fn union(&mut self, l: &Rc<T>, r: &Rc<T>) {
-        let l_id = self.get_id(l);
-        let r_id = self.get_id(r);
-        let mut l_root = self.find_root_id(l_id);
-        let mut r_root = self.find_root_id(r_id);
+    pub fn union(&mut self, parent_id: usize, child_id: usize) {
+        let parent_root = self.find_root_id(parent_id);
+        let child_root = self.find_root_id(child_id);
 
-        if l_root == r_root {
+        if parent_root == child_root {
             return;
         }
 
-        let l_size = self.get_size(l_root);
-        let r_size = self.get_size(r_root);
-        if l_size < r_size {
-            std::mem::swap(&mut l_root, &mut r_root);
-        }
+        let parent_root_version = self.resolve_version(parent_root);
+        let child_root_version = self.resolve_version(child_root);
+        let parent_size = self.versions[parent_root_version].size;
+        let child_size = self.versions[child_root_version].size;
 
-        let head = self.layers.last_mut().unwrap();
-        head.parent[r_root] = l_root;
-        head.size[l_root] = l_size + r_size;
+        let child_prev = self.current[child_root];
+        let parent_prev = self.current[parent_root];
+
+        let child_idx = self.versions.len();
+        self.versions.push(Version {
+            owner: child_root,
+            parent: parent_root,
+            size: child_size,
+            prev: child_prev,
+            depth: self.depth,
+        });
+        self.current[child_root] = child_idx;
+
+        let new_root_idx = self.versions.len();
+        self.versions.push(Version {
+            owner: parent_root,
+            parent: parent_root,
+            size: parent_size + child_size,
+            prev: parent_prev,
+            depth: self.depth,
+        });
+        self.current[parent_root] = new_root_idx;
     }
 
     pub fn push_choicepoint(&mut self) {
-        let len = self.name_table.len();
-        let mut parent = Vec::with_capacity(len);
-        parent.resize(len, UNSET);
-        let mut size = Vec::with_capacity(len);
-        size.resize(len, UNSET);
-        self.layers.push(Layer { parent, size });
+        self.depth += 1;
         self.name_layers.push(HashMap::with_capacity(8));
     }
+
     pub fn pop_choicepoint(&mut self) {
-        if self.layers.len() <= 1 {
+        if self.depth == 0 {
             panic!();
         }
 
-        let layer = self.layers.pop().unwrap();
-        self.name_layers.pop();
+        self.depth -= 1;
+        let layer = self.name_layers.pop();
         drop(layer);
     }
 }
@@ -180,11 +182,11 @@ mod tests {
         let mut uf = LayeredUf::new();
         let a = Rc::new(1);
         let b = Rc::new(2);
-        uf.register(a.clone());
-        uf.register(b.clone());
+        let a_id = uf.register(a.clone());
+        let b_id = uf.register(b.clone());
 
-        let root_a = uf.find(&a);
-        let root_b = uf.find(&b);
+        let root_a = uf.find(a_id);
+        let root_b = uf.find(b_id);
 
         assert!(Rc::ptr_eq(&root_a, &a));
         assert!(Rc::ptr_eq(&root_b, &b));
@@ -196,13 +198,13 @@ mod tests {
         let mut uf = LayeredUf::new();
         let a = Rc::new(1);
         let b = Rc::new(2);
-        uf.register(a.clone());
-        uf.register(b.clone());
+        let a_id = uf.register(a.clone());
+        let b_id = uf.register(b.clone());
 
-        uf.union(&a, &b);
+        uf.union(a_id, b_id);
 
-        let root_a = uf.find(&a);
-        let root_b = uf.find(&b);
+        let root_a = uf.find(a_id);
+        let root_b = uf.find(b_id);
 
         assert!(Rc::ptr_eq(&root_a, &root_b));
     }
@@ -213,15 +215,15 @@ mod tests {
         let a = Rc::new(1);
         let b = Rc::new(2);
         let c = Rc::new(3);
-        uf.register(a.clone());
-        uf.register(b.clone());
-        uf.register(c.clone());
+        let a_id = uf.register(a.clone());
+        let b_id = uf.register(b.clone());
+        let c_id = uf.register(c.clone());
 
-        uf.union(&a, &b);
-        uf.union(&b, &c);
+        uf.union(a_id, b_id);
+        uf.union(b_id, c_id);
 
-        let root_a = uf.find(&a);
-        let root_c = uf.find(&c);
+        let root_a = uf.find(a_id);
+        let root_c = uf.find(c_id);
 
         assert!(Rc::ptr_eq(&root_a, &root_c));
     }
@@ -238,26 +240,26 @@ mod tests {
         let mut uf = LayeredUf::new();
         let a = Rc::new(1);
         let b = Rc::new(2);
-        uf.register(a.clone());
-        uf.register(b.clone());
+        let a_id = uf.register(a.clone());
+        let b_id = uf.register(b.clone());
 
-        uf.union(&a, &b);
-        let root_before = uf.find(&a);
+        uf.union(a_id, b_id);
+        let root_before = uf.find(a_id);
 
         uf.push_choicepoint();
         let c = Rc::new(3);
-        uf.register(c.clone());
-        uf.union(&a, &c);
+        let c_id = uf.register(c.clone());
+        uf.union(a_id, c_id);
 
-        let root_a = uf.find(&a);
-        let root_c = uf.find(&c);
+        let root_a = uf.find(a_id);
+        let root_c = uf.find(c_id);
         assert!(Rc::ptr_eq(&root_a, &root_c));
 
         uf.pop_choicepoint();
 
-        let root_after = uf.find(&a);
+        let root_after = uf.find(a_id);
 
-        assert!(Rc::ptr_eq(&root_after, &root_before));
+        assert_eq!(root_after, root_before);
     }
 
     #[test]
@@ -265,32 +267,32 @@ mod tests {
         let mut uf: LayeredUf<i32> = LayeredUf::new();
         let a = Rc::new(1);
         let b = Rc::new(2);
-        uf.register(a.clone());
-        uf.register(b.clone());
+        let a_id = uf.register(a.clone());
+        let b_id = uf.register(b.clone());
 
-        uf.union(&a, &b);
+        uf.union(a_id, b_id);
 
         uf.push_choicepoint();
         let c = Rc::new(3);
         let d = Rc::new(4);
-        uf.register(c.clone());
-        uf.register(d.clone());
-        uf.union(&c, &d);
+        let c_id = uf.register(c.clone());
+        let d_id = uf.register(d.clone());
+        uf.union(c_id, d_id);
 
-        let root_a = uf.find(&a);
-        let root_b = uf.find(&b);
-        let root_c = uf.find(&c);
-        let root_d = uf.find(&d);
+        let root_a = uf.find(a_id);
+        let root_b = uf.find(b_id);
+        let root_c = uf.find(c_id);
+        let root_d = uf.find(d_id);
 
-        assert!(Rc::ptr_eq(&root_a, &root_b));
-        assert!(Rc::ptr_eq(&root_c, &root_d));
-        assert!(!Rc::ptr_eq(&root_a, &root_c));
+        assert_eq!(root_a, root_b);
+        assert_eq!(root_c, root_d);
+        assert_ne!(root_a, root_c);
 
         uf.pop_choicepoint();
 
-        let root_a_after = uf.find(&a);
-        let root_b_after = uf.find(&b);
-        assert!(Rc::ptr_eq(&root_a_after, &root_b_after));
+        let root_a_after = uf.find(a_id);
+        let root_b_after = uf.find(b_id);
+        assert_eq!(root_a_after, root_b_after);
     }
 
     #[test]
@@ -298,14 +300,14 @@ mod tests {
         let mut uf = LayeredUf::new();
         let x = Rc::new("x".to_string());
         let y = Rc::new("y".to_string());
-        uf.register(x.clone());
-        uf.register(y.clone());
+        let x_id = uf.register(x.clone());
+        let y_id = uf.register(y.clone());
 
-        uf.union(&x, &y);
+        uf.union(x_id, y_id);
 
-        let root_x = uf.find(&x);
-        let root_y = uf.find(&y);
+        let root_x = uf.find(x_id);
+        let root_y = uf.find(y_id);
 
-        assert!(Rc::ptr_eq(&root_x, &root_y));
+        assert_eq!(root_x, root_y);
     }
 }

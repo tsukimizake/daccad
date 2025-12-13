@@ -9,13 +9,27 @@ pub enum Cell {
     Var {
         name: String,
     },
-    Ref(Rc<Cell>),
     Struct {
         functor: String,
         arity: usize,
         children: Vec<Rc<Cell>>,
     },
     Number(i64),
+}
+
+// (register/stackdepth, register index)
+// registers上なら第一引数はusize::MAX
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+struct CellIndex(usize, usize);
+
+impl CellIndex {
+    fn get_from_register(reg_index: usize) -> CellIndex {
+        CellIndex(usize::max_value(), reg_index)
+    }
+
+    fn get_from_stack(stack_depth: usize, reg_index: usize) -> CellIndex {
+        CellIndex(stack_depth, reg_index)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,16 +71,15 @@ impl Registers {
     }
 }
 
-#[allow(unused)]
 enum Frame {
     Base {},
     Environment {
-        prev_ep: Rc<Frame>,
-        return_pc: Rc<WamInstr>,
+        return_pc: usize,
         registers: Vec<Cell>,
     },
     ChoicePoint {
-        // TODO
+        stack_len_to_set: usize,
+        layered_uf_depth_to_set: usize,
     },
 }
 
@@ -82,7 +95,7 @@ fn exectute_impl(
     program_counter: &mut usize,
     registers: &mut Registers,
     stack: &mut Vec<Frame>,
-    layered_uf: &mut LayeredUf<Cell>,
+    layered_uf: &mut LayeredUf<CellIndex>,
     exec_mode: &mut ExecMode,
 ) {
     if let Some(current_instr) = instructions.get(*program_counter) {
@@ -108,11 +121,18 @@ fn exectute_impl(
                 arity: _,
                 to_program_counter,
             } => {
+                stack.push(Frame::Environment {
+                    return_pc: *program_counter,
+                    registers: Vec::new(), // TODO
+                });
                 *program_counter = *to_program_counter;
             }
             WamInstr::Label { name: _, arity: _ } => {}
             WamInstr::Proceed => {
-                *exec_mode = ExecMode::ResolvedToTrue; // TODO stackをたどるか何かして解決すべきpredicateが残っていないかcheck
+                stack.pop();
+                if stack.len() == 0 {
+                    *exec_mode = ExecMode::ResolvedToTrue;
+                }
             }
             WamInstr::Error { message } => {
                 println!("{}", message);
@@ -132,7 +152,8 @@ pub fn execute_instructions(instructions: Vec<WamInstr>, orig_query: Term) -> Te
     let mut program_counter = 0;
     let mut exec_mode = ExecMode::Continue;
     let mut registers = Registers::new();
-    let mut stack = Vec::new();
+    let mut stack = Vec::with_capacity(100);
+    stack.push(Frame::Base {});
     let mut layered_uf = LayeredUf::new();
 
     while exec_mode == ExecMode::Continue {
@@ -165,8 +186,10 @@ mod tests {
         let query_terms = parse::query(query_src).expect("failed to parse query").1;
         let mut query_terms = query_terms.into_iter();
         let query_term = query_terms.next().expect("query needs at least one term");
-        let instructions =
-            compile_link(compile_query(vec![query_term.clone()]), compile_db(db_clauses));
+        let instructions = compile_link(
+            compile_query(vec![query_term.clone()]),
+            compile_db(db_clauses),
+        );
         (instructions, query_term)
     }
 
