@@ -2,7 +2,8 @@
 // [(0,0), (0,0), (2,2)]
 // find_rootでレイヤ内参照をまず優先して見てpath compactionして、そののちrootを見に行って自分だけcompactionしてという動作をし、レイヤ1以降はこのようになる
 // [(0,0), (0,0), (2,2), | (0, 3), (3, 3), (5, 5), (2,6) | (6,7) | (8,8)]
-// また、上記の場合に7にアクセスすると7,6,2と毎回たどり、path compactionが効かないためキャッシュを導入している
+// また、キャッシュなしだと上記の場合に7にアクセスすると7,6,2と毎回たどり、path compactionが効かないためキャッシュを導入している
+// cell_storeなど外のレイヤでバックトラック後に初めて使われた変数かどうかをチェックできれば最新レイヤに参照をpushすることでキャッシュは不要になる
 pub struct UfCore {
     // union-findの親ノードを示す配列 いつものやつ
     // 自分より新しいレイヤのノードは参照しない制約
@@ -12,6 +13,7 @@ pub struct UfCore {
     // 各レイヤーの開始インデックス
     // top layerは最後尾で、それ以前のレイヤーは不変データ構造として扱う
     layer_index: Vec<usize>,
+    // キャッシュの世代管理用 pop_choicepoint時にインクリメントされる
     epoch: u32,
 }
 
@@ -65,7 +67,7 @@ impl UfCore {
 
         // レイヤ内参照を優先しながら辿る
         while parent != current {
-            if current >= top_start {
+            if top_start <= current {
                 path.push(current);
             }
             current = parent;
@@ -76,24 +78,16 @@ impl UfCore {
             };
         }
 
-        // rooted側で最終根を確認
-        let mut root = current;
-        let mut next = self.parent[root].rooted;
-        while next != root {
-            root = next;
-            next = self.parent[root].rooted;
-        }
-
         // 現レイヤのlocalに圧縮書き込み
         for n in path {
             if n >= top_start {
-                self.parent[n].local = root;
+                self.parent[n].local = current;
             }
         }
 
-        self.parent[node].rooted_cache = root;
+        self.parent[node].rooted_cache = current;
         self.parent[node].cache_epoch = self.epoch;
-        root
+        current
     }
 
     pub fn union(&mut self, parent_id: usize, child_id: usize) {
