@@ -17,21 +17,6 @@ pub enum Cell {
     Number(i64),
 }
 
-// (register/stackdepth, register index)
-// registers上なら第一引数はusize::MAX
-#[derive(PartialEq, Eq, Hash, Debug, Clone)]
-struct CellIndex(usize, usize);
-
-impl CellIndex {
-    fn get_from_register(reg_index: usize) -> CellIndex {
-        CellIndex(usize::max_value(), reg_index)
-    }
-
-    fn get_from_stack(stack_depth: usize, reg_index: usize) -> CellIndex {
-        CellIndex(stack_depth, reg_index)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Registers {
     registers: Vec<Cell>,
@@ -95,7 +80,7 @@ fn exectute_impl(
     program_counter: &mut usize,
     registers: &mut Registers,
     stack: &mut Vec<Frame>,
-    layered_uf: &mut LayeredUf<CellIndex>,
+    layered_uf: &mut LayeredUf<Cell>,
     exec_mode: &mut ExecMode,
 ) {
     if let Some(current_instr) = instructions.get(*program_counter) {
