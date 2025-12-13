@@ -15,7 +15,6 @@ pub struct LayeredUf<T: Eq + Hash> {
 struct Version {
     owner: usize,
     parent: usize,
-    size: usize,
     prev: usize,
     depth: usize,
 }
@@ -60,7 +59,6 @@ impl<T: Eq + Hash> LayeredUf<T> {
         self.versions.push(Version {
             owner: id,
             parent: id,
-            size: 1,
             prev: NONE,
             depth: self.depth,
         });
@@ -106,7 +104,6 @@ impl<T: Eq + Hash> LayeredUf<T> {
             self.versions.push(Version {
                 owner: n,
                 parent: root_owner,
-                size: 1,
                 prev,
                 depth: self.depth,
             });
@@ -128,11 +125,6 @@ impl<T: Eq + Hash> LayeredUf<T> {
             return;
         }
 
-        let parent_root_version = self.resolve_version(parent_root);
-        let child_root_version = self.resolve_version(child_root);
-        let parent_size = self.versions[parent_root_version].size;
-        let child_size = self.versions[child_root_version].size;
-
         let child_prev = self.current[child_root];
         let parent_prev = self.current[parent_root];
 
@@ -140,7 +132,6 @@ impl<T: Eq + Hash> LayeredUf<T> {
         self.versions.push(Version {
             owner: child_root,
             parent: parent_root,
-            size: child_size,
             prev: child_prev,
             depth: self.depth,
         });
@@ -150,7 +141,6 @@ impl<T: Eq + Hash> LayeredUf<T> {
         self.versions.push(Version {
             owner: parent_root,
             parent: parent_root,
-            size: parent_size + child_size,
             prev: parent_prev,
             depth: self.depth,
         });
