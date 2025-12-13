@@ -1,11 +1,33 @@
-use std::{collections::HashMap, hash::Hash, rc::Rc};
+use std::rc::Rc;
 
 const NONE: usize = usize::MAX;
 
-// 単一のバージョン配列に変更を積み、各バージョンに生成時のdepthを持たせてpopをO(1)にする
-pub struct LayeredUf<T: Eq + Hash> {
-    name_table: Vec<Rc<T>>,
-    name_layers: Vec<HashMap<Rc<T>, usize>>,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Cell {
+    Empty { id: usize },
+    Var { id: usize, name: String },
+    Struct {
+        id: usize,
+        functor: String,
+        arity: usize,
+        children: Vec<usize>,
+    },
+}
+
+impl Cell {
+    pub fn id(&self) -> usize {
+        match self {
+            Cell::Empty { id }
+            | Cell::Var { id, .. }
+            | Cell::Struct { id, .. } => *id,
+        }
+    }
+}
+
+// 単一のバージョン配列に変更を積み、depthで有効範囲を切り替えるunion-find。
+// Cell生成もここで行い、id払い出しとUF登録を一体化させる。
+pub struct LayeredUf {
+    cells: Vec<Rc<Cell>>,
     versions: Vec<Version>,
     current: Vec<usize>,
     next_id: usize,
@@ -13,18 +35,21 @@ pub struct LayeredUf<T: Eq + Hash> {
 }
 
 struct Version {
+    // which logical node this version belongs to
     owner: usize,
+    // parent id at the time this version was created
     parent: usize,
+    // previous version of the same owner
     prev: usize,
+    // choicepoint depth when this version was created
     depth: usize,
 }
 
 #[allow(dead_code)]
-impl<T: Eq + Hash> LayeredUf<T> {
-    pub fn new() -> LayeredUf<T> {
+impl LayeredUf {
+    pub fn new() -> LayeredUf {
         LayeredUf {
-            name_table: Vec::with_capacity(16),
-            name_layers: vec![HashMap::with_capacity(16)],
+            cells: Vec::with_capacity(16),
             versions: Vec::with_capacity(16),
             current: Vec::with_capacity(16),
             next_id: 0,
@@ -32,30 +57,20 @@ impl<T: Eq + Hash> LayeredUf<T> {
         }
     }
 
-    fn lookup_id(&mut self, node: &Rc<T>) -> Option<usize> {
-        let len = self.name_layers.len();
-        for idx in (0..len).rev() {
-            if let Some(&id) = self.name_layers[idx].get(node) {
-                if idx + 1 != len {
-                    let head = self.name_layers.last_mut().unwrap();
-                    head.insert(node.clone(), id);
-                }
-                return Some(id);
-            }
-        }
-        None
-    }
-
-    pub fn id_of(&mut self, node: &Rc<T>) -> Option<usize> {
-        self.lookup_id(node)
-    }
-
-    pub fn register(&mut self, node: Rc<T>) -> usize {
+    fn alloc_id(&mut self) -> usize {
         let id = self.next_id;
         self.next_id += 1;
-        self.name_table.push(node.clone());
+        id
+    }
+
+    fn insert_cell(&mut self, cell: Cell) -> usize {
+        let id = cell.id();
+        if id != self.cells.len() {
+            panic!("cell id must be contiguous");
+        }
 
         let version_idx = self.versions.len();
+        self.cells.push(Rc::new(cell));
         self.versions.push(Version {
             owner: id,
             parent: id,
@@ -63,12 +78,32 @@ impl<T: Eq + Hash> LayeredUf<T> {
             depth: self.depth,
         });
         self.current.push(version_idx);
-
-        self.name_layers
-            .last_mut()
-            .unwrap()
-            .insert(node.clone(), id);
         id
+    }
+
+    pub fn register_empty(&mut self) -> usize {
+        let id = self.alloc_id();
+        self.insert_cell(Cell::Empty { id })
+    }
+
+    pub fn register_var(&mut self, name: impl Into<String>) -> usize {
+        let id = self.alloc_id();
+        self.insert_cell(Cell::Var { id, name: name.into() })
+    }
+
+    pub fn register_struct(&mut self, functor: impl Into<String>, children: Vec<usize>) -> usize {
+        let id = self.alloc_id();
+        let arity = children.len();
+        self.insert_cell(Cell::Struct {
+            id,
+            functor: functor.into(),
+            arity,
+            children,
+        })
+    }
+
+    pub fn value(&self, id: usize) -> Rc<Cell> {
+        self.cells[id].clone()
     }
 
     fn resolve_version(&mut self, node_id: usize) -> usize {
@@ -112,9 +147,9 @@ impl<T: Eq + Hash> LayeredUf<T> {
         root_owner
     }
 
-    pub fn find(&mut self, id: usize) -> Rc<T> {
+    pub fn find(&mut self, id: usize) -> Rc<Cell> {
         let root_id = self.find_root_id(id);
-        self.name_table[root_id].clone()
+        self.cells[root_id].clone()
     }
 
     pub fn union(&mut self, parent_id: usize, child_id: usize) {
@@ -149,7 +184,6 @@ impl<T: Eq + Hash> LayeredUf<T> {
 
     pub fn push_choicepoint(&mut self) {
         self.depth += 1;
-        self.name_layers.push(HashMap::with_capacity(8));
     }
 
     pub fn pop_choicepoint(&mut self) {
@@ -158,8 +192,6 @@ impl<T: Eq + Hash> LayeredUf<T> {
         }
 
         self.depth -= 1;
-        let layer = self.name_layers.pop();
-        drop(layer);
     }
 }
 
@@ -170,26 +202,22 @@ mod tests {
     #[test]
     fn test_find_unconnected() {
         let mut uf = LayeredUf::new();
-        let a = Rc::new(1);
-        let b = Rc::new(2);
-        let a_id = uf.register(a.clone());
-        let b_id = uf.register(b.clone());
+        let a_id = uf.register_var("a");
+        let b_id = uf.register_var("b");
 
         let root_a = uf.find(a_id);
         let root_b = uf.find(b_id);
 
-        assert!(Rc::ptr_eq(&root_a, &a));
-        assert!(Rc::ptr_eq(&root_b, &b));
+        assert!(matches!(*root_a, Cell::Var { id, .. } if id == a_id));
+        assert!(matches!(*root_b, Cell::Var { id, .. } if id == b_id));
         assert!(!Rc::ptr_eq(&root_a, &root_b));
     }
 
     #[test]
     fn test_union_and_find() {
         let mut uf = LayeredUf::new();
-        let a = Rc::new(1);
-        let b = Rc::new(2);
-        let a_id = uf.register(a.clone());
-        let b_id = uf.register(b.clone());
+        let a_id = uf.register_var("a");
+        let b_id = uf.register_var("b");
 
         uf.union(a_id, b_id);
 
@@ -202,12 +230,9 @@ mod tests {
     #[test]
     fn test_transitive_union() {
         let mut uf = LayeredUf::new();
-        let a = Rc::new(1);
-        let b = Rc::new(2);
-        let c = Rc::new(3);
-        let a_id = uf.register(a.clone());
-        let b_id = uf.register(b.clone());
-        let c_id = uf.register(c.clone());
+        let a_id = uf.register_var("a");
+        let b_id = uf.register_var("b");
+        let c_id = uf.register_var("c");
 
         uf.union(a_id, b_id);
         uf.union(b_id, c_id);
@@ -221,24 +246,21 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_pop_choicepoint_empty_panics() {
-        let mut uf: LayeredUf<i32> = LayeredUf::new();
+        let mut uf: LayeredUf = LayeredUf::new();
         uf.pop_choicepoint();
     }
 
     #[test]
     fn test_backtrack_undoes_union() {
         let mut uf = LayeredUf::new();
-        let a = Rc::new(1);
-        let b = Rc::new(2);
-        let a_id = uf.register(a.clone());
-        let b_id = uf.register(b.clone());
+        let a_id = uf.register_var("a");
+        let b_id = uf.register_var("b");
 
         uf.union(a_id, b_id);
         let root_before = uf.find(a_id);
 
         uf.push_choicepoint();
-        let c = Rc::new(3);
-        let c_id = uf.register(c.clone());
+        let c_id = uf.register_var("c");
         uf.union(a_id, c_id);
 
         let root_a = uf.find(a_id);
@@ -249,24 +271,20 @@ mod tests {
 
         let root_after = uf.find(a_id);
 
-        assert_eq!(root_after, root_before);
+        assert!(Rc::ptr_eq(&root_after, &root_before));
     }
 
     #[test]
     fn test_choicepoint_isolation() {
-        let mut uf: LayeredUf<i32> = LayeredUf::new();
-        let a = Rc::new(1);
-        let b = Rc::new(2);
-        let a_id = uf.register(a.clone());
-        let b_id = uf.register(b.clone());
+        let mut uf: LayeredUf = LayeredUf::new();
+        let a_id = uf.register_var("a");
+        let b_id = uf.register_var("b");
 
         uf.union(a_id, b_id);
 
         uf.push_choicepoint();
-        let c = Rc::new(3);
-        let d = Rc::new(4);
-        let c_id = uf.register(c.clone());
-        let d_id = uf.register(d.clone());
+        let c_id = uf.register_var("c");
+        let d_id = uf.register_var("d");
         uf.union(c_id, d_id);
 
         let root_a = uf.find(a_id);
@@ -274,30 +292,28 @@ mod tests {
         let root_c = uf.find(c_id);
         let root_d = uf.find(d_id);
 
-        assert_eq!(root_a, root_b);
-        assert_eq!(root_c, root_d);
-        assert_ne!(root_a, root_c);
+        assert!(Rc::ptr_eq(&root_a, &root_b));
+        assert!(Rc::ptr_eq(&root_c, &root_d));
+        assert!(!Rc::ptr_eq(&root_a, &root_c));
 
         uf.pop_choicepoint();
 
         let root_a_after = uf.find(a_id);
         let root_b_after = uf.find(b_id);
-        assert_eq!(root_a_after, root_b_after);
+        assert!(Rc::ptr_eq(&root_a_after, &root_b_after));
     }
 
     #[test]
     fn test_string_values() {
         let mut uf = LayeredUf::new();
-        let x = Rc::new("x".to_string());
-        let y = Rc::new("y".to_string());
-        let x_id = uf.register(x.clone());
-        let y_id = uf.register(y.clone());
+        let x_id = uf.register_var("x".to_string());
+        let y_id = uf.register_var("y".to_string());
 
         uf.union(x_id, y_id);
 
         let root_x = uf.find(x_id);
         let root_y = uf.find(y_id);
 
-        assert_eq!(root_x, root_y);
+        assert!(Rc::ptr_eq(&root_x, &root_y));
     }
 }

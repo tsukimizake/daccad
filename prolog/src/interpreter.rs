@@ -1,56 +1,39 @@
 use crate::{layered_uf::LayeredUf, parse::Term};
-use std::rc::Rc;
-
 use crate::compiler_bytecode::{WamInstr, WamReg};
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Cell {
-    Empty,
-    Var {
-        name: String,
-    },
-    Struct {
-        functor: String,
-        arity: usize,
-        children: Vec<Rc<Cell>>,
-    },
-    Number(i64),
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Registers {
-    registers: Vec<Cell>,
+    registers: Vec<usize>,
 }
 
 impl Registers {
-    fn new() -> Self {
-        Self {
-            registers: vec![Cell::Empty; 32],
+    fn new(layered_uf: &mut LayeredUf) -> Self {
+        let mut registers = Vec::with_capacity(32);
+        for _ in 0..32 {
+            registers.push(layered_uf.register_empty());
         }
+        Self { registers }
     }
 
-    pub fn get_arg_registers(&self) -> &[Cell] {
+    pub fn get_arg_registers(&self) -> &[usize] {
         &self.registers
     }
-    pub fn get_register<'a>(&'a mut self, reg: &WamReg) -> &'a Cell {
+    pub fn get_register(&mut self, layered_uf: &mut LayeredUf, reg: &WamReg) -> usize {
         let index = match reg {
             WamReg::X(index) => *index,
         };
-        if index < self.registers.len() {
-            &self.registers[index]
-        } else {
-            let r = Cell::Empty;
-            self.registers.push(r);
-            &self.registers[index]
+        while index >= self.registers.len() {
+            self.registers.push(layered_uf.register_empty());
         }
+        self.registers[index]
     }
 
-    pub fn set_register(&mut self, reg: &WamReg, value: Cell) {
+    pub fn set_register(&mut self, layered_uf: &mut LayeredUf, reg: &WamReg, value: usize) {
         let index = match reg {
             WamReg::X(index) => *index,
         };
-        if index >= self.registers.len() {
-            self.registers.resize(index + 1, Cell::Empty);
+        while index >= self.registers.len() {
+            self.registers.push(layered_uf.register_empty());
         }
         self.registers[index] = value;
     }
@@ -60,7 +43,7 @@ enum Frame {
     Base {},
     Environment {
         return_pc: usize,
-        registers: Vec<Cell>,
+        registers: Vec<usize>,
     },
     ChoicePoint {
         stack_len_to_set: usize,
@@ -80,7 +63,7 @@ fn exectute_impl(
     program_counter: &mut usize,
     registers: &mut Registers,
     stack: &mut Vec<Frame>,
-    layered_uf: &mut LayeredUf<Cell>,
+    layered_uf: &mut LayeredUf,
     exec_mode: &mut ExecMode,
 ) {
     if let Some(current_instr) = instructions.get(*program_counter) {
@@ -136,10 +119,10 @@ fn exectute_impl(
 pub fn execute_instructions(instructions: Vec<WamInstr>, orig_query: Term) -> Term {
     let mut program_counter = 0;
     let mut exec_mode = ExecMode::Continue;
-    let mut registers = Registers::new();
+    let mut layered_uf = LayeredUf::new();
+    let mut registers = Registers::new(&mut layered_uf);
     let mut stack = Vec::with_capacity(100);
     stack.push(Frame::Base {});
-    let mut layered_uf = LayeredUf::new();
 
     while exec_mode == ExecMode::Continue {
         exectute_impl(
