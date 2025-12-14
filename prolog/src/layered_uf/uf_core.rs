@@ -4,6 +4,7 @@
 // [(0,0), (0,0), (2,2), | (0, 3), (3, 3), (5, 5), (2,6) | (6,7) | (8,8)]
 // また、キャッシュなしだと上記の場合に7にアクセスすると7,6,2と毎回たどり、path compactionが効かないためキャッシュを導入している
 // cell_storeなど外のレイヤでバックトラック後に初めて使われた変数かどうかをチェックできれば最新レイヤに参照をpushすることでキャッシュは不要になる
+// 参照は必ずインデックスが小さいものへと参照し、最もインデックスが小さいものがレイヤ内の代表元となる
 pub struct UfCore {
     // union-findの親ノードを示す配列 いつものやつ
     // 自分より新しいレイヤのノードは参照しない制約
@@ -18,8 +19,16 @@ pub struct UfCore {
 }
 
 struct Parent {
+    // layerをまたぐ親への参照
+    // top layer以外では不変性を保つため更新されない
     rooted: usize,
+    // layer内での親への参照
+    // top layer以外では不変性を保つため更新されない
+    // rooted, local共にindexが小さい物へと参照する.結果として代表元は最もindexが小さいものとなる
     local: usize,
+
+    // top layer以外ではpath compactionが起きない弱点を補うためのキャッシュ
+    // epochをチェックすることによってbacktrack後はstaleとして扱われる
     rooted_cache: usize,
     cache_epoch: u32,
 }
@@ -46,6 +55,22 @@ impl UfCore {
             cache_epoch: self.epoch,
         });
         id
+    }
+
+    // 渡ってくるnodeはregister_node済みであることが前提
+    fn find_local_root(&mut self, node: usize) -> usize {
+        let current_layer: [Parent] = {
+            // todo bisect
+            let current_layer_begin = self
+                .layer_index
+                .iter()
+                .enumerate()
+                .find(|(_, layer_beg)| **layer_beg < node)
+                .map(|(idx, _)| idx)
+                .unwrap_or(0);
+            let current_layer_end = current_layer_begin + 1;
+            self.parent[current_layer_begin..current_layer_end]
+        };
     }
 
     // 渡ってくるnodeはregister_node済みであることが前提
