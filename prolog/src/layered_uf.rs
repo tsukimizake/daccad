@@ -2,8 +2,8 @@ mod cell_store;
 mod uf_core;
 
 use cell_store::CellStore;
-use uf_core::UfCore;
 use std::rc::Rc;
+use uf_core::UfCore;
 
 pub use cell_store::Cell;
 
