@@ -1,5 +1,7 @@
-use crate::{layered_uf::LayeredUf, parse::Term};
+use crate::cell_heap::CellHeap;
 use crate::compiler_bytecode::{WamInstr, WamReg};
+use crate::layered_uf::LayeredUf;
+use crate::parse::Term;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Registers {
@@ -7,10 +9,10 @@ pub struct Registers {
 }
 
 impl Registers {
-    fn new(layered_uf: &mut LayeredUf) -> Self {
+    fn new(heap: &mut CellHeap) -> Self {
         let mut registers = Vec::with_capacity(32);
         for _ in 0..32 {
-            registers.push(layered_uf.register_empty());
+            registers.push(heap.insert_empty());
         }
         Self { registers }
     }
@@ -18,22 +20,22 @@ impl Registers {
     pub fn get_arg_registers(&self) -> &[usize] {
         &self.registers
     }
-    pub fn get_register(&mut self, layered_uf: &mut LayeredUf, reg: &WamReg) -> usize {
+    pub fn get_register(&mut self, cell_store: &mut CellHeap, reg: &WamReg) -> usize {
         let index = match reg {
             WamReg::X(index) => *index,
         };
         while index >= self.registers.len() {
-            self.registers.push(layered_uf.register_empty());
+            self.registers.push(cell_store.insert_empty());
         }
         self.registers[index]
     }
 
-    pub fn set_register(&mut self, layered_uf: &mut LayeredUf, reg: &WamReg, value: usize) {
+    pub fn set_register(&mut self, cell_heap: &mut CellHeap, reg: &WamReg, value: usize) {
         let index = match reg {
             WamReg::X(index) => *index,
         };
         while index >= self.registers.len() {
-            self.registers.push(layered_uf.register_empty());
+            self.registers.push(cell_heap.insert_empty());
         }
         self.registers[index] = value;
     }
@@ -63,6 +65,7 @@ fn exectute_impl(
     program_counter: &mut usize,
     registers: &mut Registers,
     stack: &mut Vec<Frame>,
+    heap: &mut CellHeap,
     layered_uf: &mut LayeredUf,
     exec_mode: &mut ExecMode,
 ) {
@@ -120,7 +123,8 @@ pub fn execute_instructions(instructions: Vec<WamInstr>, orig_query: Term) -> Te
     let mut program_counter = 0;
     let mut exec_mode = ExecMode::Continue;
     let mut layered_uf = LayeredUf::new();
-    let mut registers = Registers::new(&mut layered_uf);
+    let mut cell_heap = CellHeap::new();
+    let mut registers = Registers::new(&mut cell_heap);
     let mut stack = Vec::with_capacity(100);
     stack.push(Frame::Base {});
 
@@ -130,6 +134,7 @@ pub fn execute_instructions(instructions: Vec<WamInstr>, orig_query: Term) -> Te
             &mut program_counter,
             &mut registers,
             &mut stack,
+            &mut cell_heap,
             &mut layered_uf,
             &mut exec_mode,
         );

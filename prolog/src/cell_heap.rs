@@ -25,46 +25,49 @@ impl Cell {
     }
 }
 
-pub struct CellStore {
+pub struct CellHeap {
     cells: Vec<Rc<Cell>>,
 }
 
-impl CellStore {
+impl CellHeap {
     pub fn new() -> Self {
         Self {
             cells: Vec::with_capacity(16),
         }
     }
 
-    pub fn insert_empty(&mut self, id: usize) {
-        self.assert_contiguous(id);
+    fn next_id(&self) -> usize {
+        self.cells.len()
+    }
+
+    pub fn insert_empty(&mut self) -> usize {
+        let id = self.next_id();
         self.cells.push(Rc::new(Cell::Empty { id }));
+        id
     }
 
-    pub fn insert_var(&mut self, id: usize, name: impl Into<String>) {
-        self.assert_contiguous(id);
-        self.cells
-            .push(Rc::new(Cell::Var { id, name: name.into() }));
+    pub fn insert_var(&mut self, name: impl Into<String>) -> usize {
+        let id = self.next_id();
+        self.cells.push(Rc::new(Cell::Var {
+            id,
+            name: name.into(),
+        }));
+        id
     }
 
-    pub fn insert_struct(&mut self, id: usize, functor: impl Into<String>, children: Vec<usize>) {
-        self.assert_contiguous(id);
+    pub fn insert_struct(&mut self, functor: String, children: Vec<usize>) -> usize {
+        let id = self.next_id();
         let arity = children.len();
         self.cells.push(Rc::new(Cell::Struct {
             id,
-            functor: functor.into(),
+            functor,
             arity,
             children,
         }));
+        id
     }
 
     pub fn value(&self, id: usize) -> Rc<Cell> {
         self.cells[id].clone()
-    }
-
-    fn assert_contiguous(&self, id: usize) {
-        if id != self.cells.len() {
-            panic!("cell id must be contiguous");
-        }
     }
 }

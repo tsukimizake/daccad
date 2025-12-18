@@ -1,3 +1,4 @@
+mod cell_heap;
 pub mod compile_db;
 pub mod compile_link;
 pub mod compile_query;
