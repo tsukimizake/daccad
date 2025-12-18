@@ -25,7 +25,7 @@ pub struct LayeredUf {
 }
 
 // 本来cellを持つかどうかでenumにしたいところだが性能のためにこの形
-struct Parent {
+pub struct Parent {
     // layerをまたぐ親への参照
     // top layer以外では不変性を保つため更新されない
     rooted: GlobalParentIndex,
@@ -68,7 +68,7 @@ impl<'a> IndexMut<LocalParentIndex> for CurrentLayerParents<'a> {
 
 // Parents全てに対するインデックス型
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct GlobalParentIndex(usize);
+pub struct GlobalParentIndex(usize);
 
 impl GlobalParentIndex {
     fn from_local_index(index: LocalParentIndex, old_layers_len: usize) -> GlobalParentIndex {
@@ -185,6 +185,7 @@ impl LayeredUf {
         }
     }
 
+    #[allow(unused)]
     pub fn register_node(&mut self) -> GlobalParentIndex {
         let global_id = GlobalParentIndex(self.parent.len());
         let top_layer_start = self.layer_index.last().unwrap_or(&GlobalParentIndex(0));
@@ -229,6 +230,7 @@ impl LayeredUf {
         )
     }
 
+    #[allow(unused)]
     pub fn find_root<'a>(&'a mut self, id: GlobalParentIndex) -> &'a Parent {
         let epoch = self.epoch;
         let (mut old_layers, mut current_layer, rest_layers) = self.split_layers(id);
@@ -238,6 +240,7 @@ impl LayeredUf {
     }
 
     // 必ずindexが大きいものから小さいものを参照
+    #[allow(unused)]
     pub fn union(&mut self, l_id: GlobalParentIndex, _r_id: GlobalParentIndex) {
         let epoch = self.epoch;
         let (mut old_layers, mut current_layer, rest_layers) = self.split_layers(l_id);
@@ -277,12 +280,14 @@ impl LayeredUf {
     //     self.parent[r_id].cache_epoch = self.epoch;
     // }
 
+    #[allow(unused)]
     pub fn push_choicepoint(&mut self) {
         self.layer_index
             .0
             .push(GlobalParentIndex(self.parent.0.len()));
     }
 
+    #[allow(unused)]
     pub fn pop_choicepoint(&mut self) {
         let layer_start = self
             .layer_index
