@@ -115,23 +115,16 @@ struct OldLayersParents<'a>(&'a mut [Parent]);
 struct CurrentLayerParents<'a>(&'a mut [Parent]);
 struct RestLayersParents<'a>(&'a [Parent]);
 
-impl<'a> Index<LocalParentIndex> for OldLayersParents<'a> {
+impl<'a> Index<GlobalParentIndex> for OldLayersParents<'a> {
     type Output = Parent;
-    fn index(&self, i: LocalParentIndex) -> &Self::Output {
+    fn index(&self, i: GlobalParentIndex) -> &Self::Output {
         &self.0[i.0]
     }
 }
 
-impl<'a> IndexMut<LocalParentIndex> for OldLayersParents<'a> {
-    fn index_mut(&mut self, i: LocalParentIndex) -> &mut Self::Output {
+impl<'a> IndexMut<GlobalParentIndex> for OldLayersParents<'a> {
+    fn index_mut(&mut self, i: GlobalParentIndex) -> &mut Self::Output {
         &mut self.0[i.0]
-    }
-}
-
-impl<'a> Index<LocalParentIndex> for RestLayersParents<'a> {
-    type Output = Parent;
-    fn index(&self, i: LocalParentIndex) -> &Self::Output {
-        &self.0[i.0]
     }
 }
 
@@ -308,24 +301,24 @@ fn find_local_root(
     if is_top_layer {
         let mut path = Vec::with_capacity(8);
         let mut current = LocalParentIndex::from_global_index(node, old_layers_len);
-        let mut next = current_layer.0[current.0].local;
+        let mut next = current_layer[current].local;
         while current != next {
             path.push(current);
             current = next;
-            next = current_layer.0[current.0].local;
+            next = current_layer[current].local;
         }
         let root = current;
 
         path.iter().for_each(|p| {
-            current_layer.0[p.0].local = root;
+            current_layer[*p].local = root;
         });
         root
     } else {
         let mut current = LocalParentIndex::from_global_index(node, old_layers_len);
-        let mut next = current_layer.0[current.0].local;
+        let mut next = current_layer[current].local;
         while current != next {
             current = next;
-            next = current_layer.0[current.0].local;
+            next = current_layer[current].local;
         }
         current
     }
@@ -353,11 +346,12 @@ fn find_root_impl(
     if local_root.local == LocalParentIndex::from_global_index(local_root.rooted, old_layers_len) {
         return local_root.rooted;
     }
-    let old_layer_index = LocalParentIndex::from_global_index(node, old_layers_len);
+    let old_layer_index = node;
     return find_root_old_layers(
         global_epoch,
         old_layers,
-        current_layer.0[old_layer_index.0].rooted_cache,
+        current_layer[LocalParentIndex::from_global_index(old_layer_index, old_layers_len)]
+            .rooted_cache,
         old_layer_index,
     );
 }
@@ -366,22 +360,22 @@ fn find_root_old_layers(
     global_epoch: u32,
     old_layers: &mut OldLayersParents<'_>,
     rooted_cache: GlobalParentIndex,
-    node: LocalParentIndex,
+    node: GlobalParentIndex,
 ) -> GlobalParentIndex {
     // cacheがfreshならcacheを利用
-    if old_layers.0[node.0].cache_epoch == global_epoch {
+    if old_layers[node].cache_epoch == global_epoch {
         todo!()
     }
-    let mut current = LocalParentIndex::from_global_index(rooted_cache, 0);
-    let mut next = LocalParentIndex::from_global_index(old_layers.0[current.0].rooted, 0); // 古いレイヤなのでrootedのみ見る
+    let mut current = rooted_cache;
+    let mut next = old_layers[current].rooted; // 古いレイヤなのでrootedのみ見る
 
     while next != current {
         current = next;
-        next = LocalParentIndex::from_global_index(old_layers.0[current.0].rooted, 0);
+        next = old_layers[current].rooted;
     }
 
     // TODO 結果を見て呼び出し元でキャッシュ更新
     // self.parent[node].rooted_cache = current;
     // self.parent[node].cache_epoch = self.epoch;
-    GlobalParentIndex::from_local_index(current, 0)
+    current
 }
