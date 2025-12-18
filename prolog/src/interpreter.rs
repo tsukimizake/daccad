@@ -1,11 +1,11 @@
-use crate::cell_heap::CellHeap;
+use crate::cell_heap::{CellHeap, CellIndex};
 use crate::compiler_bytecode::{WamInstr, WamReg};
 use crate::layered_uf::LayeredUf;
 use crate::parse::Term;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Registers {
-    registers: Vec<usize>,
+    registers: Vec<CellIndex>,
 }
 
 impl Registers {
@@ -17,10 +17,10 @@ impl Registers {
         Self { registers }
     }
 
-    pub fn get_arg_registers(&self) -> &[usize] {
+    pub fn get_arg_registers(&self) -> &[CellIndex] {
         &self.registers
     }
-    pub fn get_register(&mut self, cell_store: &mut CellHeap, reg: &WamReg) -> usize {
+    pub fn get_register(&mut self, cell_store: &mut CellHeap, reg: &WamReg) -> CellIndex {
         let index = match reg {
             WamReg::X(index) => *index,
         };
@@ -30,7 +30,7 @@ impl Registers {
         self.registers[index]
     }
 
-    pub fn set_register(&mut self, cell_heap: &mut CellHeap, reg: &WamReg, value: usize) {
+    pub fn set_register(&mut self, cell_heap: &mut CellHeap, reg: &WamReg, value: CellIndex) {
         let index = match reg {
             WamReg::X(index) => *index,
         };
@@ -45,7 +45,7 @@ enum Frame {
     Base {},
     Environment {
         return_pc: usize,
-        registers: Vec<usize>,
+        registers: Vec<CellIndex>,
     },
     ChoicePoint {
         stack_len_to_set: usize,

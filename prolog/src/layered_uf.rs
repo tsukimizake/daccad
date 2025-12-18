@@ -1,5 +1,7 @@
 use std::ops::{Add, Deref, DerefMut, Index, IndexMut};
 
+use crate::cell_heap::CellIndex;
+
 // レイヤ0は親参照も同じなのでこんな感じの普通UF
 // [(0,0), (0,0), (2,2)]
 // find_rootでレイヤ内参照をまず優先して見てpath compactionして、そののちrootを見に行って自分だけcompactionしてという動作をし、レイヤ1以降はこのようになる
@@ -37,7 +39,7 @@ struct Parent {
     cache_epoch: u32,
     // rootの場合にcellへの参照(id)を持つ
     // local rootの場合もそのlayerで書き込まれた場合に持つ場合がある
-    cell: Option<usize>,
+    cell: Option<CellIndex>,
 }
 
 struct Parents(Vec<Parent>);
@@ -228,7 +230,11 @@ impl LayeredUf {
     fn split_layers(
         &mut self,
         node: GlobalParentIndex,
-    ) -> (OldLayersParents, CurrentLayerParents, RestLayersParents) {
+    ) -> (
+        OldLayersParents<'_>,
+        CurrentLayerParents<'_>,
+        RestLayersParents<'_>,
+    ) {
         // todo bisect
         let current_layer_beg_idx: AllLayersIndex = self
             .layer_index
@@ -250,7 +256,7 @@ impl LayeredUf {
         )
     }
 
-    pub fn find_root(&mut self, id: GlobalParentIndex) -> usize {
+    pub fn find_root(&mut self, id: GlobalParentIndex) -> CellIndex {
         let epoch = self.epoch;
         let (mut old_layers, mut current_layer, rest_layers) = self.split_layers(id);
         let root = find_root_impl(epoch, &mut old_layers, &mut current_layer, &rest_layers, id);
