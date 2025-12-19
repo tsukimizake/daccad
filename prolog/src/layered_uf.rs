@@ -1,4 +1,14 @@
-use std::ops::{Add, Deref, DerefMut, Index, IndexMut};
+//   bugs
+//   - High: split_layers のレイヤー判定が壊れていて find+< で最初のレイヤーしか選ばず境界ノードも誤分類、さらに layer_index が空/トップ層だと layer_index[..] 参照で panic します。 src/layered_uf.rs:210 src/layered_uf.rs:214 src/layered_uf.rs:215
+//   - High: split_layers の newer_layers.split_at_mut にグローバル index をそのまま渡しており、層開始が 0 以外だと current/rest の境界がずれます。src/layered_uf.rs:218
+//   - High: find_root_impl の LocalParentIndex::from_global_index(local_root.rooted, old_layers_len) は rooted が旧層だと underflow します（global→local 変換の向きが逆）。src/layered_uf.rs:346
+//   - High: find_root_impl/find_root_old_layers のキャッシュ経路が不整合で、node 由来 cache を使ったまま old_layers[node] を参照するため現層ノードで OOB、かつ cache-hit 分岐が todo!() のままです。src/layered_uf.rs:353 src/layered_uf.rs:366 src/layered_uf.rs:367
+//   - Low: レイヤー分割や push/pop、跨層 root 解決を検証する単体テストがなく、回帰しやすいです。src/layered_uf.rs:172
+
+use std::{
+    cmp,
+    ops::{Add, Deref, DerefMut, Index, IndexMut},
+};
 
 use crate::cell_heap::CellIndex;
 
@@ -73,6 +83,10 @@ pub struct GlobalParentIndex(usize);
 impl GlobalParentIndex {
     fn from_local_index(index: LocalParentIndex, old_layers_len: usize) -> GlobalParentIndex {
         GlobalParentIndex(index.0 + old_layers_len)
+    }
+
+    fn layer_end_sentry() -> Self {
+        GlobalParentIndex(usize::max_value())
     }
 }
 
@@ -171,9 +185,12 @@ impl Add<usize> for AllLayersIndex {
 
 impl LayeredUf {
     pub fn new() -> Self {
+        let mut layer_index = AllLayers(Vec::with_capacity(100));
+        layer_index.0.push(GlobalParentIndex(0));
+        layer_index.push(GlobalParentIndex::layer_end_sentry());
         Self {
             parent: Parents(Vec::with_capacity(1000)),
-            layer_index: AllLayers(Vec::with_capacity(100)),
+            layer_index,
             epoch: 0,
         }
     }
@@ -207,10 +224,13 @@ impl LayeredUf {
             .layer_index
             .iter()
             .enumerate()
-            .find(|(_, layer_beg)| **layer_beg < node)
+            .find(|(_, layer_beg)| node < **layer_beg)
             .map(|(idx, _)| AllLayersIndex(idx))
             .unwrap_or(AllLayersIndex(0));
-        let current_layer_end_idx = current_layer_beg_idx + 1;
+        let current_layer_end_idx = cmp::min(
+            current_layer_beg_idx + 1,
+            AllLayersIndex(self.layer_index.len() - 1),
+        );
         let current_layer_beg = self.layer_index[current_layer_beg_idx];
         let current_layer_end = self.layer_index[current_layer_end_idx];
 
@@ -234,7 +254,7 @@ impl LayeredUf {
 
     // 必ずindexが大きいものから小さいものを参照
     #[allow(unused)]
-    pub fn union(&mut self, l_id: GlobalParentIndex, _r_id: GlobalParentIndex) {
+    pub fn union(&mut self, l_id: GlobalParentIndex, r_id: GlobalParentIndex) {
         let epoch = self.epoch;
         let (mut old_layers, mut current_layer, rest_layers) = self.split_layers(l_id);
         let is_top_layer = rest_layers.0.is_empty();
@@ -250,7 +270,7 @@ impl LayeredUf {
             &mut old_layers,
             &mut current_layer,
             is_top_layer,
-            l_id,
+            r_id,
         );
         todo!()
     }
@@ -275,18 +295,30 @@ impl LayeredUf {
 
     #[allow(unused)]
     pub fn push_choicepoint(&mut self) {
+        self.layer_index.0.split_off(2);
         self.layer_index
             .0
             .push(GlobalParentIndex(self.parent.0.len()));
+        self.layer_index
+            .0
+            .push(GlobalParentIndex::layer_end_sentry());
     }
 
     #[allow(unused)]
     pub fn pop_choicepoint(&mut self) {
+        // remove sentry
+        self.layer_index.0.pop();
+
         let layer_start = self
             .layer_index
             .pop()
             .expect("no choicepoint to pop in LayeredUf");
         self.parent.0.truncate(layer_start.0);
+
+        // set sentry
+        self.layer_index
+            .0
+            .push(GlobalParentIndex::layer_end_sentry());
         self.epoch += 1;
     }
 }
@@ -378,4 +410,16 @@ fn find_root_old_layers(
     // self.parent[node].rooted_cache = current;
     // self.parent[node].cache_epoch = self.epoch;
     current
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_layers_panics_without_choicepoint() {
+        let mut uf = LayeredUf::new();
+        let id = uf.register_node();
+        let _ = uf.find_root(id);
+    }
 }
