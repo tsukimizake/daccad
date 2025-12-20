@@ -298,7 +298,7 @@ impl LayeredUf {
         self.layer_index.0.split_off(2);
         self.layer_index
             .0
-            .push(GlobalParentIndex(self.parent.0.len()));
+            .push(GlobalParentIndex(self.parent.0.len() - 1));
         self.layer_index
             .0
             .push(GlobalParentIndex::layer_end_sentry());
