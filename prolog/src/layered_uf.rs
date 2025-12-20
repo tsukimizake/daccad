@@ -205,6 +205,49 @@ impl LayeredUf {
     }
 
     #[allow(unused)]
+    pub fn debug_dump(&self) -> String {
+        use std::fmt::Write;
+
+        let mut out = String::new();
+        writeln!(out, "LayeredUf");
+        writeln!(out, "epoch: {}", self.epoch);
+        writeln!(out, "parents_len: {}", self.parent.len());
+
+        write!(out, "layer_index(raw): [");
+        for (i, idx) in self.layer_index.iter().enumerate() {
+            if i > 0 {
+                write!(out, ", ");
+            }
+            if idx.0 == usize::MAX {
+                write!(out, "MAX");
+            } else {
+                write!(out, "{}", idx.0);
+            }
+        }
+        writeln!(out, "]");
+
+        writeln!(out, "parents:");
+        for (global, parent) in self.parent.iter().enumerate() {
+            let cell = match parent.cell {
+                Some(cell) => usize::from(cell).to_string(),
+                None => "None".to_string(),
+            };
+            writeln!(
+                out,
+                "  [{}] local={} rooted={} rooted_cache={} cache_epoch={} cell={}",
+                global,
+                parent.local.0,
+                parent.rooted.0,
+                parent.rooted_cache.0,
+                parent.cache_epoch,
+                cell
+            );
+        }
+
+        out
+    }
+
+    #[allow(unused)]
     pub fn register_node(&mut self) -> GlobalParentIndex {
         let global_id = GlobalParentIndex(self.parent.len());
         let top_layer_start = self.layer_index.get_top();
