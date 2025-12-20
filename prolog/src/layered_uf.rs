@@ -8,7 +8,7 @@
 
 use std::{
     cmp,
-    ops::{Add, Deref, DerefMut, Index, IndexMut},
+    ops::{Add, Deref, DerefMut, Index, IndexMut, Sub},
 };
 
 use crate::cell_heap::CellIndex;
@@ -56,7 +56,7 @@ pub struct Parent {
 
 struct Parents(Vec<Parent>);
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 struct LocalParentIndex(usize);
 
 impl LocalParentIndex {
@@ -78,7 +78,7 @@ impl<'a> IndexMut<LocalParentIndex> for CurrentLayerParents<'a> {
 }
 
 // Parents全てに対するインデックス型
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct GlobalParentIndex(usize);
 
 impl GlobalParentIndex {
@@ -153,7 +153,7 @@ impl AllLayers {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 struct AllLayersIndex(usize);
 
 impl Index<AllLayersIndex> for AllLayers {
@@ -189,6 +189,14 @@ impl Add<usize> for AllLayersIndex {
 
     fn add(self, rhs: usize) -> Self::Output {
         AllLayersIndex(self.0 + rhs)
+    }
+}
+
+impl Sub<usize> for AllLayersIndex {
+    type Output = AllLayersIndex;
+
+    fn sub(self, rhs: usize) -> Self::Output {
+        AllLayersIndex(self.0 - rhs)
     }
 }
 
@@ -272,27 +280,33 @@ impl LayeredUf {
         RestLayersParents<'_>,
     ) {
         // todo bisect
-        let current_layer_beg_idx: AllLayersIndex = self
+        let current_layer_end_idx: AllLayersIndex = self
             .layer_index
             .iter()
             .enumerate()
             .find(|(_, layer_beg)| node < **layer_beg)
             .map(|(idx, _)| AllLayersIndex(idx))
-            .unwrap_or(AllLayersIndex(0));
-        let current_layer_end_idx = cmp::min(
-            current_layer_beg_idx + 1,
-            AllLayersIndex(self.layer_index.len() - 1),
-        );
+            .unwrap();
+        let current_layer_beg_idx = current_layer_end_idx - 1;
         let current_layer_beg = self.layer_index[current_layer_beg_idx];
         let current_layer_end = self.layer_index[current_layer_end_idx];
+        let all_parent_len = GlobalParentIndex(self.parent.len());
 
         let (old_layers, newer_layers) = self.parent.split_at_mut(current_layer_beg);
-        let (current_layer, rest_layers) = newer_layers.split_at_mut(current_layer_end.0);
-        (
-            OldLayersParents(old_layers),
-            CurrentLayerParents(current_layer),
-            RestLayersParents(rest_layers),
-        )
+        if current_layer_end < all_parent_len {
+            let (current_layer, rest_layers) = newer_layers.split_at_mut(current_layer_end.0);
+            (
+                OldLayersParents(old_layers),
+                CurrentLayerParents(current_layer),
+                RestLayersParents(rest_layers),
+            )
+        } else {
+            (
+                OldLayersParents(old_layers),
+                CurrentLayerParents(newer_layers),
+                RestLayersParents(&[]),
+            )
+        }
     }
 
     #[allow(unused)]
