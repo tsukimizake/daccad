@@ -1,6 +1,7 @@
 //   bugs
-//   - High: split_layers のレイヤー判定が壊れていて find+< で最初のレイヤーしか選ばず境界ノードも誤分類、さらに layer_index が空/トップ層だと layer_index[..] 参照で panic します。 src/layered_uf.rs:210 src/layered_uf.rs:214 src/layered_uf.rs:215
-//   - High: split_layers の newer_layers.split_at_mut にグローバル index をそのまま渡しており、層開始が 0 以外だと current/rest の境界がずれます。src/layered_uf.rs:218
+//   - DONE High: split_layers のレイヤー判定が壊れていて find+< で最初のレイヤーしか選ばず境界ノードも誤分類
+//   - DONE layer_index が空/トップ層だと layer_index[..] 参照で panic します。 src/layered_uf.rs:210 src/layered_uf.rs:214 src/layered_uf.rs:215
+//  - DONE High: split_layers の newer_layers.split_at_mut にグローバル index をそのまま渡しており、層開始が 0 以外だと current/rest の境界がずれます。src/layered_uf.rs:218
 //   - High: find_root_impl の LocalParentIndex::from_global_index(local_root.rooted, old_layers_len) は rooted が旧層だと underflow します（global→local 変換の向きが逆）。src/layered_uf.rs:346
 //   - High: find_root_impl/find_root_old_layers のキャッシュ経路が不整合で、node 由来 cache を使ったまま old_layers[node] を参照するため現層ノードで OOB、かつ cache-hit 分岐が todo!() のままです。src/layered_uf.rs:353 src/layered_uf.rs:366 src/layered_uf.rs:367
 //   - Low: レイヤー分割や push/pop、跨層 root 解決を検証する単体テストがなく、回帰しやすいです。src/layered_uf.rs:172
@@ -144,6 +145,14 @@ impl<'a> IndexMut<GlobalParentIndex> for OldLayersParents<'a> {
 
 struct AllLayers(Vec<GlobalParentIndex>);
 
+impl AllLayers {
+    fn get_top(&self) -> &GlobalParentIndex {
+        // top layerとsentryは必ず入っているので常にlenは2以上
+        // lastに入っているsentryを飛ばして返すため-2
+        &self.0[self.0.len() - 2]
+    }
+}
+
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct AllLayersIndex(usize);
 
@@ -198,7 +207,7 @@ impl LayeredUf {
     #[allow(unused)]
     pub fn register_node(&mut self) -> GlobalParentIndex {
         let global_id = GlobalParentIndex(self.parent.len());
-        let top_layer_start = self.layer_index.last().unwrap_or(&GlobalParentIndex(0));
+        let top_layer_start = self.layer_index.get_top();
         let local_id = LocalParentIndex::from_global_index(global_id, top_layer_start.0);
         self.parent.push(Parent {
             rooted: global_id,
@@ -306,6 +315,9 @@ impl LayeredUf {
 
     #[allow(unused)]
     pub fn pop_choicepoint(&mut self) {
+        if self.layer_index.len() <= 2 {
+            panic!("pop on layer_index.len() <= 2")
+        }
         // remove sentry
         self.layer_index.0.pop();
 
