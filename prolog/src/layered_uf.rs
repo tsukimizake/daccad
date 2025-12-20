@@ -36,6 +36,7 @@ pub struct LayeredUf {
 }
 
 // 本来cellを持つかどうかでenumにしたいところだが性能のためにこの形
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Parent {
     // layerをまたぐ親への参照
     // top layer以外では不変性を保つため更新されない
@@ -489,6 +490,17 @@ mod tests {
     fn split_layers_panics_without_choicepoint() {
         let mut uf = LayeredUf::new();
         let id = uf.register_node();
-        let _ = uf.find_root(id);
+        assert_eq!(id, GlobalParentIndex(0));
+        let root = uf.find_root(id);
+        assert_eq!(
+            *root,
+            Parent {
+                rooted: id,
+                local: LocalParentIndex(0),
+                rooted_cache: id,
+                cache_epoch: 0,
+                cell: None,
+            }
+        );
     }
 }
