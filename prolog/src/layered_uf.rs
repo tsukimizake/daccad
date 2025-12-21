@@ -362,7 +362,7 @@ impl LayeredUf {
 
     #[allow(unused)]
     pub fn push_choicepoint(&mut self) {
-        self.layer_index.0.split_off(2);
+        self.layer_index.0.pop();
         self.layer_index
             .0
             .push(GlobalParentIndex(self.parent.0.len() - 1));
