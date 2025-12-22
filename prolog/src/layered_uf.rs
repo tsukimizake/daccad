@@ -3,13 +3,9 @@
 //   - DONE layer_index が空/トップ層だと layer_index[..] 参照で panic します。 src/layered_uf.rs:210 src/layered_uf.rs:214 src/layered_uf.rs:215
 //  - DONE High: split_layers の newer_layers.split_at_mut にグローバル index をそのまま渡しており、層開始が 0 以外だと current/rest の境界がずれます。src/layered_uf.rs:218
 //   - High: find_root_impl の LocalParentIndex::from_global_index(local_root.rooted, old_layers_len) は rooted が旧層だと underflow します（global→local 変換の向きが逆）。src/layered_uf.rs:346
-//   - High: find_root_impl/find_root_old_layers のキャッシュ経路が不整合で、node 由来 cache を使ったまま old_layers[node] を参照するため現層ノードで OOB、かつ cache-hit 分岐が todo!() のままです。src/layered_uf.rs:353 src/layered_uf.rs:366 src/layered_uf.rs:367
 //   - Low: レイヤー分割や push/pop、跨層 root 解決を検証する単体テストがなく、回帰しやすいです。src/layered_uf.rs:172
 
-use std::{
-    cmp,
-    ops::{Add, Deref, DerefMut, Index, IndexMut, Sub},
-};
+use std::ops::{Add, Deref, DerefMut, Index, IndexMut, Sub};
 
 use crate::cell_heap::CellIndex;
 
@@ -31,8 +27,6 @@ pub struct LayeredUf {
     // 各レイヤーの開始インデックス
     // top layerは最後尾で、それ以前のレイヤーは不変データ構造として扱う
     layer_index: AllLayers,
-    // キャッシュの世代管理用 pop_choicepoint時にインクリメントされる
-    epoch: u32,
 }
 
 // 本来cellを持つかどうかでenumにしたいところだが性能のためにこの形
@@ -46,10 +40,6 @@ pub struct Parent {
     // rooted, local共にindexが小さい物へと参照する.結果として代表元は最もindexが小さいものとなる
     local: LocalParentIndex,
 
-    // top layer以外ではpath compactionが起きない弱点を補うためのキャッシュ
-    // epochをチェックすることによってbacktrack後はstaleとして扱われる
-    rooted_cache: GlobalParentIndex,
-    cache_epoch: u32,
     // rootの場合にcellへの参照(id)を持つ
     // local rootの場合もそのlayerで書き込まれた場合に持つ場合がある
     cell: Option<CellIndex>,
@@ -209,7 +199,6 @@ impl LayeredUf {
         Self {
             parent: Parents(Vec::with_capacity(1000)),
             layer_index,
-            epoch: 0,
         }
     }
 
@@ -219,7 +208,6 @@ impl LayeredUf {
 
         let mut out = String::new();
         writeln!(out, "LayeredUf");
-        writeln!(out, "epoch: {}", self.epoch);
         writeln!(out, "parents_len: {}", self.parent.len());
 
         write!(out, "layer_index(raw): [");
@@ -243,13 +231,8 @@ impl LayeredUf {
             };
             writeln!(
                 out,
-                "  [{}] local={} rooted={} rooted_cache={} cache_epoch={} cell={}",
-                global,
-                parent.local.0,
-                parent.rooted.0,
-                parent.rooted_cache.0,
-                parent.cache_epoch,
-                cell
+                "  [{}] local={} rooted={}  cell={}",
+                global, parent.local.0, parent.rooted.0, cell
             );
         }
 
@@ -264,8 +247,6 @@ impl LayeredUf {
         self.parent.push(Parent {
             rooted: global_id,
             local: local_id,
-            rooted_cache: global_id,
-            cache_epoch: self.epoch,
             cell: None,
         });
         global_id
@@ -312,33 +293,26 @@ impl LayeredUf {
 
     #[allow(unused)]
     pub fn find_root<'a>(&'a mut self, id: GlobalParentIndex) -> &'a Parent {
-        let epoch = self.epoch;
         let (mut old_layers, mut current_layer, rest_layers) = self.split_layers(id);
         let is_top_layer = rest_layers.0.is_empty();
-        let root_idx = find_root_impl(epoch, &mut old_layers, &mut current_layer, is_top_layer, id);
+        let root_idx = find_root_impl(&mut old_layers, &mut current_layer, is_top_layer, id);
         &self.parent[root_idx]
     }
 
     // 必ずindexが大きいものから小さいものを参照
+    // l_id, r_idはともにtop layerに存在することが前提
     #[allow(unused)]
     pub fn union(&mut self, l_id: GlobalParentIndex, r_id: GlobalParentIndex) {
-        let epoch = self.epoch;
         let (mut old_layers, mut current_layer, rest_layers) = self.split_layers(l_id);
+        assert!(rest_layers.0.is_empty(), "union called on non-top layer");
+        assert!(
+            old_layers.0.len() <= r_id.0,
+            "union called on non-top layer"
+        );
+
         let is_top_layer = rest_layers.0.is_empty();
-        let l_root = find_root_impl(
-            epoch,
-            &mut old_layers,
-            &mut current_layer,
-            is_top_layer,
-            l_id,
-        );
-        let r_root = find_root_impl(
-            epoch,
-            &mut old_layers,
-            &mut current_layer,
-            is_top_layer,
-            r_id,
-        );
+        let l_root = find_root_impl(&mut old_layers, &mut current_layer, is_top_layer, l_id);
+        let r_root = find_root_impl(&mut old_layers, &mut current_layer, is_top_layer, r_id);
         todo!()
     }
 
@@ -355,9 +329,6 @@ impl LayeredUf {
     //     // 現レイヤのlocalを更新し、下位レイヤからも辿れるようrootedも更新
     //     self.parent[r_id].local = l_root;
     //     self.parent[r_id].rooted = l_root;
-    //     // キャッシュも更新
-    //     self.parent[r_id].rooted_cache = l_root;
-    //     self.parent[r_id].cache_epoch = self.epoch;
     // }
 
     #[allow(unused)]
@@ -389,7 +360,6 @@ impl LayeredUf {
         self.layer_index
             .0
             .push(GlobalParentIndex::layer_end_sentry());
-        self.epoch += 1;
     }
 }
 // 渡ってくるnodeはregister_node済みであることが前提
@@ -428,7 +398,6 @@ fn find_local_root(
 
 // 渡ってくるnodeはregister_node済みであることが前提
 fn find_root_impl(
-    global_epoch: u32,
     old_layers: &mut OldLayersParents<'_>,
     current_layer: &mut CurrentLayerParents<'_>,
     is_top_layer: bool,
@@ -450,25 +419,16 @@ fn find_root_impl(
     }
     let old_layer_index = node;
     return find_root_old_layers(
-        global_epoch,
         old_layers,
-        current_layer[LocalParentIndex::from_global_index(old_layer_index, old_layers_len)]
-            .rooted_cache,
-        old_layer_index,
+        current_layer[LocalParentIndex::from_global_index(old_layer_index, old_layers_len)].rooted,
     );
 }
 
 fn find_root_old_layers(
-    global_epoch: u32,
     old_layers: &mut OldLayersParents<'_>,
-    rooted_cache: GlobalParentIndex,
     node: GlobalParentIndex,
 ) -> GlobalParentIndex {
-    // cacheがfreshならcacheを利用
-    if old_layers[node].cache_epoch == global_epoch {
-        todo!()
-    }
-    let mut current = rooted_cache;
+    let mut current = node;
     let mut next = old_layers[current].rooted; // 古いレイヤなのでrootedのみ見る
 
     while next != current {
@@ -476,9 +436,6 @@ fn find_root_old_layers(
         next = old_layers[current].rooted;
     }
 
-    // TODO 結果を見て呼び出し元でキャッシュ更新
-    // self.parent[node].rooted_cache = current;
-    // self.parent[node].cache_epoch = self.epoch;
     current
 }
 
@@ -497,8 +454,6 @@ mod tests {
             Parent {
                 rooted: id,
                 local: LocalParentIndex(0),
-                rooted_cache: id,
-                cache_epoch: 0,
                 cell: None,
             }
         );
