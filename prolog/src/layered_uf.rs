@@ -305,8 +305,8 @@ impl LayeredUf {
     #[allow(unused)]
     pub fn union(&mut self, l_id: GlobalParentIndex, r_id: GlobalParentIndex) {
         let (mut old_layers, mut current_layer, rest_layers) = self.split_layers(l_id);
-        assert!(rest_layers.0.is_empty(), "union called on non-top layer");
-        assert!(
+        debug_assert!(rest_layers.0.is_empty(), "union called on non-top layer");
+        debug_assert!(
             old_layers.0.len() <= r_id.0,
             "union called on non-top layer"
         );
@@ -337,7 +337,7 @@ impl LayeredUf {
         self.layer_index.0.pop();
         self.layer_index
             .0
-            .push(GlobalParentIndex(self.parent.0.len() - 1));
+            .push(GlobalParentIndex(self.parent.0.len()));
         self.layer_index
             .0
             .push(GlobalParentIndex::layer_end_sentry());
@@ -397,7 +397,6 @@ fn find_local_root(
     }
 }
 
-// 渡ってくるnodeはregister_node済みであることが前提
 fn find_root_impl(
     old_layers: &mut OldLayersParents<'_>,
     current_layer: &mut CurrentLayerParents<'_>,
@@ -414,15 +413,15 @@ fn find_root_impl(
     }
 
     // local_rootがglobal_rootの場合普通に返す
-    // これ以降はglobal rootはold_layersにあるはず
-    if local_root.local == LocalParentIndex::from_global_index(local_root.rooted, old_layers_len) {
+    if GlobalParentIndex::from_local_index(local_root.local, old_layers_len) == local_root.rooted {
         return local_root.rooted;
     }
-    let old_layer_index = node;
-    return find_root_old_layers(
-        old_layers,
-        current_layer[LocalParentIndex::from_global_index(old_layer_index, old_layers_len)].rooted,
-    );
+
+    // これ以降はglobal rootはold_layersにあるはず
+    debug_assert!(local_root.rooted.0 < old_layers_len);
+
+    // 型合わせのために一回アクセスしているのが汚い
+    return find_root_old_layers(old_layers, current_layer[local_root_idx].rooted);
 }
 
 fn find_root_old_layers(
