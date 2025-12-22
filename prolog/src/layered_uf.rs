@@ -481,7 +481,7 @@ mod tests {
             *root2,
             Parent {
                 rooted: id2,
-                local: LocalParentIndex(1),
+                local: LocalParentIndex(0),
                 cell: None,
             }
         );
