@@ -276,7 +276,8 @@ impl LayeredUf {
 
         let (old_layers, newer_layers) = self.parent.split_at_mut(current_layer_beg);
         if current_layer_end < all_parent_len {
-            let (current_layer, rest_layers) = newer_layers.split_at_mut(current_layer_end.0);
+            let (current_layer, rest_layers) =
+                newer_layers.split_at_mut(current_layer_end.0 - current_layer_beg.0);
             (
                 OldLayersParents(old_layers),
                 CurrentLayerParents(current_layer),
