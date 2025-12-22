@@ -444,7 +444,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn split_layers_panics_without_choicepoint() {
+    fn split_layers_simple() {
         let mut uf = LayeredUf::new();
         let id = uf.register_node();
         assert_eq!(id, GlobalParentIndex(0));
@@ -454,6 +454,33 @@ mod tests {
             Parent {
                 rooted: id,
                 local: LocalParentIndex(0),
+                cell: None,
+            }
+        );
+    }
+    #[test]
+    fn split_layers_multiple_layers() {
+        let mut uf = LayeredUf::new();
+        let id1 = uf.register_node();
+        uf.push_choicepoint();
+        let id2 = uf.register_node();
+        assert_eq!(id1, GlobalParentIndex(0));
+        assert_eq!(id2, GlobalParentIndex(1));
+        let root1 = uf.find_root(id1);
+        assert_eq!(
+            *root1,
+            Parent {
+                rooted: id1,
+                local: LocalParentIndex(0),
+                cell: None,
+            }
+        );
+        let root2 = uf.find_root(id2);
+        assert_eq!(
+            *root2,
+            Parent {
+                rooted: id2,
+                local: LocalParentIndex(1),
                 cell: None,
             }
         );
