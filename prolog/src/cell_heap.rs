@@ -2,7 +2,15 @@ use std::ops::{Index, IndexMut};
 use std::rc::Rc;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct CellIndex(usize);
+pub struct CellIndex(pub(crate) usize);
+impl CellIndex {
+    pub fn empty() -> Self {
+        CellIndex(0)
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0 == 0
+    }
+}
 
 impl From<CellIndex> for usize {
     fn from(value: CellIndex) -> Self {
@@ -41,9 +49,10 @@ pub struct CellHeap {
 
 impl CellHeap {
     pub fn new() -> Self {
-        Self {
-            cells: Vec::with_capacity(16),
-        }
+        let mut cells = Vec::with_capacity(16);
+        // 0は常にEmptyセル
+        cells.push(Rc::new(Cell::Empty { id: CellIndex(0) }));
+        Self { cells }
     }
 
     fn next_index(&self) -> CellIndex {

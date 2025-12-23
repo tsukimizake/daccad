@@ -40,9 +40,9 @@ pub struct Parent {
     // rooted, local共にindexが小さい物へと参照する.結果として代表元は最もindexが小さいものとなる
     local: LocalParentIndex,
 
-    // rootの場合にcellへの参照(id)を持つ
-    // local rootの場合もそのlayerで書き込まれた場合に持つ場合がある
-    cell: Option<CellIndex>,
+    // cellへの参照(id)を持つ. 代表元以外の場合は意味を持たない
+    // local rootの場合もそのlayerで書き込まれた場合はそこがそのlayerでのcellとなる
+    cell: CellIndex,
 }
 
 struct Parents(Vec<Parent>);
@@ -225,14 +225,13 @@ impl LayeredUf {
 
         writeln!(out, "parents:");
         for (global, parent) in self.parent.iter().enumerate() {
-            let cell = match parent.cell {
-                Some(cell) => usize::from(cell).to_string(),
-                None => "None".to_string(),
-            };
             writeln!(
                 out,
                 "  [{}] local={} rooted={}  cell={}",
-                global, parent.local.0, parent.rooted.0, cell
+                global,
+                parent.local.0,
+                parent.rooted.0,
+                usize::from(parent.cell).to_string()
             );
         }
 
@@ -247,9 +246,30 @@ impl LayeredUf {
         self.parent.push(Parent {
             rooted: global_id,
             local: local_id,
-            cell: None,
+            cell: CellIndex::empty(),
         });
         global_id
+    }
+
+    #[allow(unused)]
+    pub fn register_node_with_rooted_parent(
+        &mut self,
+        old_root: GlobalParentIndex,
+    ) -> GlobalParentIndex {
+        let global_id = GlobalParentIndex(self.parent.len());
+        let top_layer_start = self.layer_index.get_top();
+        let local_id = LocalParentIndex::from_global_index(global_id, top_layer_start.0);
+        self.parent.push(Parent {
+            rooted: old_root,
+            local: local_id,
+            cell: CellIndex::empty(),
+        });
+        global_id
+    }
+
+    #[allow(unused)]
+    pub fn set_cell(&mut self, id: GlobalParentIndex, cell: CellIndex) {
+        self.parent[id].cell = cell;
     }
 
     // (nodeを含むlayerより下のlayers, nodeを含むlayer, 残りのlayers)を返す
@@ -296,7 +316,7 @@ impl LayeredUf {
     pub fn find_root<'a>(&'a mut self, id: GlobalParentIndex) -> &'a Parent {
         let (mut old_layers, mut current_layer, rest_layers) = self.split_layers(id);
         let is_top_layer = rest_layers.0.is_empty();
-        let root_idx = find_root_impl(&mut old_layers, &mut current_layer, is_top_layer, id);
+        let root_idx = find_root_impl(&old_layers, &mut current_layer, is_top_layer, id);
         &self.parent[root_idx]
     }
 
@@ -305,32 +325,24 @@ impl LayeredUf {
     #[allow(unused)]
     pub fn union(&mut self, l_id: GlobalParentIndex, r_id: GlobalParentIndex) {
         let (mut old_layers, mut current_layer, rest_layers) = self.split_layers(l_id);
-        debug_assert!(rest_layers.0.is_empty(), "union called on non-top layer");
+        debug_assert!(rest_layers.0.is_empty(), "union called on non-top layer(l)");
         debug_assert!(
             old_layers.0.len() <= r_id.0,
-            "union called on non-top layer"
+            "union called on non-top layer(r)"
         );
 
-        let is_top_layer = rest_layers.0.is_empty();
-        let l_root = find_root_impl(&mut old_layers, &mut current_layer, is_top_layer, l_id);
-        let r_root = find_root_impl(&mut old_layers, &mut current_layer, is_top_layer, r_id);
-        todo!()
+        let l_localroot = find_local_root(l_id, old_layers.0.len(), &mut current_layer, true);
+        let r_localroot = find_local_root(r_id, old_layers.0.len(), &mut current_layer, true);
+
+        if l_localroot == r_localroot {
+            return;
+        } else if l_localroot < r_localroot {
+            current_layer[r_localroot].local = l_localroot;
+        } else {
+            current_layer[l_localroot].local = r_localroot;
+        }
+        // TODO old layerに参照貼りたい場合は別関数？
     }
-
-    // pub fn union(&mut self, l_id: usize, r_id: usize) {
-    //     //let parent_root = self.find_root(parent_id);
-    //     //let old_child_root = self.find_root(child_id);
-    //     let l_root = todo!();
-    //     let r_root = todo!();
-
-    //     if l_root == r_root {
-    //         return;
-    //     }
-
-    //     // 現レイヤのlocalを更新し、下位レイヤからも辿れるようrootedも更新
-    //     self.parent[r_id].local = l_root;
-    //     self.parent[r_id].rooted = l_root;
-    // }
 
     #[allow(unused)]
     pub fn push_choicepoint(&mut self) {
@@ -398,7 +410,7 @@ fn find_local_root(
 }
 
 fn find_root_impl(
-    old_layers: &mut OldLayersParents<'_>,
+    old_layers: &OldLayersParents<'_>,
     current_layer: &mut CurrentLayerParents<'_>,
     is_top_layer: bool,
     node: GlobalParentIndex,
@@ -408,7 +420,7 @@ fn find_root_impl(
     let local_root = &current_layer[local_root_idx];
 
     // そのlayerでcellが更新されている場合はそれを返す
-    if local_root.cell.is_some() {
+    if !local_root.cell.is_empty() {
         return GlobalParentIndex::from_local_index(local_root_idx, old_layers_len);
     }
 
@@ -425,7 +437,7 @@ fn find_root_impl(
 }
 
 fn find_root_old_layers(
-    old_layers: &mut OldLayersParents<'_>,
+    old_layers: &OldLayersParents<'_>,
     node: GlobalParentIndex,
 ) -> GlobalParentIndex {
     let mut current = node;
@@ -454,7 +466,7 @@ mod tests {
             Parent {
                 rooted: id,
                 local: LocalParentIndex(0),
-                cell: None,
+                cell: CellIndex::empty(),
             }
         );
     }
@@ -472,7 +484,7 @@ mod tests {
             Parent {
                 rooted: id1,
                 local: LocalParentIndex(0),
-                cell: None,
+                cell: CellIndex::empty(),
             }
         );
         let root2 = uf.find_root(id2);
@@ -481,7 +493,7 @@ mod tests {
             Parent {
                 rooted: id2,
                 local: LocalParentIndex(0),
-                cell: None,
+                cell: CellIndex::empty(),
             }
         );
     }
