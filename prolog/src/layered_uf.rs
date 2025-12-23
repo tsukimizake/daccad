@@ -252,15 +252,18 @@ impl LayeredUf {
     }
 
     #[allow(unused)]
-    pub fn register_node_with_rooted_parent(
-        &mut self,
-        old_root: GlobalParentIndex,
-    ) -> GlobalParentIndex {
+    pub fn register_node_with_parent(&mut self, old_node: GlobalParentIndex) -> GlobalParentIndex {
         let global_id = GlobalParentIndex(self.parent.len());
         let top_layer_start = self.layer_index.get_top();
+
+        debug_assert!(
+            old_node < *top_layer_start,
+            "old_node must be in an old layer"
+        );
+
         let local_id = LocalParentIndex::from_global_index(global_id, top_layer_start.0);
         self.parent.push(Parent {
-            rooted: old_root,
+            rooted: old_node,
             local: local_id,
             cell: CellIndex::EMPTY,
         });
