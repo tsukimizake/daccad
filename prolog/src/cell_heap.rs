@@ -4,12 +4,10 @@ use std::rc::Rc;
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CellIndex(pub(crate) usize);
 impl CellIndex {
-    pub fn empty() -> Self {
-        CellIndex(0)
-    }
     pub fn is_empty(&self) -> bool {
         self.0 == 0
     }
+    pub(crate) const EMPTY: CellIndex = CellIndex(0);
 }
 
 impl From<CellIndex> for usize {

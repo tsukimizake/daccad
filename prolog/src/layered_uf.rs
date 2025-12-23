@@ -246,7 +246,7 @@ impl LayeredUf {
         self.parent.push(Parent {
             rooted: global_id,
             local: local_id,
-            cell: CellIndex::empty(),
+            cell: CellIndex::EMPTY,
         });
         global_id
     }
@@ -262,7 +262,7 @@ impl LayeredUf {
         self.parent.push(Parent {
             rooted: old_root,
             local: local_id,
-            cell: CellIndex::empty(),
+            cell: CellIndex::EMPTY,
         });
         global_id
     }
@@ -323,7 +323,7 @@ impl LayeredUf {
     // 必ずindexが大きいものから小さいものを参照
     // l_id, r_idはともにtop layerに存在することが前提
     #[allow(unused)]
-    pub fn union(&mut self, l_id: GlobalParentIndex, r_id: GlobalParentIndex) {
+    pub fn union(&mut self, l_id: GlobalParentIndex, r_id: GlobalParentIndex) -> bool {
         let (mut old_layers, mut current_layer, rest_layers) = self.split_layers(l_id);
         debug_assert!(rest_layers.0.is_empty(), "union called on non-top layer(l)");
         debug_assert!(
@@ -335,13 +335,26 @@ impl LayeredUf {
         let r_localroot = find_local_root(r_id, old_layers.0.len(), &mut current_layer, true);
 
         if l_localroot == r_localroot {
-            return;
+            return true;
         } else if l_localroot < r_localroot {
             current_layer[r_localroot].local = l_localroot;
         } else {
             current_layer[l_localroot].local = r_localroot;
         }
-        // TODO old layerに参照貼りたい場合は別関数？
+
+        match (
+            current_layer[l_localroot].cell,
+            current_layer[r_localroot].cell,
+        ) {
+            (cell_l, CellIndex::EMPTY) => {}
+            (CellIndex::EMPTY, cell_r) => {
+                current_layer[l_localroot].cell = cell_r;
+            }
+            (cell_l, cell_r) => {
+                return false;
+            }
+        }
+        return true;
     }
 
     #[allow(unused)]
@@ -466,7 +479,7 @@ mod tests {
             Parent {
                 rooted: id,
                 local: LocalParentIndex(0),
-                cell: CellIndex::empty(),
+                cell: CellIndex::EMPTY,
             }
         );
     }
@@ -484,7 +497,7 @@ mod tests {
             Parent {
                 rooted: id1,
                 local: LocalParentIndex(0),
-                cell: CellIndex::empty(),
+                cell: CellIndex::EMPTY,
             }
         );
         let root2 = uf.find_root(id2);
@@ -493,7 +506,7 @@ mod tests {
             Parent {
                 rooted: id2,
                 local: LocalParentIndex(0),
-                cell: CellIndex::empty(),
+                cell: CellIndex::EMPTY,
             }
         );
     }
