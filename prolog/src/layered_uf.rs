@@ -119,7 +119,6 @@ impl DerefMut for Parents {
 
 struct OldLayersParents<'a>(&'a mut [Parent]);
 struct CurrentLayerParents<'a>(&'a mut [Parent]);
-struct RestLayersParents<'a>(&'a [Parent]);
 
 impl<'a> Index<GlobalParentIndex> for OldLayersParents<'a> {
     type Output = Parent;
@@ -203,7 +202,7 @@ impl LayeredUf {
     }
 
     #[allow(unused)]
-    pub fn debug_dump(&self) -> String {
+    pub fn debug_dump(&self) {
         use std::fmt::Write;
 
         let mut out = String::new();
@@ -235,7 +234,7 @@ impl LayeredUf {
             );
         }
 
-        out
+        println!("{}", out);
     }
 
     #[allow(unused)]
@@ -279,11 +278,7 @@ impl LayeredUf {
     fn split_layers<'a>(
         &mut self,
         node: GlobalParentIndex,
-    ) -> (
-        OldLayersParents<'_>,
-        CurrentLayerParents<'_>,
-        RestLayersParents<'_>,
-    ) {
+    ) -> (OldLayersParents<'_>, CurrentLayerParents<'_>, bool) {
         // todo bisect
         let current_layer_end_idx: AllLayersIndex = self
             .layer_index
@@ -299,26 +294,25 @@ impl LayeredUf {
 
         let (old_layers, newer_layers) = self.parent.split_at_mut(current_layer_beg);
         if current_layer_end < all_parent_len {
-            let (current_layer, rest_layers) =
+            let (current_layer, _rest_layers) =
                 newer_layers.split_at_mut(current_layer_end.0 - current_layer_beg.0);
             (
                 OldLayersParents(old_layers),
                 CurrentLayerParents(current_layer),
-                RestLayersParents(rest_layers),
+                false,
             )
         } else {
             (
                 OldLayersParents(old_layers),
                 CurrentLayerParents(newer_layers),
-                RestLayersParents(&[]),
+                true,
             )
         }
     }
 
     #[allow(unused)]
     pub fn find_root<'a>(&'a mut self, id: GlobalParentIndex) -> &'a Parent {
-        let (mut old_layers, mut current_layer, rest_layers) = self.split_layers(id);
-        let is_top_layer = rest_layers.0.is_empty();
+        let (mut old_layers, mut current_layer, is_top_layer) = self.split_layers(id);
         let root_idx = find_root_impl(&old_layers, &mut current_layer, is_top_layer, id);
         &self.parent[root_idx]
     }
@@ -327,8 +321,9 @@ impl LayeredUf {
     // l_id, r_idはともにtop layerに存在することが前提
     #[allow(unused)]
     pub fn union(&mut self, l_id: GlobalParentIndex, r_id: GlobalParentIndex) -> bool {
-        let (mut old_layers, mut current_layer, rest_layers) = self.split_layers(l_id);
-        debug_assert!(rest_layers.0.is_empty(), "union called on non-top layer(l)");
+        let (mut old_layers, mut current_layer, is_top_layer) = self.split_layers(l_id);
+
+        debug_assert!(is_top_layer, "union called on non-top layer(l)");
         debug_assert!(
             old_layers.0.len() <= r_id.0,
             "union called on non-top layer(r)"
@@ -470,6 +465,7 @@ fn find_root_old_layers(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cell_heap::CellHeap;
 
     #[test]
     fn split_layers_simple() {
@@ -485,6 +481,108 @@ mod tests {
                 cell: CellIndex::EMPTY,
             }
         );
+    }
+
+    #[test]
+    fn split_layers_boundary_indices() {
+        let mut uf = LayeredUf::new();
+        let id0 = uf.register_node();
+        let id1 = uf.register_node();
+        uf.push_choicepoint();
+        let id2 = uf.register_node();
+        uf.push_choicepoint();
+        let id3 = uf.register_node();
+
+        {
+            let (old_layers, current_layer, is_top_layer) = uf.split_layers(id0);
+            assert_eq!(old_layers.0.len(), 0);
+            assert_eq!(current_layer.0.len(), 2);
+            assert_eq!(is_top_layer, false);
+        }
+        {
+            let (old_layers, current_layer, is_top_layer) = uf.split_layers(id1);
+            assert_eq!(old_layers.0.len(), 0);
+            assert_eq!(current_layer.0.len(), 2);
+            assert_eq!(is_top_layer, false);
+        }
+        {
+            let (old_layers, current_layer, is_top_layer) = uf.split_layers(id2);
+            assert_eq!(old_layers.0.len(), 2);
+            assert_eq!(current_layer.0.len(), 1);
+            assert_eq!(is_top_layer, false);
+        }
+        {
+            let (old_layers, current_layer, is_top_layer) = uf.split_layers(id3);
+            assert_eq!(old_layers.0.len(), 3);
+            assert_eq!(current_layer.0.len(), 1);
+            assert_eq!(is_top_layer, true);
+        }
+    }
+
+    #[test]
+    fn find_root_uses_old_root_cell() {
+        let mut uf = LayeredUf::new();
+        let mut heap = CellHeap::new();
+        let base = uf.register_node();
+        let base_cell = heap.insert_var("base");
+        uf.set_cell(base, base_cell);
+
+        uf.push_choicepoint();
+        let child = uf.register_node_with_parent(base);
+
+        let root = uf.find_root(child);
+        assert_eq!(root.cell, base_cell);
+    }
+
+    #[test]
+    fn find_root_uses_local_cell_over_old_root() {
+        let mut uf = LayeredUf::new();
+        let mut heap = CellHeap::new();
+        let base = uf.register_node();
+        let base_cell = heap.insert_var("base");
+        uf.set_cell(base, base_cell);
+
+        uf.push_choicepoint();
+        let child = uf.register_node_with_parent(base);
+        let child_cell = heap.insert_var("child");
+        uf.set_cell(child, child_cell);
+
+        let root = uf.find_root(child);
+        assert_eq!(root.cell, child_cell);
+    }
+
+    #[test]
+    fn union_preserves_cell_from_non_root() {
+        let mut uf = LayeredUf::new();
+        let mut heap = CellHeap::new();
+        let left = uf.register_node();
+        let right = uf.register_node();
+        let right_cell = heap.insert_var("right");
+        uf.set_cell(right, right_cell);
+        uf.debug_dump();
+
+        uf.union(left, right);
+
+        let root = uf.find_root(left);
+        assert_eq!(root.cell, right_cell);
+    }
+
+    #[test]
+    fn top_layer_empty_does_not_path_compress_old_layers() {
+        let mut uf = LayeredUf::new();
+        let id0 = uf.register_node();
+        let id1 = uf.register_node();
+        let id2 = uf.register_node();
+
+        uf.parent[id2].local = LocalParentIndex(1);
+        uf.parent[id1].local = LocalParentIndex(0);
+        uf.parent[id0].local = LocalParentIndex(0);
+
+        uf.push_choicepoint();
+
+        let _ = uf.find_root(id2);
+
+        assert_eq!(uf.parent[id2].local, LocalParentIndex(0));
     }
     #[test]
     fn split_layers_multiple_layers() {
