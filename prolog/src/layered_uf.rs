@@ -1,10 +1,3 @@
-//   bugs
-//   - DONE High: split_layers のレイヤー判定が壊れていて find+< で最初のレイヤーしか選ばず境界ノードも誤分類
-//   - DONE layer_index が空/トップ層だと layer_index[..] 参照で panic します。 src/layered_uf.rs:210 src/layered_uf.rs:214 src/layered_uf.rs:215
-//  - DONE High: split_layers の newer_layers.split_at_mut にグローバル index をそのまま渡しており、層開始が 0 以外だと current/rest の境界がずれます。src/layered_uf.rs:218
-//   - High: find_root_impl の LocalParentIndex::from_global_index(local_root.rooted, old_layers_len) は rooted が旧層だと underflow します（global→local 変換の向きが逆）。src/layered_uf.rs:346
-//   - Low: レイヤー分割や push/pop、跨層 root 解決を検証する単体テストがなく、回帰しやすいです。src/layered_uf.rs:172
-
 use std::ops::{Add, Deref, DerefMut, Index, IndexMut, Sub};
 
 use crate::cell_heap::CellIndex;
@@ -15,8 +8,6 @@ use crate::cell_heap::CellIndex;
 // [(0,0), (0,0), (2,2)]
 // find_rootでレイヤ内参照をまず優先して見てpath compactionして、そののちrootを見に行って自分だけcompactionしてという動作をし、レイヤ1以降はこのようになる
 // [(0,0), (0,0), (2,2), | (0, 0), (3, 0), (5, 2), (2,3) | (6,0) | (8,0)]
-// また、キャッシュなしだと上記の場合に7にアクセスすると7,6,2と毎回たどり、path compactionが効かないためキャッシュを導入している
-// cell_storeなど外のレイヤでバックトラック後に初めて使われた変数かどうかをチェックできれば最新レイヤに参照をpushすることでキャッシュは不要になる
 // 参照は必ずインデックスが小さいものへと参照し、最もインデックスが小さいものがレイヤ内の代表元となる
 pub struct LayeredUf {
     // union-findの親ノードを示す配列 いつものやつ
