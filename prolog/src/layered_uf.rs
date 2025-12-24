@@ -17,6 +17,7 @@ pub struct LayeredUf {
     parent: Parents,
     // 各レイヤーの開始インデックス
     // top layerは最後尾で、それ以前のレイヤーは不変データ構造として扱う
+    // layer_indexは半開区間で、layer i は [start_i, start_{i+1}) を意味する
     layer_index: AllLayers,
 }
 
