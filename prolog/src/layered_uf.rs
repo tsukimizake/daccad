@@ -272,14 +272,13 @@ impl LayeredUf {
         node: GlobalParentIndex,
     ) -> (OldLayersParents<'_>, CurrentLayerParents<'_>, bool) {
         // todo bisect
-        let current_layer_end_idx: AllLayersIndex = self
+        let current_layer_beg_idx: AllLayersIndex = self
             .layer_index
             .iter()
-            .enumerate()
-            .find(|(_, layer_beg)| node < **layer_beg)
-            .map(|(idx, _)| AllLayersIndex(idx))
+            .rposition(|layer_beg| *layer_beg <= node)
+            .map(AllLayersIndex)
             .unwrap();
-        let current_layer_beg_idx = current_layer_end_idx - 1;
+        let current_layer_end_idx = current_layer_beg_idx + 1;
         let current_layer_beg = self.layer_index[current_layer_beg_idx];
         let current_layer_end = self.layer_index[current_layer_end_idx];
         let is_top_layer = current_layer_end_idx.0 == self.layer_index.len() - 1;
