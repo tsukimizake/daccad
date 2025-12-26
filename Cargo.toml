@@ -19,7 +19,7 @@ members = [
 [dependencies]
 manifold-rs = "0.6.2"
 bevy = "0.17" 
-bevy_egui = "0.37"
+bevy_egui = "0.38"
 bevy-async-ecs = "0.9"
 derived-deref = "2.1.0"
 prolog = { path = "prolog" }

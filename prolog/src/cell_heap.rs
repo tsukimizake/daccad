@@ -49,7 +49,9 @@ impl CellHeap {
     pub fn new() -> Self {
         let mut cells = Vec::with_capacity(16);
         // 0は常にEmptyセル
-        cells.push(Rc::new(Cell::Empty { id: CellIndex(0) }));
+        cells.push(Rc::new(Cell::Empty {
+            id: CellIndex::EMPTY,
+        }));
         Self { cells }
     }
 
