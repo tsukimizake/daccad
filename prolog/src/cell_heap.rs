@@ -2,7 +2,7 @@ use std::ops::{Index, IndexMut};
 use std::rc::Rc;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct CellIndex(pub(crate) usize);
+pub struct CellIndex(usize);
 impl CellIndex {
     pub fn is_empty(&self) -> bool {
         self.0 == 0
