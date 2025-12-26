@@ -435,8 +435,14 @@ fn find_root_impl(
     // これ以降はglobal rootはold_layersにあるはず
     debug_assert!(local_root.rooted.0 < old_layers_len);
 
+    let rooted = current_layer[local_root_idx].rooted;
     // 型合わせのために一回アクセスしているのが汚い
-    return find_root_old_layers(old_layers, current_layer[local_root_idx].rooted);
+    let global_root = find_root_old_layers(old_layers, rooted);
+    // local rootのみglobal indexもpath compactionする
+    if is_top_layer {
+        current_layer[local_root_idx].rooted = global_root;
+    }
+    global_root
 }
 
 fn find_root_old_layers(
