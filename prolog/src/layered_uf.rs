@@ -282,26 +282,27 @@ impl LayeredUf {
         let current_layer_beg_idx = current_layer_end_idx - 1;
         let current_layer_beg = self.layer_index[current_layer_beg_idx];
         let current_layer_end = self.layer_index[current_layer_end_idx];
-        let all_parent_len = GlobalParentIndex(self.parent.len());
+        let is_top_layer = current_layer_end_idx.0 == self.layer_index.len() - 1;
 
         let (old_layers, newer_layers) = self.parent.split_at_mut(current_layer_beg);
-        if current_layer_end < all_parent_len {
-            let (current_layer, _rest_layers) =
-                newer_layers.split_at_mut(current_layer_end.0 - current_layer_beg.0);
-            (
-                OldLayersParents(old_layers),
-                CurrentLayerParents(current_layer),
-                false,
-            )
-        } else {
+        if is_top_layer {
             (
                 OldLayersParents(old_layers),
                 CurrentLayerParents(newer_layers),
                 true,
             )
+        } else {
+            let current_layer_len = current_layer_end.0 - current_layer_beg.0;
+            let (current_layer, _rest_layers) = newer_layers.split_at_mut(current_layer_len);
+            (
+                OldLayersParents(old_layers),
+                CurrentLayerParents(current_layer),
+                false,
+            )
         }
     }
 
+    // nodeのrootを返す. 注意点として、local_rootにcellが設定されている場合はそれを優先して返す
     #[allow(unused)]
     pub fn find_root<'a>(&'a mut self, id: GlobalParentIndex) -> &'a Parent {
         let (mut old_layers, mut current_layer, is_top_layer) = self.split_layers(id);
@@ -476,6 +477,18 @@ mod tests {
     }
 
     #[test]
+    fn split_layers_empty_top() {
+        let mut uf = LayeredUf::new();
+        let id0 = uf.register_node();
+        uf.push_choicepoint();
+
+        let (old_layers, current_layer, is_top_layer) = uf.split_layers(id0);
+        assert_eq!(old_layers.0.len(), 0);
+        assert_eq!(current_layer.0.len(), 1);
+        assert_eq!(is_top_layer, false);
+    }
+
+    #[test]
     fn split_layers_boundary_indices() {
         let mut uf = LayeredUf::new();
         let id0 = uf.register_node();
@@ -574,7 +587,7 @@ mod tests {
 
         let _ = uf.find_root(id2);
 
-        assert_eq!(uf.parent[id2].local, LocalParentIndex(0));
+        assert_eq!(uf.parent[id2].local, LocalParentIndex(1));
     }
     #[test]
     fn split_layers_multiple_layers() {
