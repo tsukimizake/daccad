@@ -256,7 +256,7 @@ pub fn program(input: &str) -> PResult<'_, Vec<Clause>> {
 
 /// Parse an entire Prolog database (sequence of clauses) and ensure full consumption.
 /// Returns the list of clauses or the first parse error.
-/// Automatically converts top-level Struct to TopStruct.
+/// Applies `mark_top_level_structs` to each clause.
 pub fn database(input: &str) -> Result<Vec<Clause>, nom::Err<nom::error::Error<&str>>> {
     match program(input) {
         Ok((rest, clauses)) if rest.is_empty() => Ok(clauses
