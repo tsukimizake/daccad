@@ -266,7 +266,7 @@ impl LayeredUf {
         self.parent[id].cell = cell;
     }
 
-    // (nodeを含むlayerより下のlayers, nodeを含むlayer, 残りのlayers)を返す
+    // (nodeを含むlayerより下のlayers, nodeを含むlayer, is_top_layer)を返す
     fn split_layers<'a>(
         &mut self,
         node: GlobalParentIndex,
