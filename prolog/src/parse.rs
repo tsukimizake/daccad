@@ -1,4 +1,3 @@
-use crate::types::{Clause, Term};
 use nom::{
     IResult, Parser,
     branch::alt,
@@ -9,7 +8,63 @@ use nom::{
     sequence::{delimited, pair, preceded, separated_pair, terminated},
 };
 
-pub type PResult<'a, T> = IResult<&'a str, T>;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Term {
+    Var(String),
+    Number(i64),
+    Struct {
+        functor: String,
+        args: Vec<Term>,
+    },
+    List {
+        items: Vec<Term>,
+        tail: Option<Box<Term>>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Clause {
+    Fact(Term),
+    Rule { head: Term, body: Vec<Term> },
+}
+
+impl Term {
+    pub fn get_name(&self) -> &str {
+        match self {
+            Term::Var(name) => name,
+            Term::Struct { functor, .. } => functor,
+            Term::Number(_) => "<number>",
+            Term::List { .. } => "<list>",
+        }
+    }
+}
+
+impl Clause {
+    pub fn mark_top_level_structs(self) -> Self {
+        match self {
+            Clause::Fact(term) => Clause::Fact(term),
+            Clause::Rule { head, body } => Clause::Rule {
+                head: head,
+                body: body,
+            },
+        }
+    }
+}
+
+#[allow(unused)]
+pub(super) fn v(name: impl Into<String>) -> Term {
+    Term::Var(name.into())
+}
+
+#[allow(unused)]
+pub(super) fn a(name: impl Into<String>) -> Term {
+    Term::Struct {
+        functor: name.into(),
+        args: vec![],
+    }
+}
+
+pub(super) type PResult<'a, T> = IResult<&'a str, T>;
 
 // Whitespace and comments
 fn line_comment(input: &str) -> PResult<'_, ()> {
@@ -160,7 +215,10 @@ fn atom_term(input: &str) -> PResult<'_, Term> {
                 functor: name,
                 args,
             },
-            None => Term::Atom(name),
+            None => Term::Struct {
+                functor: name,
+                args: vec![],
+            },
         },
     ))
     .parse(input)
@@ -170,7 +228,7 @@ fn simple_term(input: &str) -> PResult<'_, Term> {
     alt((list_term, paren_term, number_term, var_term, atom_term)).parse(input)
 }
 
-pub fn term(input: &str) -> PResult<'_, Term> {
+pub(super) fn term(input: &str) -> PResult<'_, Term> {
     simple_term(input)
 }
 
@@ -178,7 +236,7 @@ fn goals(input: &str) -> PResult<'_, Vec<Term>> {
     separated_list1(ws(char(',')), term).parse(input)
 }
 
-pub fn clause(input: &str) -> PResult<'_, Clause> {
+pub(super) fn clause(input: &str) -> PResult<'_, Clause> {
     ws(terminated(
         alt((
             map(
@@ -196,18 +254,38 @@ pub fn program(input: &str) -> PResult<'_, Vec<Clause>> {
     ws(terminated(many0(clause), opt(space_or_comment1))).parse(input)
 }
 
+/// Parse an entire Prolog database (sequence of clauses) and ensure full consumption.
+/// Returns the list of clauses or the first parse error.
+/// Applies `mark_top_level_structs` to each clause.
+pub fn database(input: &str) -> Result<Vec<Clause>, nom::Err<nom::error::Error<&str>>> {
+    match program(input) {
+        Ok((rest, clauses)) if rest.is_empty() => Ok(clauses
+            .into_iter()
+            .map(|clause| clause.mark_top_level_structs())
+            .collect()),
+        Ok((rest, _)) => Err(nom::Err::Error(nom::error::Error {
+            input: rest,
+            code: nom::error::ErrorKind::Fail,
+        })),
+        Err(e) => Err(e),
+    }
+}
+
 pub fn query(input: &str) -> PResult<'_, Vec<Term>> {
-    ws(terminated(goals, cut(ws(char('.'))))).parse(input)
+    map(ws(terminated(goals, cut(ws(char('.'))))), |terms| {
+        terms.into_iter().map(|term| term).collect()
+    })
+    .parse(input)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{a, v, Clause, Term};
+    use super::{Clause, Term, a, v};
 
     fn assert_clause(src: &str, expected: Clause) {
         let (_, parsed) = clause(src).unwrap();
-        assert_eq!(parsed, expected);
+        assert_eq!(parsed.mark_top_level_structs(), expected);
     }
 
     #[test]
@@ -278,5 +356,58 @@ mod tests {
                 ],
             }]
         );
+    }
+
+    #[test]
+    fn parse_database() {
+        let src = r#"
+            % facts
+            parent(alice, bob).
+            parent(bob, carol).
+
+            /* rule */
+            grandparent(X, Y) :- parent(X, Z), parent(Z, Y).
+        "#;
+        let db = database(src).unwrap();
+        assert_eq!(db.len(), 3);
+    }
+
+    #[test]
+    fn test_top_struct_vs_struct() {
+        let src = "parent(alice, f(nested)).";
+        let (_, clause) = clause(src).unwrap();
+        let converted = clause.mark_top_level_structs();
+
+        match converted {
+            Clause::Fact(Term::Struct { functor, args }) => {
+                assert_eq!(functor, "parent");
+                assert_eq!(args.len(), 2);
+                assert!(matches!(&args[0], Term::Struct { args, .. } if args.is_empty()));
+                match &args[1] {
+                    Term::Struct { functor, args } => {
+                        assert_eq!(functor, "f");
+                        assert_eq!(args.len(), 1);
+                        assert!(matches!(&args[0], Term::Struct { args, .. } if args.is_empty()));
+                    }
+                    _ => panic!("Expected nested Struct, got {:?}", args[1]),
+                }
+            }
+            _ => panic!("Expected TopStruct fact, got {:?}", converted),
+        }
+    }
+
+    #[test]
+    fn test_top_atom() {
+        let src = "hello.";
+        let (_, clause) = clause(src).unwrap();
+        let converted = clause.mark_top_level_structs();
+
+        match converted {
+            Clause::Fact(Term::Struct { functor, args }) => {
+                assert_eq!(functor, "hello");
+                assert_eq!(args.len(), 0);
+            }
+            _ => panic!("Expected Struct with arity 0 fact, got {:?}", converted),
+        }
     }
 }
