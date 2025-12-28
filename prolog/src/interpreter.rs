@@ -1,41 +1,54 @@
-use crate::cell_heap::{CellHeap, CellIndex};
+use crate::cell_heap::{Cell, CellHeap, CellIndex};
 use crate::compiler_bytecode::{WamInstr, WamReg};
-use crate::layered_uf::LayeredUf;
+use crate::layered_uf::{GlobalParentIndex, LayeredUf, Parent};
 use crate::parse::Term;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Registers {
-    registers: Vec<CellIndex>,
+enum Register {
+    CellRef { id: CellIndex },
+    UfRef { id: GlobalParentIndex },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Registers {
+    registers: Vec<Register>,
 }
 
 impl Registers {
-    fn new(heap: &mut CellHeap) -> Self {
+    fn new() -> Self {
         let mut registers = Vec::with_capacity(32);
         for _ in 0..32 {
-            registers.push(heap.insert_empty());
+            registers.push(Register::CellRef {
+                id: CellIndex::EMPTY,
+            });
         }
         Self { registers }
     }
 
-    pub fn get_arg_registers(&self) -> &[CellIndex] {
+    pub fn get_arg_registers(&self) -> &[Register] {
         &self.registers
     }
-    pub fn get_register(&mut self, cell_store: &mut CellHeap, reg: &WamReg) -> CellIndex {
+    pub fn get_register(&mut self, reg: &WamReg) -> Register {
         let index = match reg {
             WamReg::X(index) => *index,
         };
         while index >= self.registers.len() {
-            self.registers.push(cell_store.insert_empty());
+            self.registers.push(Register::CellRef {
+                id: CellIndex::EMPTY,
+            });
         }
-        self.registers[index]
+        self.registers[index].clone()
     }
 
-    pub fn set_register(&mut self, cell_heap: &mut CellHeap, reg: &WamReg, value: CellIndex) {
+    pub fn set_register(&mut self, reg: &WamReg, value: Register) {
         let index = match reg {
             WamReg::X(index) => *index,
         };
+
         while index >= self.registers.len() {
-            self.registers.push(cell_heap.insert_empty());
+            self.registers.push(Register::CellRef {
+                id: CellIndex::EMPTY,
+            });
         }
         self.registers[index] = value;
     }
@@ -48,6 +61,46 @@ enum ExecMode {
     ResolvedToFalse,
 }
 
+#[derive(PartialEq, Eq, Debug)]
+enum ReadWriteMode {
+    Read,
+    Write,
+}
+
+fn getstruct_cell_ref(
+    cell: &Cell,
+    reg: &WamReg,
+    functor: &String,
+    arity: &usize,
+    registers: &mut Registers,
+    heap: &mut CellHeap,
+    read_write_mode: &mut ReadWriteMode,
+    exec_mode: &mut ExecMode,
+) {
+    match cell {
+        Cell::Empty => {
+            // panicが正しいかもしれない
+            *read_write_mode = ReadWriteMode::Write;
+        }
+        Cell::Var { .. } => {
+            *read_write_mode = ReadWriteMode::Write;
+        }
+        Cell::Struct {
+            functor: existing_functor,
+            arity: existing_arity,
+        } => {
+            if existing_functor == functor && existing_arity == arity {
+                let cell_id = heap.insert_struct(functor, *arity);
+                registers.set_register(reg, Register::CellRef { id: cell_id });
+
+                *read_write_mode = ReadWriteMode::Read;
+            } else {
+                *exec_mode = ExecMode::ResolvedToFalse;
+            }
+        }
+    }
+}
+
 fn exectute_impl(
     instructions: &[WamInstr],
     program_counter: &mut usize,
@@ -55,6 +108,7 @@ fn exectute_impl(
     heap: &mut CellHeap,
     layered_uf: &mut LayeredUf,
     exec_mode: &mut ExecMode,
+    read_write_mode: &mut ReadWriteMode,
 ) {
     if let Some(current_instr) = instructions.get(*program_counter) {
         match current_instr {
@@ -62,7 +116,10 @@ fn exectute_impl(
                 functor,
                 arity,
                 reg,
-            } => {}
+            } => {
+                let id = heap.insert_struct(functor, *arity);
+                registers.set_register(reg, Register::CellRef { id });
+            }
 
             WamInstr::SetVar { reg, name: _ } => {}
             WamInstr::SetVal { reg, name: _ } => {}
@@ -73,7 +130,35 @@ fn exectute_impl(
                 functor,
                 arity,
                 reg,
-            } => {}
+            } => match registers.get_register(reg) {
+                Register::CellRef { id } => {
+                    let cell = heap.value(id);
+                    getstruct_cell_ref(
+                        cell.as_ref(),
+                        reg,
+                        functor,
+                        arity,
+                        registers,
+                        heap,
+                        read_write_mode,
+                        exec_mode,
+                    );
+                }
+                Register::UfRef { id } => {
+                    let Parent { cell, .. } = layered_uf.find_root(id);
+                    let cell = heap.value(*cell);
+                    getstruct_cell_ref(
+                        cell.as_ref(),
+                        reg,
+                        functor,
+                        arity,
+                        registers,
+                        heap,
+                        read_write_mode,
+                        exec_mode,
+                    );
+                }
+            },
             WamInstr::Call {
                 predicate: _,
                 arity: _,
@@ -106,12 +191,12 @@ fn exectute_impl(
     }
 }
 
-pub fn execute_instructions(instructions: Vec<WamInstr>, orig_query: Term) -> Term {
+pub fn execute_instructions(instructions: Vec<WamInstr>, orig_query: Term) -> Result<Term, ()> {
     let mut program_counter = 0;
     let mut exec_mode = ExecMode::Continue;
     let mut layered_uf = LayeredUf::new();
     let mut cell_heap = CellHeap::new();
-    let mut registers = Registers::new(&mut cell_heap);
+    let mut registers = Registers::new();
 
     while exec_mode == ExecMode::Continue {
         exectute_impl(
@@ -121,11 +206,18 @@ pub fn execute_instructions(instructions: Vec<WamInstr>, orig_query: Term) -> Te
             &mut cell_heap,
             &mut layered_uf,
             &mut exec_mode,
+            &mut ReadWriteMode::Read,
         );
         program_counter += 1;
     }
+    println!("{:?}", instructions);
+    println!("{:?}", orig_query);
 
-    todo!("return query with bindings applied")
+    if exec_mode == ExecMode::ResolvedToFalse {
+        return Err(());
+    } else {
+        Ok(orig_query) // TODO return query with bindings applied
+    }
 }
 
 #[cfg(test)]
@@ -151,14 +243,15 @@ mod tests {
     }
 
     #[test]
-    fn execute_instructions_signature() {
-        let _func: fn(Vec<WamInstr>, Term) -> Term = execute_instructions;
-    }
-
-    #[test]
-    #[ignore = "execute_instructions is not implemented yet"]
     fn compiled_program_is_accepted() {
         let (instructions, query_term) = compile_program("hello.", "hello.");
-        let _ = execute_instructions(instructions, query_term);
+        let result = execute_instructions(instructions, query_term.clone());
+        assert_eq!(result, Ok(query_term));
+    }
+    #[test]
+    fn fail_unmatched() {
+        let (instructions, query_term) = compile_program("hello.", "bye.");
+        let result = execute_instructions(instructions, query_term);
+        assert_eq!(result, Err(()));
     }
 }

@@ -34,7 +34,7 @@ pub struct Parent {
 
     // cellへの参照(id)を持つ. 代表元以外の場合は意味を持たない
     // local rootの場合もそのlayerで書き込まれた場合はそこがそのlayerでのcellとなる
-    cell: CellIndex,
+    pub(crate) cell: CellIndex,
 }
 
 struct Parents(Vec<Parent>);

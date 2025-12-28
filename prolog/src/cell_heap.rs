@@ -10,30 +10,20 @@ impl CellIndex {
     pub(crate) const EMPTY: CellIndex = CellIndex(0);
 }
 
+#[cfg(debug_assertions)]
+type VarName = String;
+
+#[cfg(not(debug_assertions))]
+type VarName = ();
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Cell {
-    Empty {
-        id: CellIndex,
-    },
-    Var {
-        id: CellIndex,
-        name: String,
-    },
-    Struct {
-        id: CellIndex,
-        functor: String,
-        arity: usize,
-        children: Vec<CellIndex>,
-    },
+    Empty,
+    Var { name: VarName },
+    Struct { functor: String, arity: usize },
 }
 
-impl Cell {
-    pub fn id(&self) -> CellIndex {
-        match self {
-            Cell::Empty { id } | Cell::Var { id, .. } | Cell::Struct { id, .. } => *id,
-        }
-    }
-}
+impl Cell {}
 
 pub struct CellHeap {
     cells: Vec<Rc<Cell>>,
@@ -43,9 +33,7 @@ impl CellHeap {
     pub fn new() -> Self {
         let mut cells = Vec::with_capacity(16);
         // 0は常にEmptyセル
-        cells.push(Rc::new(Cell::Empty {
-            id: CellIndex::EMPTY,
-        }));
+        cells.push(Rc::new(Cell::Empty {}));
         Self { cells }
     }
 
@@ -53,29 +41,17 @@ impl CellHeap {
         CellIndex(self.cells.len())
     }
 
-    pub fn insert_empty(&mut self) -> CellIndex {
-        let id = self.next_index();
-        self.cells.push(Rc::new(Cell::Empty { id }));
-        id
-    }
-
     pub fn insert_var(&mut self, name: impl Into<String>) -> CellIndex {
         let id = self.next_index();
-        self.cells.push(Rc::new(Cell::Var {
-            id,
-            name: name.into(),
-        }));
+        self.cells.push(Rc::new(Cell::Var { name: name.into() }));
         id
     }
 
-    pub fn insert_struct(&mut self, functor: String, children: Vec<CellIndex>) -> CellIndex {
+    pub fn insert_struct(&mut self, functor: &String, arity: usize) -> CellIndex {
         let id = self.next_index();
-        let arity = children.len();
         self.cells.push(Rc::new(Cell::Struct {
-            id,
-            functor,
+            functor: functor.clone(),
             arity,
-            children,
         }));
         id
     }
