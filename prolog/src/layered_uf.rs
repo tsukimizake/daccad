@@ -218,11 +218,8 @@ impl LayeredUf {
         for (global, parent) in self.parent.iter().enumerate() {
             writeln!(
                 out,
-                "  [{}] local={} rooted={}  cell={}",
-                global,
-                parent.local.0,
-                parent.rooted.0,
-                usize::from(parent.cell).to_string()
+                "  [{}] local={} rooted={}  cell={:?}",
+                global, parent.local.0, parent.rooted.0, parent.cell
             );
         }
 

@@ -10,12 +10,6 @@ impl CellIndex {
     pub(crate) const EMPTY: CellIndex = CellIndex(0);
 }
 
-impl From<CellIndex> for usize {
-    fn from(value: CellIndex) -> Self {
-        value.0
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Cell {
     Empty {

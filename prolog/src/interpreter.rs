@@ -41,18 +41,6 @@ impl Registers {
     }
 }
 
-enum Frame {
-    Base {},
-    Environment {
-        return_pc: usize,
-        registers: Vec<CellIndex>,
-    },
-    ChoicePoint {
-        stack_len_to_set: usize,
-        layered_uf_depth_to_set: usize,
-    },
-}
-
 #[derive(PartialEq, Eq, Debug)]
 enum ExecMode {
     Continue,
@@ -64,7 +52,6 @@ fn exectute_impl(
     instructions: &[WamInstr],
     program_counter: &mut usize,
     registers: &mut Registers,
-    stack: &mut Vec<Frame>,
     heap: &mut CellHeap,
     layered_uf: &mut LayeredUf,
     exec_mode: &mut ExecMode,
@@ -92,18 +79,18 @@ fn exectute_impl(
                 arity: _,
                 to_program_counter,
             } => {
-                stack.push(Frame::Environment {
-                    return_pc: *program_counter,
-                    registers: Vec::new(), // TODO
-                });
+                // stack.push(Frame::Environment {
+                //     return_pc: *program_counter,
+                //     registers: Vec::new(), // TODO
+                // });
                 *program_counter = *to_program_counter;
             }
             WamInstr::Label { name: _, arity: _ } => {}
             WamInstr::Proceed => {
-                stack.pop();
-                if stack.len() == 0 {
-                    *exec_mode = ExecMode::ResolvedToTrue;
-                }
+                // stack.pop();
+                // if stack.len() == 0 {
+                *exec_mode = ExecMode::ResolvedToTrue;
+                // }
             }
             WamInstr::Error { message } => {
                 println!("{}", message);
@@ -125,15 +112,12 @@ pub fn execute_instructions(instructions: Vec<WamInstr>, orig_query: Term) -> Te
     let mut layered_uf = LayeredUf::new();
     let mut cell_heap = CellHeap::new();
     let mut registers = Registers::new(&mut cell_heap);
-    let mut stack = Vec::with_capacity(100);
-    stack.push(Frame::Base {});
 
     while exec_mode == ExecMode::Continue {
         exectute_impl(
             &instructions,
             &mut program_counter,
             &mut registers,
-            &mut stack,
             &mut cell_heap,
             &mut layered_uf,
             &mut exec_mode,
