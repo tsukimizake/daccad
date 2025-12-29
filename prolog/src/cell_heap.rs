@@ -1,3 +1,4 @@
+use crate::compiler_bytecode::VarName;
 use std::ops::{Index, IndexMut};
 use std::rc::Rc;
 
@@ -9,12 +10,6 @@ impl CellIndex {
     }
     pub(crate) const EMPTY: CellIndex = CellIndex(0);
 }
-
-#[cfg(debug_assertions)]
-type VarName = String;
-
-#[cfg(not(debug_assertions))]
-type VarName = ();
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Cell {

@@ -3,6 +3,12 @@ pub enum WamReg {
     X(usize),
 }
 
+#[cfg(debug_assertions)]
+pub(crate) type VarName = String;
+
+#[cfg(not(debug_assertions))]
+pub(crate) type VarName = ();
+
 #[allow(unused)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum WamInstr {
@@ -22,7 +28,7 @@ pub enum WamInstr {
         reg: WamReg,
     },
     GetVar {
-        name: String,
+        name: VarName,
         reg: WamReg,
     },
 
@@ -32,7 +38,7 @@ pub enum WamInstr {
         reg: WamReg,
     },
     PutVar {
-        name: String,
+        name: VarName,
         reg: WamReg, // TODO Xレジスタの宣言のためにVec？必要な場合がわかってない
     },
     PutAtom {
@@ -45,11 +51,11 @@ pub enum WamInstr {
     },
 
     SetVar {
-        name: String,
+        name: VarName,
         reg: WamReg,
     },
     SetVal {
-        name: String,
+        name: VarName,
         reg: WamReg,
     },
     SetAtom {
@@ -60,12 +66,12 @@ pub enum WamInstr {
     },
 
     UnifyVar {
-        name: String,
+        name: VarName,
         reg: WamReg,
     },
 
     UnifyVal {
-        name: String,
+        name: VarName,
         reg: WamReg,
     },
 
