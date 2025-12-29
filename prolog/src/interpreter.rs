@@ -243,7 +243,7 @@ mod tests {
     }
 
     #[test]
-    fn compiled_program_is_accepted() {
+    fn simple_atom_match() {
         let (instructions, query_term) = compile_program("hello.", "hello.");
         let result = execute_instructions(instructions, query_term.clone());
         assert_eq!(result, Ok(query_term));
