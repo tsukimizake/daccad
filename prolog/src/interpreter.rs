@@ -121,8 +121,8 @@ fn exectute_impl(
                 registers.set_register(reg, Register::CellRef { id });
             }
 
-            WamInstr::SetVar { reg, name: _ } => {}
-            WamInstr::SetVal { reg, name: _ } => {}
+            WamInstr::SetVar { name: _, reg } => {}
+            WamInstr::SetVal { name: _, reg } => {}
 
             WamInstr::PutVar { name, reg } => {
                 let id = heap.insert_var(name);
@@ -162,6 +162,7 @@ fn exectute_impl(
                     );
                 }
             },
+
             WamInstr::Call {
                 predicate: _,
                 arity: _,
@@ -194,7 +195,10 @@ fn exectute_impl(
     }
 }
 
-pub fn execute_instructions(instructions: Vec<WamInstr>, orig_query: Term) -> Result<Term, ()> {
+pub fn execute_instructions(
+    instructions: Vec<WamInstr>,
+    orig_query: Vec<Term>,
+) -> Result<Vec<Term>, ()> {
     let mut program_counter = 0;
     let mut exec_mode = ExecMode::Continue;
     let mut layered_uf = LayeredUf::new();
@@ -233,16 +237,11 @@ mod tests {
         parse::{self, Term},
     };
 
-    fn compile_program(db_src: &str, query_src: &str) -> (Vec<WamInstr>, Term) {
+    fn compile_program(db_src: &str, query_src: &str) -> (Vec<WamInstr>, Vec<Term>) {
         let db_clauses = parse::database(db_src).expect("failed to parse db");
         let query_terms = parse::query(query_src).expect("failed to parse query").1;
-        let mut query_terms = query_terms.into_iter();
-        let query_term = query_terms.next().expect("query needs at least one term");
-        let instructions = compile_link(
-            compile_query(vec![query_term.clone()]),
-            compile_db(db_clauses),
-        );
-        (instructions, query_term)
+        let instructions = compile_link(compile_query(query_terms.clone()), compile_db(db_clauses));
+        (instructions, query_terms)
     }
 
     #[test]
@@ -256,5 +255,26 @@ mod tests {
         let (instructions, query_term) = compile_program("hello.", "bye.");
         let result = execute_instructions(instructions, query_term);
         assert_eq!(result, Err(()));
+    }
+
+    #[test]
+    fn db_var_matches_constant_query() {
+        let (instructions, query_term) = compile_program("honi(X).", "honi(fuwa).");
+        let result = execute_instructions(instructions, query_term.clone());
+        assert_eq!(result, Ok(query_term));
+    }
+
+    #[test]
+    fn query_var_binds_to_constant_fact() {
+        let (instructions, query_term) = compile_program("honi(fuwa).", "honi(X).");
+        let result = execute_instructions(instructions, query_term);
+        let expected = vec![Term::Struct {
+            functor: "honi".to_string(),
+            args: vec![Term::Struct {
+                functor: "fuwa".to_string(),
+                args: vec![],
+            }],
+        }];
+        assert_eq!(result, Ok(expected));
     }
 }
