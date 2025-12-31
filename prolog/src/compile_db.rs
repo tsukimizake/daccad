@@ -6,7 +6,7 @@ use std::{
 use crate::{
     compiler_bytecode::{WamInstr, WamReg},
     parse::{Clause, Term},
-    register_managers::{RegKey, RegisterManager, alloc_registers, to_regkey},
+    register_managers::{RegExpr, RegisterManager, alloc_registers, to_regkey},
 };
 
 pub fn compile_db(db: Vec<Clause>) -> Vec<WamInstr> {
@@ -30,8 +30,8 @@ pub fn compile_db(db: Vec<Clause>) -> Vec<WamInstr> {
 
 fn compile_db_term(
     term: &Term,
-    reg_map: &HashMap<RegKey, WamReg>,
-    declared_vars: &mut HashSet<RegKey>,
+    reg_map: &HashMap<RegExpr, WamReg>,
+    declared_vars: &mut HashSet<RegExpr>,
 ) -> Vec<WamInstr> {
     match term {
         Term::Struct { functor, args } => {
@@ -63,7 +63,7 @@ fn compile_db_term(
             .collect()
         }
         Term::Var(name) => {
-            let key = RegKey::Var(name.clone());
+            let key = RegExpr::Var(name.clone());
             if declared_vars.contains(&key) {
                 vec![WamInstr::UnifyVal {
                     name: name.clone(),

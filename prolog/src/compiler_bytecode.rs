@@ -39,7 +39,8 @@ pub enum WamInstr {
     },
     PutVar {
         name: VarName,
-        reg: WamReg, // TODO Xレジスタの宣言のためにVec？必要な場合がわかってない
+        reg: WamReg,
+        reg2: Option<WamReg>,
     },
     PutNumber {
         val: i64,

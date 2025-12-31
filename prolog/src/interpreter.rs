@@ -124,7 +124,7 @@ fn exectute_impl(
             WamInstr::SetVar { name: _, reg } => {}
             WamInstr::SetVal { name: _, reg } => {}
 
-            WamInstr::PutVar { name, reg } => {
+            WamInstr::PutVar { name, reg, .. } => {
                 let id = heap.insert_var(name);
                 registers.set_register(reg, Register::CellRef { id });
             }

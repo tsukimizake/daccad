@@ -3,7 +3,7 @@ use std::iter::once;
 
 use crate::compiler_bytecode::{WamInstr, WamReg};
 use crate::parse::Term;
-use crate::register_managers::{RegKey, RegisterManager, alloc_registers, to_regkey};
+use crate::register_managers::{RegExpr, RegisterManager, alloc_registers, to_regkey};
 
 pub fn compile_query(query_terms: Vec<Term>) -> Vec<WamInstr> {
     query_terms
@@ -19,7 +19,7 @@ fn compile_query_term(term: Term) -> Vec<WamInstr> {
     compile_defs(&term, &declared_vars)
 }
 
-fn compile_defs(term: &Term, reg_map: &HashMap<RegKey, WamReg>) -> Vec<WamInstr> {
+fn compile_defs(term: &Term, reg_map: &HashMap<RegExpr, WamReg>) -> Vec<WamInstr> {
     match term {
         Term::Struct { functor, args } => {
             let functor_children = args
@@ -84,6 +84,11 @@ mod tests {
         test_compile_query_helper(
             "p(Z, h(Z,W), f(W)).",
             vec![
+                WamInstr::PutVar {
+                    name: "Z".to_string(),
+                    reg: WamReg::X(1),
+                    reg2: Some(WamReg::X(4)),
+                },
                 WamInstr::PutStruct {
                     functor: "h".to_string(),
                     arity: 2,
@@ -91,20 +96,20 @@ mod tests {
                 },
                 WamInstr::SetVal {
                     name: "Z".to_string(),
-                    reg: WamReg::X(1),
+                    reg: WamReg::X(4),
                 },
-                WamInstr::SetVal {
+                WamInstr::SetVar {
                     name: "W".to_string(),
-                    reg: WamReg::X(3),
+                    reg: WamReg::X(5),
                 },
                 WamInstr::PutStruct {
                     functor: "f".to_string(),
                     arity: 1,
-                    reg: WamReg::X(4),
+                    reg: WamReg::X(3),
                 },
                 WamInstr::SetVal {
                     name: "W".to_string(),
-                    reg: WamReg::X(3),
+                    reg: WamReg::X(5),
                 },
                 WamInstr::Call {
                     predicate: "p".to_string(),
