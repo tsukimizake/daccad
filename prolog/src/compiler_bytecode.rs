@@ -18,11 +18,6 @@ pub enum WamInstr {
         reg: WamReg,
     },
 
-    // TODO Atom系はobsolete getstructure/0にまとめる
-    GetAtom {
-        name: String,
-        reg: WamReg,
-    },
     GetNumber {
         val: i64,
         reg: WamReg,
@@ -46,10 +41,6 @@ pub enum WamInstr {
         name: VarName,
         reg: WamReg, // TODO Xレジスタの宣言のためにVec？必要な場合がわかってない
     },
-    PutAtom {
-        name: String,
-        reg: WamReg,
-    },
     PutNumber {
         val: i64,
         reg: WamReg,
@@ -62,9 +53,6 @@ pub enum WamInstr {
     SetVal {
         name: VarName,
         reg: WamReg,
-    },
-    SetAtom {
-        name: String,
     },
     SetNumber {
         val: i64,

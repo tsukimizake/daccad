@@ -55,16 +55,18 @@ mod tests {
                 name: "parent".to_string(),
                 arity: 2,
             },
-            WamInstr::GetAtom {
-                name: "john".to_string(),
+            WamInstr::GetStruct {
+                functor: "john".to_string(),
+                arity: 0,
                 reg: WamReg::X(0),
             },
             WamInstr::Proceed,
         ];
 
         let query_instructions = vec![
-            WamInstr::PutAtom {
-                name: "john".to_string(),
+            WamInstr::PutStruct {
+                functor: "john".to_string(),
+                arity: 0,
                 reg: WamReg::X(0),
             },
             WamInstr::CallTemp {
@@ -76,8 +78,9 @@ mod tests {
         let result = compile_link(query_instructions, db_instructions);
 
         let expected = vec![
-            WamInstr::PutAtom {
-                name: "john".to_string(),
+            WamInstr::PutStruct {
+                functor: "john".to_string(),
+                arity: 0,
                 reg: WamReg::X(0),
             },
             WamInstr::Call {
@@ -89,8 +92,9 @@ mod tests {
                 name: "parent".to_string(),
                 arity: 2,
             },
-            WamInstr::GetAtom {
-                name: "john".to_string(),
+            WamInstr::GetStruct {
+                functor: "john".to_string(),
+                arity: 0,
                 reg: WamReg::X(0),
             },
             WamInstr::Proceed,
