@@ -227,7 +227,7 @@ impl LayeredUf {
     }
 
     #[allow(unused)]
-    pub fn register_node(&mut self) -> GlobalParentIndex {
+    pub fn alloc_node(&mut self) -> GlobalParentIndex {
         let global_id = GlobalParentIndex(self.parent.len());
         let top_layer_start = self.layer_index.get_top();
         let local_id = LocalParentIndex::from_global_index(global_id, top_layer_start.0);
@@ -240,7 +240,7 @@ impl LayeredUf {
     }
 
     #[allow(unused)]
-    pub fn register_node_with_parent(&mut self, old_node: GlobalParentIndex) -> GlobalParentIndex {
+    pub fn alloc_node_with_parent(&mut self, old_node: GlobalParentIndex) -> GlobalParentIndex {
         let global_id = GlobalParentIndex(self.parent.len());
         let top_layer_start = self.layer_index.get_top();
 
@@ -375,7 +375,7 @@ impl LayeredUf {
             .push(GlobalParentIndex::layer_end_sentry());
     }
 }
-// 渡ってくるnodeはregister_node済みであることが前提
+// 渡ってくるnodeはalloc_node済みであることが前提
 fn find_local_root(
     node: GlobalParentIndex,
     old_layers_len: usize,
@@ -465,7 +465,7 @@ mod tests {
     #[test]
     fn split_layers_simple() {
         let mut uf = LayeredUf::new();
-        let id = uf.register_node();
+        let id = uf.alloc_node();
         assert_eq!(id, GlobalParentIndex(0));
         let root = uf.find_root(id);
         assert_eq!(
@@ -481,7 +481,7 @@ mod tests {
     #[test]
     fn split_layers_empty_top() {
         let mut uf = LayeredUf::new();
-        let id0 = uf.register_node();
+        let id0 = uf.alloc_node();
         uf.push_choicepoint();
 
         let (old_layers, current_layer, is_top_layer) = uf.split_layers(id0);
@@ -493,12 +493,12 @@ mod tests {
     #[test]
     fn split_layers_boundary_indices() {
         let mut uf = LayeredUf::new();
-        let id0 = uf.register_node();
-        let id1 = uf.register_node();
+        let id0 = uf.alloc_node();
+        let id1 = uf.alloc_node();
         uf.push_choicepoint();
-        let id2 = uf.register_node();
+        let id2 = uf.alloc_node();
         uf.push_choicepoint();
-        let id3 = uf.register_node();
+        let id3 = uf.alloc_node();
 
         {
             let (old_layers, current_layer, is_top_layer) = uf.split_layers(id0);
@@ -530,12 +530,12 @@ mod tests {
     fn find_root_uses_old_root_cell() {
         let mut uf = LayeredUf::new();
         let mut heap = CellHeap::new();
-        let base = uf.register_node();
+        let base = uf.alloc_node();
         let base_cell = heap.insert_var("base");
         uf.set_cell(base, base_cell);
 
         uf.push_choicepoint();
-        let child = uf.register_node_with_parent(base);
+        let child = uf.alloc_node_with_parent(base);
 
         let root = uf.find_root(child);
         assert_eq!(root.cell, base_cell);
@@ -545,12 +545,12 @@ mod tests {
     fn find_root_uses_local_cell_over_old_root() {
         let mut uf = LayeredUf::new();
         let mut heap = CellHeap::new();
-        let base = uf.register_node();
+        let base = uf.alloc_node();
         let base_cell = heap.insert_var("base");
         uf.set_cell(base, base_cell);
 
         uf.push_choicepoint();
-        let child = uf.register_node_with_parent(base);
+        let child = uf.alloc_node_with_parent(base);
         let child_cell = heap.insert_var("child");
         uf.set_cell(child, child_cell);
 
@@ -562,8 +562,8 @@ mod tests {
     fn union_preserves_cell_from_non_root() {
         let mut uf = LayeredUf::new();
         let mut heap = CellHeap::new();
-        let left = uf.register_node();
-        let right = uf.register_node();
+        let left = uf.alloc_node();
+        let right = uf.alloc_node();
         let right_cell = heap.insert_var("right");
         uf.set_cell(right, right_cell);
         uf.debug_dump();
@@ -577,9 +577,9 @@ mod tests {
     #[test]
     fn top_layer_empty_does_not_path_compress_old_layers() {
         let mut uf = LayeredUf::new();
-        let id0 = uf.register_node();
-        let id1 = uf.register_node();
-        let id2 = uf.register_node();
+        let id0 = uf.alloc_node();
+        let id1 = uf.alloc_node();
+        let id2 = uf.alloc_node();
 
         uf.parent[id2].local = LocalParentIndex(1);
         uf.parent[id1].local = LocalParentIndex(0);
@@ -594,9 +594,9 @@ mod tests {
     #[test]
     fn split_layers_multiple_layers() {
         let mut uf = LayeredUf::new();
-        let id1 = uf.register_node();
+        let id1 = uf.alloc_node();
         uf.push_choicepoint();
-        let id2 = uf.register_node();
+        let id2 = uf.alloc_node();
         assert_eq!(id1, GlobalParentIndex(0));
         assert_eq!(id2, GlobalParentIndex(1));
         let root1 = uf.find_root(id1);
