@@ -31,6 +31,11 @@ pub enum WamInstr {
         name: VarName,
         reg: WamReg,
     },
+    GetVal {
+        name: VarName,
+        with: WamReg,
+        reg: WamReg,
+    },
 
     PutStruct {
         functor: String,

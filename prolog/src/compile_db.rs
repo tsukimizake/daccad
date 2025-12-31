@@ -35,9 +35,7 @@ fn compile_db_term(
 ) -> Vec<WamInstr> {
     match term {
         Term::Struct { functor, args } => {
-            let functor_children = args.iter().filter(|arg| {
-                matches!(arg, Term::Struct { .. })
-            });
+            let functor_children = args.iter().filter(|arg| matches!(arg, Term::Struct { .. }));
             let key = to_regkey(term, reg_map);
             once(WamInstr::GetStruct {
                 functor: functor.clone(),
@@ -101,59 +99,57 @@ mod tests {
     fn sample_code() {
         test_compile_db_helper(
             "p(f(X),h(Y,f(a)), Y).",
+            // => p(f(X), h(Y, X6), Y), X6 = f(X7), X7 = a.
             vec![
-                WamInstr::GetStruct {
-                    functor: "p".to_string(),
+                WamInstr::Label {
+                    name: "p".to_string(),
                     arity: 3,
+                },
+                // f(X)
+                WamInstr::GetStruct {
+                    functor: "f".to_string(),
+                    arity: 1,
                     reg: WamReg::X(0),
                 },
                 WamInstr::UnifyVar {
-                    name: "f".to_string(),
-                    reg: WamReg::X(1),
-                },
-                WamInstr::UnifyVar {
-                    name: "h".to_string(),
-                    reg: WamReg::X(3),
-                },
-                WamInstr::UnifyVar {
-                    name: "Y".to_string(),
+                    name: "X".to_string(),
                     reg: WamReg::X(4),
                 },
-                WamInstr::GetStruct {
-                    functor: "f".to_string(),
-                    arity: 1,
-                    reg: WamReg::X(1),
-                },
-                WamInstr::UnifyVar {
-                    name: "X".to_string(),
-                    reg: WamReg::X(2),
-                },
+                // h(Y, X6)
                 WamInstr::GetStruct {
                     functor: "h".to_string(),
                     arity: 2,
-                    reg: WamReg::X(3),
-                },
-                WamInstr::UnifyVal {
-                    name: "Y".to_string(),
-                    reg: WamReg::X(4),
+                    reg: WamReg::X(2),
                 },
                 WamInstr::UnifyVar {
-                    name: "f".to_string(),
+                    name: "Y".to_string(),
                     reg: WamReg::X(5),
                 },
+                WamInstr::UnifyVar {
+                    name: "X6".to_string(),
+                    reg: WamReg::X(6),
+                },
+                // Y
+                WamInstr::GetVal {
+                    name: "Y".to_string(),
+                    reg: WamReg::X(5),
+                    with: WamReg::X(3),
+                },
+                // X6 = f(X7)
                 WamInstr::GetStruct {
                     functor: "f".to_string(),
                     arity: 1,
-                    reg: WamReg::X(5),
+                    reg: WamReg::X(6),
                 },
                 WamInstr::UnifyVar {
                     name: "a".to_string(),
-                    reg: WamReg::X(6),
+                    reg: WamReg::X(7),
                 },
+                // X7 = a
                 WamInstr::GetStruct {
                     functor: "a".to_string(),
                     arity: 0,
-                    reg: WamReg::X(6),
+                    reg: WamReg::X(7),
                 },
                 WamInstr::Proceed,
             ],

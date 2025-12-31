@@ -17,10 +17,6 @@ impl RegisterManager {
         self.count += 1;
         WamReg::X(current)
     }
-
-    pub fn reset(&mut self) {
-        self.count = 0;
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
