@@ -179,4 +179,43 @@ mod tests {
             map
         });
     }
+    #[test]
+    fn same_var() {
+        test_alloc_registers_helper("p(X, X).", {
+            let mut map = HashMap::new();
+            map.insert(
+                RegExpr::Functor {
+                    name: "p".to_string(),
+                    arity: 2,
+                    args: vec![WamReg::X(1), WamReg::X(1)],
+                },
+                WamReg::X(0),
+            );
+            map.insert(RegExpr::Var("X".to_string()), WamReg::X(1));
+            map
+        });
+
+        test_alloc_registers_helper("p(q(X), Y).", {
+            let mut map = HashMap::new();
+            map.insert(
+                RegExpr::Functor {
+                    name: "p".to_string(),
+                    arity: 2,
+                    args: vec![WamReg::X(1), WamReg::X(3)],
+                },
+                WamReg::X(0),
+            );
+            map.insert(
+                RegExpr::Functor {
+                    name: "q".to_string(),
+                    arity: 1,
+                    args: vec![WamReg::X(2)],
+                },
+                WamReg::X(1),
+            );
+            map.insert(RegExpr::Var("X".to_string()), WamReg::X(2));
+            map.insert(RegExpr::Var("Y".to_string()), WamReg::X(3));
+            map
+        });
+    }
 }
