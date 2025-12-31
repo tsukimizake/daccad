@@ -34,7 +34,7 @@ fn compile_db_term(
     declared_vars: &mut HashSet<RegExpr>,
 ) -> Vec<WamInstr> {
     match term {
-        Term::Struct { functor, args } => {
+        Term::Struct { functor, args, .. } => {
             let functor_children = args.iter().filter(|arg| matches!(arg, Term::Struct { .. }));
             let key = to_regkey(term, reg_map);
             once(WamInstr::GetStruct {
@@ -62,7 +62,7 @@ fn compile_db_term(
             .chain(functor_children.flat_map(|arg| compile_db_term(arg, reg_map, declared_vars)))
             .collect()
         }
-        Term::Var(name) => {
+        Term::Var { name, .. } => {
             let key = RegExpr::Var(name.clone());
             if declared_vars.contains(&key) {
                 vec![WamInstr::UnifyVal {

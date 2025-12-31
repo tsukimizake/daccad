@@ -21,7 +21,7 @@ fn compile_query_term(term: Term) -> Vec<WamInstr> {
 
 fn compile_defs(term: &Term, reg_map: &HashMap<RegExpr, WamReg>) -> Vec<WamInstr> {
     match term {
-        Term::Struct { functor, args } => {
+        Term::Struct { functor, args, .. } => {
             let functor_children = args
                 .iter()
                 .filter(|arg| matches!(arg, Term::Struct { .. }))
@@ -44,7 +44,7 @@ fn compile_defs(term: &Term, reg_map: &HashMap<RegExpr, WamReg>) -> Vec<WamInstr
                 }))
                 .collect()
         }
-        Term::Var(name) => {
+        Term::Var { name, .. } => {
             let key = to_regkey(term, reg_map);
             vec![WamInstr::SetVar {
                 name: name.clone(),

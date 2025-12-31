@@ -274,13 +274,10 @@ mod tests {
     fn query_var_binds_to_constant_fact() {
         let (instructions, query_term) = compile_program("honi(fuwa).", "honi(X).");
         let result = execute_instructions(instructions, query_term);
-        let expected = vec![Term::Struct {
-            functor: "honi".to_string(),
-            args: vec![Term::Struct {
-                functor: "fuwa".to_string(),
-                args: vec![],
-            }],
-        }];
+        let expected = vec![Term::new_struct(
+            "honi".to_string(),
+            vec![Term::new_struct("fuwa".to_string(), vec![])],
+        )];
         assert_eq!(result, Ok(expected));
     }
 }

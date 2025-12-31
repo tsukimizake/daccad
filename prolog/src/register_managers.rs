@@ -36,7 +36,7 @@ pub(crate) fn alloc_registers(
     reg_manager: &mut RegisterManager,
 ) -> WamReg {
     match term {
-        Term::Struct { functor, args } => {
+        Term::Struct { functor, args, .. } => {
             let reg = reg_manager.get_next();
             let arg_keys = args
                 .iter()
@@ -51,7 +51,7 @@ pub(crate) fn alloc_registers(
             reg
         }
 
-        Term::Var(name) => {
+        Term::Var { name, .. } => {
             let k = RegExpr::Var(name.clone());
             if let Some(&reg) = declared_vars.get(&k) {
                 reg
@@ -67,7 +67,7 @@ pub(crate) fn alloc_registers(
 
 pub(crate) fn to_regkey(term: &Term, reg_map: &HashMap<RegExpr, WamReg>) -> RegExpr {
     match term {
-        Term::Struct { functor, args } => RegExpr::Functor {
+        Term::Struct { functor, args, .. } => RegExpr::Functor {
             name: functor.clone(),
             arity: args.len(),
             args: args
@@ -76,7 +76,7 @@ pub(crate) fn to_regkey(term: &Term, reg_map: &HashMap<RegExpr, WamReg>) -> RegE
                 .map(|k| reg_map[&k])
                 .collect(),
         },
-        Term::Var(name) => RegExpr::Var(name.clone()),
+        Term::Var { name, .. } => RegExpr::Var(name.clone()),
         _ => panic!("Unsupported term for RegKey: {:?}", term),
     }
 }

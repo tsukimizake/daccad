@@ -7,33 +7,124 @@ use nom::{
     multi::{many0, separated_list0, separated_list1},
     sequence::{delimited, pair, preceded, separated_pair, terminated},
 };
+use std::sync::atomic::{AtomicU64, Ordering};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TermId(u64);
+
+static NEXT_TERM_ID: AtomicU64 = AtomicU64::new(0);
+
+fn next_term_id() -> TermId {
+    TermId(NEXT_TERM_ID.fetch_add(1, Ordering::Relaxed))
+}
+
+#[derive(Debug, Clone)]
 pub enum Term {
-    Var(String),
-    Number(i64),
+    Var {
+        id: TermId,
+        name: String,
+    },
+    Number {
+        id: TermId,
+        value: i64,
+    },
     Struct {
+        id: TermId,
         functor: String,
         args: Vec<Term>,
     },
     List {
+        id: TermId,
         items: Vec<Term>,
         tail: Option<Box<Term>>,
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+impl PartialEq for Term {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Term::Var { name: left, .. }, Term::Var { name: right, .. }) => left == right,
+            (Term::Number { value: left, .. }, Term::Number { value: right, .. }) => left == right,
+            (
+                Term::Struct {
+                    functor: left_functor,
+                    args: left_args,
+                    ..
+                },
+                Term::Struct {
+                    functor: right_functor,
+                    args: right_args,
+                    ..
+                },
+            ) => left_functor == right_functor && left_args == right_args,
+            (
+                Term::List {
+                    items: left_items,
+                    tail: left_tail,
+                    ..
+                },
+                Term::List {
+                    items: right_items,
+                    tail: right_tail,
+                    ..
+                },
+            ) => left_items == right_items && left_tail == right_tail,
+            _ => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Clause {
     Fact(Term),
     Rule { head: Term, body: Vec<Term> },
 }
 
 impl Term {
+    pub fn new_var(name: String) -> Self {
+        Term::Var {
+            id: next_term_id(),
+            name,
+        }
+    }
+
+    pub fn new_number(value: i64) -> Self {
+        Term::Number {
+            id: next_term_id(),
+            value,
+        }
+    }
+
+    pub fn new_struct(functor: String, args: Vec<Term>) -> Self {
+        Term::Struct {
+            id: next_term_id(),
+            functor,
+            args,
+        }
+    }
+
+    pub fn new_list(items: Vec<Term>, tail: Option<Box<Term>>) -> Self {
+        Term::List {
+            id: next_term_id(),
+            items,
+            tail,
+        }
+    }
+
+    pub fn id(&self) -> TermId {
+        match self {
+            Term::Var { id, .. }
+            | Term::Number { id, .. }
+            | Term::Struct { id, .. }
+            | Term::List { id, .. } => *id,
+        }
+    }
+
     pub fn get_name(&self) -> &str {
         match self {
-            Term::Var(name) => name,
+            Term::Var { name, .. } => name,
             Term::Struct { functor, .. } => functor,
-            Term::Number(_) => "<number>",
+            Term::Number { .. } => "<number>",
             Term::List { .. } => "<list>",
         }
     }
@@ -53,15 +144,12 @@ impl Clause {
 
 #[allow(unused)]
 pub(super) fn v(name: impl Into<String>) -> Term {
-    Term::Var(name.into())
+    Term::new_var(name.into())
 }
 
 #[allow(unused)]
 pub(super) fn a(name: impl Into<String>) -> Term {
-    Term::Struct {
-        functor: name.into(),
-        args: vec![],
-    }
+    Term::new_struct(name.into(), vec![])
 }
 
 pub(super) type PResult<'a, T> = IResult<&'a str, T>;
@@ -177,10 +265,7 @@ fn list_term(input: &str) -> PResult<'_, Term> {
                 separated_list0(ws(char(',')), term),
                 opt(preceded(ws(char('|')), term)),
             ),
-            |(items, tail)| Term::List {
-                items,
-                tail: tail.map(Box::new),
-            },
+            |(items, tail)| Term::new_list(items, tail.map(Box::new)),
         ),
         cut(ws(char(']'))),
     ))
@@ -192,11 +277,11 @@ fn paren_term(input: &str) -> PResult<'_, Term> {
 }
 
 fn number_term(input: &str) -> PResult<'_, Term> {
-    map(ws(integer), Term::Number).parse(input)
+    map(ws(integer), Term::new_number).parse(input)
 }
 
 fn var_term(input: &str) -> PResult<'_, Term> {
-    map(ws(variable), Term::Var).parse(input)
+    map(ws(variable), Term::new_var).parse(input)
 }
 
 fn atom_term(input: &str) -> PResult<'_, Term> {
@@ -211,14 +296,8 @@ fn atom_term(input: &str) -> PResult<'_, Term> {
             ))),
         ),
         |(name, maybe_args)| match maybe_args {
-            Some(args) => Term::Struct {
-                functor: name,
-                args,
-            },
-            None => Term::Struct {
-                functor: name,
-                args: vec![],
-            },
+            Some(args) => Term::new_struct(name, args),
+            None => Term::new_struct(name, vec![]),
         },
     ))
     .parse(input)
@@ -292,10 +371,10 @@ mod tests {
     fn parse_fact() {
         assert_clause(
             "parent(alice, bob).",
-            Clause::Fact(Term::Struct {
-                functor: "parent".to_string(),
-                args: vec![a("alice"), a("bob")],
-            }),
+            Clause::Fact(Term::new_struct(
+                "parent".to_string(),
+                vec![a("alice"), a("bob")],
+            )),
         );
     }
 
@@ -304,19 +383,10 @@ mod tests {
         assert_clause(
             "grandparent(X, Y) :- parent(X, Z), parent(Z, Y).",
             Clause::Rule {
-                head: Term::Struct {
-                    functor: "grandparent".to_string(),
-                    args: vec![v("X"), v("Y")],
-                },
+                head: Term::new_struct("grandparent".to_string(), vec![v("X"), v("Y")]),
                 body: vec![
-                    Term::Struct {
-                        functor: "parent".to_string(),
-                        args: vec![v("X"), v("Z")],
-                    },
-                    Term::Struct {
-                        functor: "parent".to_string(),
-                        args: vec![v("Z"), v("Y")],
-                    },
+                    Term::new_struct("parent".to_string(), vec![v("X"), v("Z")]),
+                    Term::new_struct("parent".to_string(), vec![v("Z"), v("Y")]),
                 ],
             },
         );
@@ -326,16 +396,10 @@ mod tests {
     fn parse_list() {
         assert_clause(
             "member(X, [X|_]).",
-            Clause::Fact(Term::Struct {
-                functor: "member".to_string(),
-                args: vec![
-                    v("X"),
-                    Term::List {
-                        items: vec![v("X")],
-                        tail: Some(Box::new(v("_"))),
-                    },
-                ],
-            }),
+            Clause::Fact(Term::new_struct(
+                "member".to_string(),
+                vec![v("X"), Term::new_list(vec![v("X")], Some(Box::new(v("_"))))],
+            )),
         );
     }
 
@@ -345,16 +409,20 @@ mod tests {
         let (_, qs) = query(src).unwrap();
         assert_eq!(
             qs,
-            vec![Term::Struct {
-                functor: "member".to_string(),
-                args: vec![
+            vec![Term::new_struct(
+                "member".to_string(),
+                vec![
                     v("X"),
-                    Term::List {
-                        items: vec![Term::Number(1), Term::Number(2), Term::Number(3),],
-                        tail: None,
-                    },
+                    Term::new_list(
+                        vec![
+                            Term::new_number(1),
+                            Term::new_number(2),
+                            Term::new_number(3),
+                        ],
+                        None,
+                    ),
                 ],
-            }]
+            )]
         );
     }
 
@@ -379,12 +447,12 @@ mod tests {
         let converted = clause.mark_top_level_structs();
 
         match converted {
-            Clause::Fact(Term::Struct { functor, args }) => {
+            Clause::Fact(Term::Struct { functor, args, .. }) => {
                 assert_eq!(functor, "parent");
                 assert_eq!(args.len(), 2);
                 assert!(matches!(&args[0], Term::Struct { args, .. } if args.is_empty()));
                 match &args[1] {
-                    Term::Struct { functor, args } => {
+                    Term::Struct { functor, args, .. } => {
                         assert_eq!(functor, "f");
                         assert_eq!(args.len(), 1);
                         assert!(matches!(&args[0], Term::Struct { args, .. } if args.is_empty()));
@@ -403,7 +471,7 @@ mod tests {
         let converted = clause.mark_top_level_structs();
 
         match converted {
-            Clause::Fact(Term::Struct { functor, args }) => {
+            Clause::Fact(Term::Struct { functor, args, .. }) => {
                 assert_eq!(functor, "hello");
                 assert_eq!(args.len(), 0);
             }
