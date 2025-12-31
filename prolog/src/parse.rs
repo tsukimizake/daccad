@@ -10,7 +10,7 @@ use nom::{
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TermId(u64);
+pub struct TermId(pub(crate) u64);
 
 static NEXT_TERM_ID: AtomicU64 = AtomicU64::new(0);
 

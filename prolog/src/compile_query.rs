@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::iter::once;
 
 use crate::compiler_bytecode::{WamInstr, WamReg};
-use crate::parse::Term;
-use crate::register_managers::{RegExpr, RegisterManager, alloc_registers, to_regkey};
+use crate::parse::{Term, TermId};
+use crate::register_managers::{RegisterManager, alloc_registers};
 
 pub fn compile_query(query_terms: Vec<Term>) -> Vec<WamInstr> {
     query_terms
@@ -19,7 +19,7 @@ fn compile_query_term(term: Term) -> Vec<WamInstr> {
     compile_defs(&term, &declared_vars)
 }
 
-fn compile_defs(term: &Term, reg_map: &HashMap<RegExpr, WamReg>) -> Vec<WamInstr> {
+fn compile_defs(term: &Term, reg_map: &HashMap<TermId, WamReg>) -> Vec<WamInstr> {
     match term {
         Term::Struct { functor, args, .. } => {
             let functor_children = args
@@ -27,7 +27,7 @@ fn compile_defs(term: &Term, reg_map: &HashMap<RegExpr, WamReg>) -> Vec<WamInstr
                 .filter(|arg| matches!(arg, Term::Struct { .. }))
                 .flat_map(|arg| compile_defs(arg, reg_map));
 
-            let key = to_regkey(term, reg_map);
+            let key = term.id();
 
             functor_children
                 .chain(once(WamInstr::PutStruct {
@@ -36,7 +36,7 @@ fn compile_defs(term: &Term, reg_map: &HashMap<RegExpr, WamReg>) -> Vec<WamInstr
                     reg: reg_map[&key],
                 }))
                 .chain(args.iter().map(|arg| {
-                    let reg = reg_map[&to_regkey(arg, reg_map)];
+                    let reg = reg_map[&arg.id()];
                     WamInstr::SetVal {
                         name: arg.get_name().to_string(),
                         reg,
@@ -45,7 +45,7 @@ fn compile_defs(term: &Term, reg_map: &HashMap<RegExpr, WamReg>) -> Vec<WamInstr
                 .collect()
         }
         Term::Var { name, .. } => {
-            let key = to_regkey(term, reg_map);
+            let key = term.id();
             vec![WamInstr::SetVar {
                 name: name.clone(),
                 reg: reg_map[&key],

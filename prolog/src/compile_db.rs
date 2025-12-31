@@ -5,8 +5,8 @@ use std::{
 
 use crate::{
     compiler_bytecode::{WamInstr, WamReg},
-    parse::{Clause, Term},
-    register_managers::{RegExpr, RegisterManager, alloc_registers, to_regkey},
+    parse::{Clause, Term, TermId},
+    register_managers::{RegisterManager, alloc_registers},
 };
 
 pub fn compile_db(db: Vec<Clause>) -> Vec<WamInstr> {
@@ -30,20 +30,20 @@ pub fn compile_db(db: Vec<Clause>) -> Vec<WamInstr> {
 
 fn compile_db_term(
     term: &Term,
-    reg_map: &HashMap<RegExpr, WamReg>,
-    declared_vars: &mut HashSet<RegExpr>,
+    reg_map: &HashMap<TermId, WamReg>,
+    declared_vars: &mut HashSet<TermId>,
 ) -> Vec<WamInstr> {
     match term {
         Term::Struct { functor, args, .. } => {
             let functor_children = args.iter().filter(|arg| matches!(arg, Term::Struct { .. }));
-            let key = to_regkey(term, reg_map);
+            let key = term.id();
             once(WamInstr::GetStruct {
                 functor: functor.clone(),
                 arity: args.len(),
                 reg: reg_map[&key],
             })
             .chain(args.iter().map(|functor_child| {
-                let key = to_regkey(functor_child, reg_map);
+                let key = functor_child.id();
                 if declared_vars.contains(&key) {
                     WamInstr::UnifyVal {
                         name: functor_child.get_name().to_string(),
@@ -62,18 +62,17 @@ fn compile_db_term(
             .chain(functor_children.flat_map(|arg| compile_db_term(arg, reg_map, declared_vars)))
             .collect()
         }
-        Term::Var { name, .. } => {
-            let key = RegExpr::Var(name.clone());
-            if declared_vars.contains(&key) {
+        Term::Var { name, id } => {
+            if declared_vars.contains(id) {
                 vec![WamInstr::UnifyVal {
                     name: name.clone(),
-                    reg: reg_map[&key],
+                    reg: reg_map[id],
                 }]
             } else {
-                declared_vars.insert(key.clone());
+                declared_vars.insert(id.clone());
                 vec![WamInstr::UnifyVar {
                     name: name.clone(),
-                    reg: reg_map[&key],
+                    reg: reg_map[&id],
                 }]
             }
         }

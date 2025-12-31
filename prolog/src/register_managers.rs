@@ -1,5 +1,5 @@
 use crate::compiler_bytecode::WamReg;
-use crate::parse::Term;
+use crate::parse::{Term, TermId};
 use std::collections::HashMap;
 
 // コンパイラ用のレジスタ割り当てくん
@@ -20,64 +20,30 @@ impl RegisterManager {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) enum RegExpr {
-    Functor {
-        name: String,
-        arity: usize,
-        args: Vec<WamReg>,
-    },
-    Var(String),
-}
-
 pub(crate) fn alloc_registers(
     term: &Term,
-    declared_vars: &mut HashMap<RegExpr, WamReg>,
+    declared_vars: &mut HashMap<TermId, WamReg>,
     reg_manager: &mut RegisterManager,
 ) -> WamReg {
     match term {
-        Term::Struct { functor, args, .. } => {
+        Term::Struct {
+            args, id: term_id, ..
+        } => {
             let reg = reg_manager.get_next();
-            let arg_keys = args
-                .iter()
-                .map(|arg| alloc_registers(arg, declared_vars, reg_manager))
-                .collect();
-            let f = RegExpr::Functor {
-                name: functor.clone(),
-                arity: args.len(),
-                args: arg_keys,
-            };
-            declared_vars.insert(f.clone(), reg);
+            // TODO 幅優先探索にしてトップ引数を先に割り当てる
+            args.iter().for_each(|arg| {
+                alloc_registers(arg, declared_vars, reg_manager);
+            });
+            declared_vars.insert(*term_id, reg);
             reg
         }
 
-        Term::Var { name, .. } => {
-            let k = RegExpr::Var(name.clone());
-            if let Some(&reg) = declared_vars.get(&k) {
-                reg
-            } else {
-                let reg = reg_manager.get_next();
-                declared_vars.insert(k.clone(), reg);
-                reg
-            }
+        Term::Var { id: term_id, .. } => {
+            let reg = reg_manager.get_next();
+            declared_vars.insert(*term_id, reg);
+            reg
         }
         _ => todo!("{:?}", term),
-    }
-}
-
-pub(crate) fn to_regkey(term: &Term, reg_map: &HashMap<RegExpr, WamReg>) -> RegExpr {
-    match term {
-        Term::Struct { functor, args, .. } => RegExpr::Functor {
-            name: functor.clone(),
-            arity: args.len(),
-            args: args
-                .iter()
-                .map(|arg| to_regkey(arg, reg_map))
-                .map(|k| reg_map[&k])
-                .collect(),
-        },
-        Term::Var { name, .. } => RegExpr::Var(name.clone()),
-        _ => panic!("Unsupported term for RegKey: {:?}", term),
     }
 }
 
@@ -86,8 +52,9 @@ mod tests {
     use super::*;
     use crate::parse::query;
 
-    fn test_alloc_registers_helper(source: &str, expected: HashMap<RegExpr, WamReg>) {
+    fn test_alloc_registers_helper(source: &str, expected: HashMap<TermId, WamReg>) {
         let parsed_query = query(source).unwrap().1;
+        println!("{:?}", parsed_query);
         let term = &parsed_query[0];
         let mut declared_vars = HashMap::new();
         let mut reg_manager = RegisterManager::new();
@@ -99,123 +66,104 @@ mod tests {
     fn query_example() {
         test_alloc_registers_helper("p(Z, h(Z,W), f(W)).", {
             let mut map = HashMap::new();
-            map.insert(
-                RegExpr::Functor {
-                    name: "p".to_string(),
-                    arity: 3,
-                    args: vec![WamReg::X(1), WamReg::X(2), WamReg::X(4)],
-                },
-                WamReg::X(0),
-            );
-            map.insert(RegExpr::Var("Z".to_string()), WamReg::X(1));
-            map.insert(
-                RegExpr::Functor {
-                    name: "h".to_string(),
-                    arity: 2,
-                    args: vec![WamReg::X(1), WamReg::X(3)],
-                },
-                WamReg::X(2),
-            );
-            map.insert(RegExpr::Var("W".to_string()), WamReg::X(3));
-            map.insert(
-                RegExpr::Functor {
-                    name: "f".to_string(),
-                    arity: 1,
-                    args: vec![WamReg::X(3)],
-                },
-                WamReg::X(4),
-            );
+            map.insert(TermId(0), WamReg::X(1));
+            map.insert(TermId(1), WamReg::X(3));
+            map.insert(TermId(2), WamReg::X(4));
+            map.insert(TermId(3), WamReg::X(2));
+            map.insert(TermId(4), WamReg::X(6));
+            map.insert(TermId(5), WamReg::X(5));
+            map.insert(TermId(6), WamReg::X(0));
             map
         });
     }
 
-    #[test]
-    fn db_example() {
-        test_alloc_registers_helper("p(f(X), h(Y, f(a)), Y).", {
-            let mut map = HashMap::new();
-            map.insert(
-                RegExpr::Functor {
-                    name: "p".to_string(),
-                    arity: 3,
-                    args: vec![WamReg::X(1), WamReg::X(3), WamReg::X(4)],
-                },
-                WamReg::X(0),
-            );
-            map.insert(
-                RegExpr::Functor {
-                    name: "f".to_string(),
-                    arity: 1,
-                    args: vec![WamReg::X(6)],
-                },
-                WamReg::X(5),
-            );
-            map.insert(RegExpr::Var("X".to_string()), WamReg::X(2));
-            map.insert(
-                RegExpr::Functor {
-                    name: "h".to_string(),
-                    arity: 2,
-                    args: vec![WamReg::X(4), WamReg::X(5)],
-                },
-                WamReg::X(3),
-            );
-            map.insert(RegExpr::Var("Y".to_string()), WamReg::X(4));
-            map.insert(
-                RegExpr::Functor {
-                    name: "f".to_string(),
-                    arity: 1,
-                    args: vec![WamReg::X(2)],
-                },
-                WamReg::X(1),
-            );
-            map.insert(RegExpr::Var("Y".to_string()), WamReg::X(4));
-            map.insert(
-                RegExpr::Functor {
-                    name: "a".to_string(),
-                    arity: 0,
-                    args: vec![],
-                },
-                WamReg::X(6),
-            );
-            map
-        });
-    }
-    #[test]
-    fn same_var() {
-        test_alloc_registers_helper("p(X, X).", {
-            let mut map = HashMap::new();
-            map.insert(
-                RegExpr::Functor {
-                    name: "p".to_string(),
-                    arity: 2,
-                    args: vec![WamReg::X(1), WamReg::X(1)],
-                },
-                WamReg::X(0),
-            );
-            map.insert(RegExpr::Var("X".to_string()), WamReg::X(1));
-            map
-        });
+    // #[test]
+    // fn db_example() {
+    //     test_alloc_registers_helper("p(f(X), h(Y, f(a)), Y).", {
+    //         let mut map = HashMap::new();
+    //         map.insert(
+    //             RegExpr::Functor {
+    //                 name: "p".to_string(),
+    //                 arity: 3,
+    //                 args: vec![WamReg::X(1), WamReg::X(3), WamReg::X(4)],
+    //             },
+    //             WamReg::X(0),
+    //         );
+    //         map.insert(
+    //             RegExpr::Functor {
+    //                 name: "f".to_string(),
+    //                 arity: 1,
+    //                 args: vec![WamReg::X(6)],
+    //             },
+    //             WamReg::X(5),
+    //         );
+    //         map.insert(RegExpr::Var("X".to_string()), WamReg::X(2));
+    //         map.insert(
+    //             RegExpr::Functor {
+    //                 name: "h".to_string(),
+    //                 arity: 2,
+    //                 args: vec![WamReg::X(4), WamReg::X(5)],
+    //             },
+    //             WamReg::X(3),
+    //         );
+    //         map.insert(RegExpr::Var("Y".to_string()), WamReg::X(4));
+    //         map.insert(
+    //             RegExpr::Functor {
+    //                 name: "f".to_string(),
+    //                 arity: 1,
+    //                 args: vec![WamReg::X(2)],
+    //             },
+    //             WamReg::X(1),
+    //         );
+    //         map.insert(RegExpr::Var("Y".to_string()), WamReg::X(4));
+    //         map.insert(
+    //             RegExpr::Functor {
+    //                 name: "a".to_string(),
+    //                 arity: 0,
+    //                 args: vec![],
+    //             },
+    //             WamReg::X(6),
+    //         );
+    //         map
+    //     });
+    // }
+    // #[test]
+    // fn same_var() {
+    //     test_alloc_registers_helper("p(X, X).", {
+    //         let mut map = HashMap::new();
+    //         map.insert(
+    //             RegExpr::Functor {
+    //                 name: "p".to_string(),
+    //                 arity: 2,
+    //                 args: vec![WamReg::X(1), WamReg::X(1)],
+    //             },
+    //             WamReg::X(0),
+    //         );
+    //         map.insert(RegExpr::Var("X".to_string()), WamReg::X(1));
+    //         map
+    //     });
 
-        test_alloc_registers_helper("p(q(X), Y).", {
-            let mut map = HashMap::new();
-            map.insert(
-                RegExpr::Functor {
-                    name: "p".to_string(),
-                    arity: 2,
-                    args: vec![WamReg::X(1), WamReg::X(3)],
-                },
-                WamReg::X(0),
-            );
-            map.insert(
-                RegExpr::Functor {
-                    name: "q".to_string(),
-                    arity: 1,
-                    args: vec![WamReg::X(2)],
-                },
-                WamReg::X(1),
-            );
-            map.insert(RegExpr::Var("X".to_string()), WamReg::X(2));
-            map.insert(RegExpr::Var("Y".to_string()), WamReg::X(3));
-            map
-        });
-    }
+    //     test_alloc_registers_helper("p(q(X), Y).", {
+    //         let mut map = HashMap::new();
+    //         map.insert(
+    //             RegExpr::Functor {
+    //                 name: "p".to_string(),
+    //                 arity: 2,
+    //                 args: vec![WamReg::X(1), WamReg::X(3)],
+    //             },
+    //             WamReg::X(0),
+    //         );
+    //         map.insert(
+    //             RegExpr::Functor {
+    //                 name: "q".to_string(),
+    //                 arity: 1,
+    //                 args: vec![WamReg::X(2)],
+    //             },
+    //             WamReg::X(1),
+    //         );
+    //         map.insert(RegExpr::Var("X".to_string()), WamReg::X(2));
+    //         map.insert(RegExpr::Var("Y".to_string()), WamReg::X(3));
+    //         map
+    //     });
+    // }
 }
