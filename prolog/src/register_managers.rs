@@ -1,6 +1,6 @@
 use crate::compiler_bytecode::WamReg;
 use crate::parse::{Term, TermId};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 // コンパイラ用のレジスタ割り当てくん
 #[allow(unused)]
@@ -29,12 +29,26 @@ pub(crate) fn alloc_registers(
         Term::Struct {
             args, id: term_id, ..
         } => {
+            let mut queue = VecDeque::new();
             let reg = reg_manager.get_next();
-            // TODO 幅優先探索にしてトップ引数を先に割り当てる
-            args.iter().for_each(|arg| {
-                alloc_registers(arg, declared_vars, reg_manager);
-            });
             declared_vars.insert(*term_id, reg);
+            queue.extend(args);
+            while let Some(current) = queue.pop_front() {
+                match current {
+                    Term::Struct {
+                        args, id: term_id, ..
+                    } => {
+                        let reg = reg_manager.get_next();
+                        declared_vars.insert(*term_id, reg);
+                        queue.extend(args);
+                    }
+                    Term::Var { id: term_id, .. } => {
+                        let reg = reg_manager.get_next();
+                        declared_vars.insert(*term_id, reg);
+                    }
+                    _ => todo!("{:?}", current),
+                }
+            }
             reg
         }
 
@@ -116,7 +130,6 @@ mod tests {
 
     fn test_alloc_registers(source: &str, expected: ExpectedTerm) {
         let parsed_query = query(source).unwrap().1;
-        println!("{:?}", parsed_query);
         let term = &parsed_query[0];
         let mut declared_vars = HashMap::new();
         let mut reg_manager = RegisterManager::new();
@@ -137,9 +150,9 @@ mod tests {
                     structure(
                         "h",
                         WamReg::X(2),
-                        vec![var("Z", WamReg::X(3)), var("W", WamReg::X(4))],
+                        vec![var("Z", WamReg::X(4)), var("W", WamReg::X(5))],
                     ),
-                    structure("f", WamReg::X(5), vec![var("W", WamReg::X(6))]),
+                    structure("f", WamReg::X(3), vec![var("W", WamReg::X(6))]),
                 ],
             ),
         );
@@ -153,20 +166,20 @@ mod tests {
                 "p",
                 WamReg::X(0),
                 vec![
-                    structure("f", WamReg::X(1), vec![var("X", WamReg::X(2))]),
+                    structure("f", WamReg::X(1), vec![var("X", WamReg::X(4))]),
                     structure(
                         "h",
-                        WamReg::X(3),
+                        WamReg::X(2),
                         vec![
-                            var("Y", WamReg::X(4)),
+                            var("Y", WamReg::X(5)),
                             structure(
                                 "f",
-                                WamReg::X(5),
-                                vec![structure("a", WamReg::X(6), vec![])],
+                                WamReg::X(6),
+                                vec![structure("a", WamReg::X(7), vec![])],
                             ),
                         ],
                     ),
-                    var("Y", WamReg::X(7)),
+                    var("Y", WamReg::X(3)),
                 ],
             ),
         );
@@ -188,8 +201,8 @@ mod tests {
                 "p",
                 WamReg::X(0),
                 vec![
-                    structure("q", WamReg::X(1), vec![var("X", WamReg::X(2))]),
-                    var("Y", WamReg::X(3)),
+                    structure("q", WamReg::X(1), vec![var("X", WamReg::X(3))]),
+                    var("Y", WamReg::X(2)),
                 ],
             ),
         );
