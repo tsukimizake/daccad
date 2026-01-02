@@ -12,6 +12,10 @@ pub(crate) type VarName = ();
 #[allow(unused)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum WamInstr {
+    // GetStructはまずregが指すレジスタの内容を調べる。
+    // 構造体がセットされていなければ、構造体を新たにheap上に作成し、structure_argument_pointerをセットしwrite modeに入る。
+    // 構造体がセットされていれば、その構造体のfunctorとarityが合っているか確認し、structure_argument_pointerをセットしread modeに入る。
+    // どちらにしろ後続命令はheap上をarity回辿る。
     GetStruct {
         functor: String,
         arity: usize,
@@ -22,21 +26,29 @@ pub enum WamInstr {
         val: i64,
         reg: WamReg,
     },
+
+    // 初回出現変数の場合はGetVarでregに変数をセットする。ufにも登録する
     GetVar {
         name: VarName,
         reg: WamReg,
     },
+    // 2回目以降の出現変数の場合はGetValでregをufに登録してwithとunifyする。
     GetVal {
         name: VarName,
         with: WamReg,
         reg: WamReg,
     },
 
+    // Query, rule bodyで使用。
+    // 構造体を新たにheap上に作成し、regにセットする。
     PutStruct {
         functor: String,
         arity: usize,
         reg: WamReg,
     },
+
+    // Query, rule bodyで使用。
+    // 初回出現変数の場合はPutVarでregに変数をセット
     PutVar {
         name: VarName,
         reg: WamReg,
@@ -59,6 +71,10 @@ pub enum WamInstr {
         val: i64,
     },
 
+    // GetStructの後に続く。
+    // read modeならheap上の構造体の引数とregをunifyする。
+    // write modeならheap上に構造体の引数をregにセットする。
+    // structure_argument_pointerを1つ進める。
     UnifyVar {
         name: VarName,
         reg: WamReg,
