@@ -7,6 +7,7 @@ use nom::{
     multi::{many0, separated_list0, separated_list1},
     sequence::{delimited, pair, preceded, separated_pair, terminated},
 };
+use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -18,7 +19,7 @@ fn next_term_id() -> TermId {
     TermId(NEXT_TERM_ID.fetch_add(1, Ordering::Relaxed))
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum Term {
     Var {
         id: TermId,
@@ -74,10 +75,71 @@ impl PartialEq for Term {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum Clause {
     Fact(Term),
     Rule { head: Term, body: Vec<Term> },
+}
+
+impl fmt::Debug for Term {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Term::Var { id, name } => write!(f, "{}@{}", name, id.0),
+            Term::Number { id, value } => write!(f, "{}@{}", value, id.0),
+            Term::Struct {
+                id,
+                functor,
+                args,
+            } => {
+                write!(f, "{}@{}", functor, id.0)?;
+                if !args.is_empty() {
+                    write!(f, "(")?;
+                    for (idx, arg) in args.iter().enumerate() {
+                        if idx > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{:?}", arg)?;
+                    }
+                    write!(f, ")")?;
+                }
+                Ok(())
+            }
+            Term::List { id, items, tail } => {
+                write!(f, "[")?;
+                for (idx, item) in items.iter().enumerate() {
+                    if idx > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{:?}", item)?;
+                }
+                if let Some(tail) = tail {
+                    if !items.is_empty() {
+                        write!(f, " | ")?;
+                    }
+                    write!(f, "{:?}", tail)?;
+                }
+                write!(f, "]@{}", id.0)
+            }
+        }
+    }
+}
+
+impl fmt::Debug for Clause {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Clause::Fact(term) => write!(f, "{:?}.", term),
+            Clause::Rule { head, body } => {
+                write!(f, "{:?} :- ", head)?;
+                for (idx, term) in body.iter().enumerate() {
+                    if idx > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{:?}", term)?;
+                }
+                write!(f, ".")
+            }
+        }
+    }
 }
 
 impl Term {
