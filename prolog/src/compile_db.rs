@@ -1,7 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    iter::once,
-};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::{
     compiler_bytecode::{WamInstr, WamReg},
@@ -31,7 +28,7 @@ pub fn compile_db(db: Vec<Clause>) -> Vec<WamInstr> {
 fn compile_db_term_top(
     term: &Term,
     reg_map: &HashMap<TermId, WamReg>,
-    declared_vars: &mut HashSet<TermId>,
+    declared_vars: &mut HashSet<String>,
 ) -> Vec<WamInstr> {
     match term {
         Term::Struct { functor, args, .. } => {
@@ -40,12 +37,17 @@ fn compile_db_term_top(
                 name: functor.clone(),
                 arity: args.len(),
             });
-            args.iter().for_each(|arg| {
-                let mut postponed_functors = Vec::with_capacity(10);
+            let mut postponed_functors = VecDeque::with_capacity(10);
+            for arg in args {
                 let child_ops =
                     compile_db_term(arg, reg_map, declared_vars, &mut postponed_functors);
                 res.extend(child_ops);
-            });
+            }
+            while let Some((_, term)) = postponed_functors.pop_front() {
+                let child_ops =
+                    compile_db_term(&term, reg_map, declared_vars, &mut postponed_functors);
+                res.extend(child_ops);
+            }
 
             res.push(WamInstr::Proceed);
             res
@@ -59,47 +61,47 @@ fn compile_db_term_top(
 fn compile_db_term(
     term: &Term,
     reg_map: &HashMap<TermId, WamReg>,
-    declared_vars: &mut HashSet<TermId>,
-    postponed_functors: &mut Vec<(WamReg, Term)>,
+    declared_vars: &mut HashSet<String>,
+    postponed_functors: &mut VecDeque<(WamReg, Term)>,
 ) -> Vec<WamInstr> {
     match term {
         Term::Struct { functor, args, .. } => {
-            let key = term.id();
-            once(WamInstr::GetStruct {
+            let mut res = Vec::with_capacity(1 + args.len());
+            res.push(WamInstr::GetStruct {
                 functor: functor.clone(),
                 arity: args.len(),
-                reg: reg_map[&key],
-            })
-            .chain(args.into_iter().map(|functor_child| {
-                let child_name = functor_child.get_name().to_string();
-                let key = functor_child.id();
-                match functor_child {
+                reg: reg_map[&term.id()],
+            });
+            for arg in args {
+                match arg {
+                    Term::Var { name, .. } => {
+                        res.push(gen_unify_var_or_val(
+                            &arg.id(),
+                            name,
+                            reg_map,
+                            declared_vars,
+                        ));
+                    }
                     Term::Struct { .. } => {
-                        postponed_functors
-                            .push((reg_map[&functor_child.id()], functor_child.clone()));
-                        gen_unify_var_or_val(&key, &child_name, reg_map, declared_vars)
+                        let reg = reg_map[&arg.id()];
+                        res.push(WamInstr::UnifyVar {
+                            name: arg.get_name().to_string(),
+                            reg,
+                        });
+                        postponed_functors.push_back((reg, arg.clone()));
                     }
-                    Term::Var { .. } => {
-                        gen_unify_var_or_val(&key, &child_name, reg_map, declared_vars)
-                    }
-                    _ => {
-                        todo!("{:?}", functor_child)
-                    }
+                    _ => todo!("{:?}", arg),
                 }
-            }))
-            .collect::<Vec<WamInstr>>()
-            .into_iter()
-            .chain(compile_db_term_struct_child(
-                reg_map,
-                declared_vars,
-                postponed_functors,
-            ))
-            .collect()
+            }
+            res
         }
-        Term::Var { name, id } => vec![gen_unify_var_or_val(id, name, reg_map, declared_vars)],
-        _ => {
-            todo!("{:?}", term)
-        }
+        Term::Var { name, .. } => vec![gen_unify_var_or_val(
+            &term.id(),
+            name,
+            reg_map,
+            declared_vars,
+        )],
+        _ => todo!("{:?}", term),
     }
 }
 
@@ -107,60 +109,20 @@ fn gen_unify_var_or_val(
     term_id: &TermId,
     name: &str,
     reg_map: &HashMap<TermId, WamReg>,
-    declared_vars: &mut HashSet<TermId>,
+    declared_vars: &mut HashSet<String>,
 ) -> WamInstr {
-    if declared_vars.contains(term_id) {
+    if name != "_" && declared_vars.contains(name) {
         WamInstr::UnifyVal {
             name: name.to_string(),
             reg: reg_map[term_id],
         }
     } else {
-        declared_vars.insert(term_id.clone());
+        if name != "_" {
+            declared_vars.insert(name.to_string());
+        }
         WamInstr::UnifyVar {
             name: name.to_string(),
             reg: reg_map[term_id],
-        }
-    }
-}
-
-fn compile_db_term_struct_child(
-    child: &Term,
-    reg_map: &HashMap<TermId, WamReg>,
-    declared_vars: &mut HashSet<TermId>,
-    postponed_functors: &mut Vec<(WamReg, Term)>,
-) -> Vec<WamInstr> {
-    match child {
-        Term::Struct { .. } => {
-            postponed_functors.push((reg_map[&child.id()], child.clone()));
-            if declared_vars.contains(&child.id()) {
-                vec![WamInstr::UnifyVal {
-                    name: child.get_name().to_string(),
-                    reg: reg_map[&child.id()],
-                }]
-            } else {
-                declared_vars.insert(child.id().clone());
-                vec![WamInstr::UnifyVar {
-                    name: child.get_name().to_string(),
-                    reg: reg_map[&child.id()],
-                }]
-            }
-        }
-        Term::Var { name, id } => {
-            if declared_vars.contains(id) {
-                vec![WamInstr::UnifyVal {
-                    name: name.clone(),
-                    reg: reg_map[id],
-                }]
-            } else {
-                declared_vars.insert(id.clone());
-                vec![WamInstr::UnifyVar {
-                    name: name.clone(),
-                    reg: reg_map[&id],
-                }]
-            }
-        }
-        _ => {
-            todo!("{:?}", child)
         }
     }
 }
@@ -181,7 +143,7 @@ mod tests {
     fn sample_code() {
         test_compile_db_helper(
             "p(f(X),h(Y,f(a)), Y).",
-            // => p(f(X), h(Y, X6), Y), X6 = f(X7), X7 = a, X8=Y.
+            // => p(f(X), h(Y, X6), Y), X6 = f(X7), X7 = a
             vec![
                 WamInstr::Label {
                     name: "p".to_string(),
