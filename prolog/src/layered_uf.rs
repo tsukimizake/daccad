@@ -260,7 +260,11 @@ impl LayeredUf {
 
     #[allow(unused)]
     pub fn set_cell(&mut self, id: GlobalParentIndex, cell: CellIndex) {
-        self.parent[id].cell = cell;
+        let (old_layers, mut current_layer, is_top_layer) = self.split_layers(id);
+        debug_assert!(is_top_layer, "set_cell called on non-top layer");
+        let local_root_idx =
+            find_local_root(id, old_layers.0.len(), &mut current_layer, is_top_layer);
+        current_layer[local_root_idx].cell = cell;
     }
 
     // (nodeを含むlayerより下のlayers, nodeを含むlayer, is_top_layer)を返す
