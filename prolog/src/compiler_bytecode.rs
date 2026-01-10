@@ -1,6 +1,16 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+use std::fmt;
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WamReg {
     X(usize),
+}
+
+impl fmt::Debug for WamReg {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            WamReg::X(n) => write!(f, "X{}", n),
+        }
+    }
 }
 
 #[cfg(debug_assertions)]
@@ -118,4 +128,16 @@ pub enum WamInstr {
     Error {
         message: String,
     },
+}
+
+/// Vec<WamInstr>を改行区切りで表示するラッパー
+pub struct WamInstrs<'a>(pub &'a [WamInstr]);
+
+impl<'a> fmt::Debug for WamInstrs<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for instr in self.0 {
+            writeln!(f, "{:?}", instr)?;
+        }
+        Ok(())
+    }
 }

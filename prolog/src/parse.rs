@@ -86,11 +86,7 @@ impl fmt::Debug for Term {
         match self {
             Term::Var { id, name } => write!(f, "{}@{}", name, id.0),
             Term::Number { id, value } => write!(f, "{}@{}", value, id.0),
-            Term::Struct {
-                id,
-                functor,
-                args,
-            } => {
+            Term::Struct { id, functor, args } => {
                 write!(f, "{}@{}", functor, id.0)?;
                 if !args.is_empty() {
                     write!(f, "(")?;

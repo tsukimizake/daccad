@@ -59,17 +59,23 @@ fn compile_defs(term: &Term, reg_map: &HashMap<TermId, WamReg>) -> Vec<WamInstr>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{compiler_bytecode::WamInstr, parse::query};
+    use crate::{compiler_bytecode::{WamInstr, WamInstrs}, parse::query};
 
-    fn test_compile_query_helper(source: &str, expected: Vec<WamInstr>) {
+    fn test_compile_query(source: &str, expected: Vec<WamInstr>) {
         let parsed_query = query(source).unwrap().1;
         let instructions = compile_query(parsed_query);
-        assert_eq!(instructions, expected);
+        assert!(
+            instructions == expected,
+            "Mismatch for query: {}\n\nActual:\n{:?}\nExpected:\n{:?}",
+            source,
+            WamInstrs(&instructions),
+            WamInstrs(&expected)
+        );
     }
 
     #[test]
     fn top_atom() {
-        test_compile_query_helper(
+        test_compile_query(
             "parent.",
             vec![WamInstr::PutStruct {
                 functor: "parent".to_string(),
@@ -81,7 +87,7 @@ mod tests {
 
     #[test]
     fn book_example() {
-        test_compile_query_helper(
+        test_compile_query(
             "p(Z, h(Z,W), f(W)).",
             vec![
                 WamInstr::PutVar {
@@ -121,7 +127,7 @@ mod tests {
     }
     #[test]
     fn same_functor_other_arg() {
-        test_compile_query_helper(
+        test_compile_query(
             "p(a(X), a(Y)).",
             vec![
                 WamInstr::PutStruct {
