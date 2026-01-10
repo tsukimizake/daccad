@@ -62,7 +62,7 @@ pub enum WamInstr {
     PutVar {
         name: VarName,
         reg: WamReg,
-        reg2: Option<WamReg>,
+        reg2: WamReg,
     },
     PutNumber {
         val: i64,

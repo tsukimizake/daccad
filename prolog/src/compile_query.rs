@@ -59,7 +59,10 @@ fn compile_defs(term: &Term, reg_map: &HashMap<TermId, WamReg>) -> Vec<WamInstr>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{compiler_bytecode::{WamInstr, WamInstrs}, parse::query};
+    use crate::{
+        compiler_bytecode::{WamInstr, WamInstrs},
+        parse::query,
+    };
 
     fn test_compile_query(source: &str, expected: Vec<WamInstr>) {
         let parsed_query = query(source).unwrap().1;
@@ -93,7 +96,7 @@ mod tests {
                 WamInstr::PutVar {
                     name: "Z".to_string(),
                     reg: WamReg::X(1),
-                    reg2: Some(WamReg::X(4)),
+                    reg2: WamReg::X(4),
                 },
                 WamInstr::PutStruct {
                     functor: "h".to_string(),
@@ -135,22 +138,49 @@ mod tests {
                     arity: 1,
                     reg: WamReg::X(1),
                 },
-                WamInstr::SetVal {
+                WamInstr::SetVar {
                     name: "X".to_string(),
-                    reg: WamReg::X(2),
+                    reg: WamReg::X(3),
                 },
                 WamInstr::PutStruct {
                     functor: "a".to_string(),
                     arity: 1,
-                    reg: WamReg::X(3),
+                    reg: WamReg::X(2),
                 },
-                WamInstr::SetVal {
+                WamInstr::SetVar {
                     name: "Y".to_string(),
                     reg: WamReg::X(4),
                 },
                 WamInstr::Call {
                     predicate: "p".to_string(),
                     arity: 2,
+                    to_program_counter: usize::MAX,
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn two_heads() {
+        test_compile_query(
+            "p(X). q(Y).",
+            vec![
+                WamInstr::SetVar {
+                    name: "X".to_string(),
+                    reg: WamReg::X(1),
+                },
+                WamInstr::Call {
+                    predicate: "p".to_string(),
+                    arity: 1,
+                    to_program_counter: usize::MAX,
+                },
+                WamInstr::SetVar {
+                    name: "Y".to_string(),
+                    reg: WamReg::X(2),
+                },
+                WamInstr::Call {
+                    predicate: "q".to_string(),
+                    arity: 1,
                     to_program_counter: usize::MAX,
                 },
             ],
