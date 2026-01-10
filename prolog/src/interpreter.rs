@@ -217,8 +217,8 @@ pub fn execute_instructions(
         );
         program_counter += 1;
     }
-    println!("{:?}", instructions);
-    println!("{:?}", orig_query);
+    // println!("{:?}", instructions);
+    // println!("{:?}", orig_query);
 
     if exec_mode == ExecMode::ResolvedToFalse {
         return Err(());
@@ -234,19 +234,19 @@ mod tests {
         compile_db::compile_db,
         compile_link::compile_link,
         compile_query::compile_query,
+        compiler_bytecode::WamInstrs,
         parse::{self, Term},
     };
 
     fn compile_program(db_src: &str, query_src: &str) -> (Vec<WamInstr>, Vec<Term>) {
         let db_clauses = parse::database(db_src).expect("failed to parse db");
 
-        println!("DB Clauses: {:#?}", db_clauses);
         let query_terms = parse::query(query_src).expect("failed to parse query").1;
         let instructions = compile_link(
             compile_query(query_terms.clone()),
             compile_db(db_clauses.clone()),
         );
-        println!("Compiled Instructions: {:#?}", compile_db(db_clauses));
+        println!("{:?}", WamInstrs(&instructions));
         (instructions, query_terms)
     }
 

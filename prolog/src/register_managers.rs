@@ -20,18 +20,17 @@ impl RegisterManager {
     }
 }
 
+/// トップレベルのStructにはレジスタを割り当てず、引数のみに割り当てる
 pub(crate) fn alloc_registers(
     term: &Term,
     declared_vars: &mut HashMap<TermId, WamReg>,
     reg_manager: &mut RegisterManager,
-) -> WamReg {
+) {
     match term {
-        Term::Struct {
-            args, id: term_id, ..
-        } => {
+        Term::Struct { args, .. } => {
             let mut queue = VecDeque::new();
-            let reg = reg_manager.get_next();
-            declared_vars.insert(*term_id, reg);
+            // トップレベルStructにはレジスタを割り当てない
+            // 引数から処理を開始
             queue.extend(args);
             while let Some(current) = queue.pop_front() {
                 match current {
@@ -49,13 +48,11 @@ pub(crate) fn alloc_registers(
                     _ => todo!("{:?}", current),
                 }
             }
-            reg
         }
 
         Term::Var { id: term_id, .. } => {
             let reg = reg_manager.get_next();
             declared_vars.insert(*term_id, reg);
-            reg
         }
         _ => todo!("{:?}", term),
     }
@@ -98,6 +95,7 @@ mod tests {
         }
     }
 
+    /// トップレベルStructを除いた期待マップを構築
     fn build_expected_map(term: &Term, expected: &ExpectedTerm, out: &mut HashMap<TermId, WamReg>) {
         match (term, &expected.kind) {
             (Term::Var { name, .. }, ExpectedKind::Var(expected_name)) => {
@@ -113,7 +111,10 @@ mod tests {
             ) => {
                 assert_eq!(functor, expected_functor);
                 assert_eq!(args.len(), expected_args.len());
-                out.insert(term.id(), expected.reg);
+                // トップレベル以外のStructにはレジスタを記録
+                if expected.reg != WamReg::X(usize::MAX) {
+                    out.insert(term.id(), expected.reg);
+                }
                 for (arg, expected_arg) in args.iter().zip(expected_args) {
                     build_expected_map(arg, expected_arg, out);
                 }
@@ -128,31 +129,44 @@ mod tests {
         map
     }
 
+    /// トップレベルStructにはレジスタなし（X(usize::MAX)で表現）
+    fn top_structure(functor: &str, args: Vec<ExpectedTerm>) -> ExpectedTerm {
+        ExpectedTerm {
+            reg: WamReg::X(usize::MAX), // マーカー：レジスタなし
+            kind: ExpectedKind::Struct {
+                functor: functor.to_string(),
+                args,
+            },
+        }
+    }
+
     fn test_alloc_registers(source: &str, expected: ExpectedTerm) {
         let parsed_query = query(source).unwrap().1;
         let term = &parsed_query[0];
         let mut declared_vars = HashMap::new();
         let mut reg_manager = RegisterManager::new();
-        let _ = alloc_registers(term, &mut declared_vars, &mut reg_manager);
+        alloc_registers(term, &mut declared_vars, &mut reg_manager);
         let expected = expected_map(term, &expected);
         assert_eq!(declared_vars, expected);
     }
 
     #[test]
     fn query_example() {
+        // p(Z, h(Z,W), f(W))
+        // トップレベルpにはレジスタなし
+        // 引数: Z=X(0), h=X(1), f=X(2), Z(in h)=X(3), W(in h)=X(4), W(in f)=X(5)
         test_alloc_registers(
             "p(Z, h(Z,W), f(W)).",
-            structure(
+            top_structure(
                 "p",
-                WamReg::X(0),
                 vec![
-                    var("Z", WamReg::X(1)),
+                    var("Z", WamReg::X(0)),
                     structure(
                         "h",
-                        WamReg::X(2),
-                        vec![var("Z", WamReg::X(4)), var("W", WamReg::X(5))],
+                        WamReg::X(1),
+                        vec![var("Z", WamReg::X(3)), var("W", WamReg::X(4))],
                     ),
-                    structure("f", WamReg::X(3), vec![var("W", WamReg::X(6))]),
+                    structure("f", WamReg::X(2), vec![var("W", WamReg::X(5))]),
                 ],
             ),
         );
@@ -160,49 +174,49 @@ mod tests {
 
     #[test]
     fn db_example() {
+        // p(f(X), h(Y, f(a)), Y)
+        // トップレベルpにはレジスタなし
         test_alloc_registers(
             "p(f(X), h(Y, f(a)), Y).",
-            structure(
+            top_structure(
                 "p",
-                WamReg::X(0),
                 vec![
-                    structure("f", WamReg::X(1), vec![var("X", WamReg::X(4))]),
+                    structure("f", WamReg::X(0), vec![var("X", WamReg::X(3))]),
                     structure(
                         "h",
-                        WamReg::X(2),
+                        WamReg::X(1),
                         vec![
-                            var("Y", WamReg::X(5)),
+                            var("Y", WamReg::X(4)),
                             structure(
                                 "f",
-                                WamReg::X(6),
-                                vec![structure("a", WamReg::X(7), vec![])],
+                                WamReg::X(5),
+                                vec![structure("a", WamReg::X(6), vec![])],
                             ),
                         ],
                     ),
-                    var("Y", WamReg::X(3)),
+                    var("Y", WamReg::X(2)),
                 ],
             ),
         );
     }
+
     #[test]
     fn same_var() {
         test_alloc_registers(
             "p(X, X).",
-            structure(
+            top_structure(
                 "p",
-                WamReg::X(0),
-                vec![var("X", WamReg::X(1)), var("X", WamReg::X(2))],
+                vec![var("X", WamReg::X(0)), var("X", WamReg::X(1))],
             ),
         );
 
         test_alloc_registers(
             "p(q(X), Y).",
-            structure(
+            top_structure(
                 "p",
-                WamReg::X(0),
                 vec![
-                    structure("q", WamReg::X(1), vec![var("X", WamReg::X(3))]),
-                    var("Y", WamReg::X(2)),
+                    structure("q", WamReg::X(0), vec![var("X", WamReg::X(2))]),
+                    var("Y", WamReg::X(1)),
                 ],
             ),
         );
