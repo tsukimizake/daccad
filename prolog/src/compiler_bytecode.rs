@@ -61,7 +61,7 @@ pub enum WamInstr {
     // 初回出現変数の場合はPutVarでregに変数をセット
     PutVar {
         name: VarName,
-        reg: WamReg,
+        argreg: WamReg,
         reg2: WamReg,
     },
     PutNumber {

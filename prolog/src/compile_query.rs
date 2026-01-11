@@ -22,7 +22,12 @@ pub fn compile_query(query_terms: Vec<Term>) -> Vec<WamInstr> {
     let mut declared_vars: HashMap<String, WamReg> = HashMap::new();
     let mut result = Vec::new();
     for term in &query_terms {
-        result.extend(compile_goal(term, &reg_map, &var_occurrences, &mut declared_vars));
+        result.extend(compile_goal(
+            term,
+            &reg_map,
+            &var_occurrences,
+            &mut declared_vars,
+        ));
     }
     result
 }
@@ -54,15 +59,6 @@ fn compile_goal(
 ) -> Vec<WamInstr> {
     match term {
         Term::Struct { functor, args, .. } => {
-            // arity == 0 の場合は Call のみ
-            if args.is_empty() {
-                return vec![WamInstr::Call {
-                    predicate: functor.clone(),
-                    arity: 0,
-                    to_program_counter: usize::MAX,
-                }];
-            }
-
             let mut result = Vec::new();
 
             // 各トップレベル引数を左から右へ処理
@@ -75,11 +71,10 @@ fn compile_goal(
                 ));
             }
 
-            // Call を発行
-            result.push(WamInstr::Call {
+            // CallTemp を発行
+            result.push(WamInstr::CallTemp {
                 predicate: functor.clone(),
                 arity: args.len(),
-                to_program_counter: usize::MAX,
             });
 
             result
@@ -114,7 +109,7 @@ fn compile_top_arg(
                     declared_vars.insert(name.clone(), reg2);
                     vec![WamInstr::PutVar {
                         name: name.clone(),
-                        reg,
+                        argreg: reg,
                         reg2,
                     }]
                 } else {
@@ -221,13 +216,12 @@ mod tests {
 
     #[test]
     fn top_atom() {
-        // arity=0の場合はCallのみ
+        // arity=0の場合はCallTempのみ
         test_compile_query(
             "parent.",
-            vec![WamInstr::Call {
+            vec![WamInstr::CallTemp {
                 predicate: "parent".to_string(),
                 arity: 0,
-                to_program_counter: usize::MAX,
             }],
         );
     }
@@ -242,7 +236,7 @@ mod tests {
             vec![
                 WamInstr::PutVar {
                     name: "Z".to_string(),
-                    reg: WamReg::X(0),
+                    argreg: WamReg::X(0),
                     reg2: WamReg::X(3),
                 },
                 WamInstr::PutStruct {
@@ -267,10 +261,9 @@ mod tests {
                     name: "W".to_string(),
                     reg: WamReg::X(4),
                 },
-                WamInstr::Call {
+                WamInstr::CallTemp {
                     predicate: "p".to_string(),
                     arity: 3,
-                    to_program_counter: usize::MAX,
                 },
             ],
         )
@@ -301,10 +294,9 @@ mod tests {
                     name: "Y".to_string(),
                     reg: WamReg::X(3),
                 },
-                WamInstr::Call {
+                WamInstr::CallTemp {
                     predicate: "p".to_string(),
                     arity: 2,
-                    to_program_counter: usize::MAX,
                 },
             ],
         );
@@ -321,19 +313,17 @@ mod tests {
                     name: "X".to_string(),
                     reg: WamReg::X(0),
                 },
-                WamInstr::Call {
+                WamInstr::CallTemp {
                     predicate: "p".to_string(),
                     arity: 1,
-                    to_program_counter: usize::MAX,
                 },
                 WamInstr::SetVar {
                     name: "Y".to_string(),
                     reg: WamReg::X(1),
                 },
-                WamInstr::Call {
+                WamInstr::CallTemp {
                     predicate: "q".to_string(),
                     arity: 1,
-                    to_program_counter: usize::MAX,
                 },
             ],
         );
