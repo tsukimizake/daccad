@@ -128,13 +128,19 @@ fn gen_unify_var_or_val(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compiler_bytecode::WamReg;
+    use crate::compiler_bytecode::{WamInstrs, WamReg};
     use crate::parse::database;
 
     fn test_compile_db_helper(source: &str, expected: Vec<WamInstr>) {
         let parsed = database(source).unwrap();
         let instructions = compile_db(parsed.clone());
-        assert_eq!(instructions, expected);
+        assert!(
+            instructions == expected,
+            "Mismatch for db: {}\n\nActual:\n{:?}\nExpected:\n{:?}",
+            source,
+            WamInstrs(&instructions),
+            WamInstrs(&expected)
+        );
     }
 
     #[test]

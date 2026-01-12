@@ -131,6 +131,7 @@ pub enum WamInstr {
 }
 
 /// Vec<WamInstr>を改行区切りで表示するラッパー
+#[allow(dead_code)]
 pub struct WamInstrs<'a>(pub &'a [WamInstr]);
 
 impl<'a> fmt::Debug for WamInstrs<'a> {
