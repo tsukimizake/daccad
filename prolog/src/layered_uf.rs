@@ -535,7 +535,7 @@ mod tests {
         let mut uf = LayeredUf::new();
         let mut heap = CellHeap::new();
         let base = uf.alloc_node();
-        let base_cell = heap.insert_var("base");
+        let base_cell = heap.insert_var("base".to_string());
         uf.set_cell(base, base_cell);
 
         uf.push_choicepoint();
@@ -550,12 +550,12 @@ mod tests {
         let mut uf = LayeredUf::new();
         let mut heap = CellHeap::new();
         let base = uf.alloc_node();
-        let base_cell = heap.insert_var("base");
+        let base_cell = heap.insert_var("base".to_string());
         uf.set_cell(base, base_cell);
 
         uf.push_choicepoint();
         let child = uf.alloc_node_with_parent(base);
-        let child_cell = heap.insert_var("child");
+        let child_cell = heap.insert_var("child".to_string());
         uf.set_cell(child, child_cell);
 
         let root = uf.find_root(child);
@@ -568,7 +568,7 @@ mod tests {
         let mut heap = CellHeap::new();
         let left = uf.alloc_node();
         let right = uf.alloc_node();
-        let right_cell = heap.insert_var("right");
+        let right_cell = heap.insert_var("right".to_string());
         uf.set_cell(right, right_cell);
         uf.debug_dump();
 

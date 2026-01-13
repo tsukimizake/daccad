@@ -36,9 +36,9 @@ impl CellHeap {
         CellIndex(self.cells.len())
     }
 
-    pub fn insert_var(&mut self, name: impl Into<String>) -> CellIndex {
+    pub fn insert_var(&mut self, name: VarName) -> CellIndex {
         let id = self.next_index();
-        self.cells.push(Rc::new(Cell::Var { name: name.into() }));
+        self.cells.push(Rc::new(Cell::Var { name }));
         id
     }
 

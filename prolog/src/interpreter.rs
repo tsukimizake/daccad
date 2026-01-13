@@ -78,10 +78,6 @@ fn getstruct_cell_ref(
     exec_mode: &mut ExecMode,
 ) {
     match cell {
-        Cell::Empty => {
-            // panicが正しいかもしれない
-            *read_write_mode = ReadWriteMode::Write;
-        }
         Cell::Var { .. } => {
             *read_write_mode = ReadWriteMode::Write;
         }
@@ -97,6 +93,9 @@ fn getstruct_cell_ref(
             } else {
                 *exec_mode = ExecMode::ResolvedToFalse;
             }
+        }
+        Cell::Empty => {
+            panic!("getstruct_cell_ref: cell is Empty");
         }
     }
 }
@@ -121,13 +120,17 @@ fn exectute_impl(
                 registers.set_register(reg, Register::CellRef { id });
             }
 
-            WamInstr::SetVar { name: _, reg } => {}
+            WamInstr::SetVar { name, reg } => {
+                let id = heap.insert_var(name.clone());
+                registers.set_register(reg, Register::CellRef { id });
+            }
+
             WamInstr::SetVal { name: _, reg } => {}
 
             WamInstr::PutVar {
                 name, argreg: reg, ..
             } => {
-                let id = heap.insert_var(name);
+                let id = heap.insert_var(name.clone());
                 registers.set_register(reg, Register::CellRef { id });
             }
 
@@ -176,6 +179,21 @@ fn exectute_impl(
                 // });
                 *program_counter = *to_program_counter;
             }
+
+            WamInstr::UnifyVar { name, reg } => {
+                match read_write_mode {
+                    ReadWriteMode::Read => {
+                        // unify
+                        todo!("unify read var: {}, {:?}", name, reg);
+                    }
+                    ReadWriteMode::Write => {
+                        // set
+                        let id = heap.insert_var(name.clone());
+                        registers.set_register(reg, Register::CellRef { id });
+                    }
+                }
+            }
+
             WamInstr::Label { name: _, arity: _ } => {}
             WamInstr::Proceed => {
                 // stack.pop();
