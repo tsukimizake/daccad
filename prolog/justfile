@@ -1,0 +1,8 @@
+test arg:
+  cargo test -- --nocapture {{arg}}
+
+test_all:
+  cargo test -- --nocapture
+
+build:
+  cargo build
