@@ -21,4 +21,4 @@ opt-level = 3
 
 [dependencies]
 nom = "8.0.0"
-manifold-rs = "0.6.2"
+manifold-rs = "0.6.4"

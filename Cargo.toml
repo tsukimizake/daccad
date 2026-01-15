@@ -17,7 +17,7 @@ members = [
 ]
 
 [dependencies]
-manifold-rs = "0.6.2"
+manifold-rs = "0.6.4"
 bevy = "0.18"
 bevy_egui = "0.39"
 bevy-async-ecs = "0.10"
