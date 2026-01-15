@@ -121,17 +121,27 @@ fn exectute_impl(
             }
 
             WamInstr::SetVar { name, reg } => {
-                let id = heap.insert_var(name.clone());
-                registers.set_register(reg, Register::CellRef { id });
+                let cell_id = heap.insert_var(name.clone());
+                let uf_id = layered_uf.alloc_node();
+                layered_uf.set_cell(uf_id, cell_id);
+                registers.set_register(reg, Register::UfRef { id: uf_id });
             }
 
-            WamInstr::SetVal { name: _, reg } => {}
+            WamInstr::SetVal { reg, .. } => {
+                if let Register::UfRef { id: prev_id } = registers.get_register(reg) {
+                    layered_uf.alloc_node_with_parent(prev_id);
+                } else {
+                    panic!("SetVal: register does not contain UfRef");
+                }
+            }
 
             WamInstr::PutVar {
                 name, argreg: reg, ..
             } => {
-                let id = heap.insert_var(name.clone());
-                registers.set_register(reg, Register::CellRef { id });
+                let cell_id = heap.insert_var(name.clone());
+                let uf_id = layered_uf.alloc_node();
+                layered_uf.set_cell(uf_id, cell_id);
+                registers.set_register(reg, Register::UfRef { id: uf_id });
             }
 
             WamInstr::GetStruct {
