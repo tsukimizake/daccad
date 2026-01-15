@@ -17,18 +17,18 @@ fn main() {
 
     // Compile database and query
     let db_instructions = compile_db(db_clauses);
-    let query_instructions = compile_query(query_terms.clone());
+    let compiled_query = compile_query(query_terms.clone());
 
     println!("DB instructions: {:#?}", db_instructions);
-    println!("Query instructions: {:#?}", query_instructions);
+    println!("Query instructions: {:#?}", compiled_query.instructions);
 
     // Link the instructions using compile_link
-    let linked_instructions = compile_link(query_instructions, db_instructions);
+    let linked = compile_link(compiled_query, db_instructions);
 
-    println!("Linked instructions: {:#?}", linked_instructions);
+    println!("Linked instructions: {:#?}", linked.instructions);
 
     // Execute through interpreter (uses the linked instructions)
-    let result = execute_instructions(linked_instructions, query_terms);
+    let result = execute_instructions(linked, query_terms);
 
     println!("Execution result: {:?}", result);
 }

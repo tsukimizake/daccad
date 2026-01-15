@@ -1,15 +1,14 @@
 // compile_queryとcompile_dbの結果をつなげ、CallTempをCallにfinalizeする
 
+use crate::compile_query::CompiledQuery;
 use crate::compiler_bytecode::WamInstr;
 use std::collections::HashMap;
 
-pub fn compile_link(
-    query_instructions: Vec<WamInstr>,
-    db_instructions: Vec<WamInstr>,
-) -> Vec<WamInstr> {
+pub fn compile_link(query: CompiledQuery, db_instructions: Vec<WamInstr>) -> CompiledQuery {
     let mut label_to_line: HashMap<(String, usize), usize> = HashMap::new();
 
-    let all_instructions = query_instructions
+    let all_instructions = query
+        .instructions
         .into_iter()
         .chain(db_instructions.into_iter())
         .enumerate()
@@ -22,7 +21,7 @@ pub fn compile_link(
             }
         })
         .collect::<Vec<WamInstr>>();
-    all_instructions
+    let linked = all_instructions
         .into_iter()
         .map(|instr| match instr {
             WamInstr::CallTemp { predicate, arity } => {
@@ -40,13 +39,18 @@ pub fn compile_link(
             }
             other => other,
         })
-        .collect()
+        .collect();
+    CompiledQuery {
+        instructions: linked,
+        term_to_reg: query.term_to_reg,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::compiler_bytecode::{WamInstr, WamReg};
+    use std::collections::HashMap;
 
     #[test]
     fn test_compile_link_basic() {
@@ -63,19 +67,22 @@ mod tests {
             WamInstr::Proceed,
         ];
 
-        let query_instructions = vec![
-            WamInstr::PutStruct {
-                functor: "john".to_string(),
-                arity: 0,
-                reg: WamReg::X(0),
-            },
-            WamInstr::CallTemp {
-                predicate: "parent".to_string(),
-                arity: 2,
-            },
-        ];
+        let query = CompiledQuery {
+            instructions: vec![
+                WamInstr::PutStruct {
+                    functor: "john".to_string(),
+                    arity: 0,
+                    reg: WamReg::X(0),
+                },
+                WamInstr::CallTemp {
+                    predicate: "parent".to_string(),
+                    arity: 2,
+                },
+            ],
+            term_to_reg: HashMap::new(),
+        };
 
-        let result = compile_link(query_instructions, db_instructions);
+        let result = compile_link(query, db_instructions);
 
         let expected = vec![
             WamInstr::PutStruct {
@@ -100,6 +107,6 @@ mod tests {
             WamInstr::Proceed,
         ];
 
-        assert_eq!(result, expected);
+        assert_eq!(result.instructions, expected);
     }
 }

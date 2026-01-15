@@ -72,6 +72,11 @@ impl GlobalParentIndex {
     fn layer_end_sentry() -> Self {
         GlobalParentIndex(usize::max_value())
     }
+
+    /// オフセットを加算した新しいGlobalParentIndexを返す
+    pub fn offset(base: GlobalParentIndex, offset: usize) -> GlobalParentIndex {
+        GlobalParentIndex(base.0 + offset)
+    }
 }
 
 impl Parents {

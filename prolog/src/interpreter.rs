@@ -1,7 +1,9 @@
 use crate::cell_heap::{Cell, CellHeap, CellIndex};
+use crate::compile_query::CompiledQuery;
 use crate::compiler_bytecode::{WamInstr, WamReg};
 use crate::layered_uf::{GlobalParentIndex, LayeredUf, Parent};
-use crate::parse::Term;
+use crate::parse::{Term, TermId};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Register {
@@ -225,10 +227,7 @@ fn exectute_impl(
     }
 }
 
-pub fn execute_instructions(
-    instructions: Vec<WamInstr>,
-    orig_query: Vec<Term>,
-) -> Result<Vec<Term>, ()> {
+pub fn execute_instructions(query: CompiledQuery, orig_query: Vec<Term>) -> Result<Vec<Term>, ()> {
     let mut program_counter = 0;
     let mut exec_mode = ExecMode::Continue;
     let mut layered_uf = LayeredUf::new();
@@ -237,7 +236,7 @@ pub fn execute_instructions(
 
     while exec_mode == ExecMode::Continue {
         exectute_impl(
-            &instructions,
+            &query.instructions,
             &mut program_counter,
             &mut registers,
             &mut cell_heap,
@@ -247,13 +246,114 @@ pub fn execute_instructions(
         );
         program_counter += 1;
     }
-    // println!("{:?}", instructions);
-    // println!("{:?}", orig_query);
 
     if exec_mode == ExecMode::ResolvedToFalse {
         return Err(());
-    } else {
-        Ok(orig_query) // TODO return query with bindings applied
+    }
+
+    // orig_queryを走査して変数を解決済みの値で置き換える
+    let resolved = orig_query
+        .iter()
+        .map(|term| {
+            resolve_term(
+                term,
+                &query.term_to_reg,
+                &mut registers,
+                &cell_heap,
+                &mut layered_uf,
+            )
+        })
+        .collect();
+    Ok(resolved)
+}
+
+/// Termを走査して変数を解決済みの値で置き換える
+fn resolve_term(
+    term: &Term,
+    term_to_reg: &HashMap<TermId, WamReg>,
+    registers: &mut Registers,
+    heap: &CellHeap,
+    uf: &mut LayeredUf,
+) -> Term {
+    match term {
+        Term::Var { id, name, .. } => {
+            if let Some(reg) = term_to_reg.get(id) {
+                match registers.get_register(reg) {
+                    Register::UfRef { id: uf_id } => {
+                        let root = uf.find_root(uf_id);
+                        cell_to_term(root.cell, uf_id, heap, uf)
+                    }
+                    Register::CellRef { id: cell_id } => {
+                        let cell = heap.value(cell_id);
+                        match cell.as_ref() {
+                            Cell::Var { name } => Term::new_var(name.clone()),
+                            Cell::Struct { functor, arity } => {
+                                // CellRefの場合はUfRefではないのでargsの取得が難しい
+                                // 現状ではarity=0の場合のみ対応
+                                if *arity == 0 {
+                                    Term::new_struct(functor.clone(), vec![])
+                                } else {
+                                    // TODO: ネストした構造体の対応
+                                    Term::new_var(name.clone())
+                                }
+                            }
+                            Cell::Empty => Term::new_var(name.clone()),
+                        }
+                    }
+                }
+            } else {
+                // term_to_regに登録されていない変数はそのまま
+                Term::new_var(name.clone())
+            }
+        }
+        Term::Struct { functor, args, .. } => {
+            let resolved_args = args
+                .iter()
+                .map(|arg| resolve_term(arg, term_to_reg, registers, heap, uf))
+                .collect();
+            Term::new_struct(functor.clone(), resolved_args)
+        }
+        Term::Number { value, .. } => Term::new_number(*value),
+        Term::List { items, tail, .. } => {
+            let resolved_items = items
+                .iter()
+                .map(|item| resolve_term(item, term_to_reg, registers, heap, uf))
+                .collect();
+            let resolved_tail = tail
+                .as_ref()
+                .map(|t| Box::new(resolve_term(t, term_to_reg, registers, heap, uf)));
+            Term::new_list(resolved_items, resolved_tail)
+        }
+    }
+}
+
+/// CellからTermを再構築する
+/// uf_idは構造体の場合に引数を取得するために使う
+fn cell_to_term(
+    cell_id: CellIndex,
+    uf_id: GlobalParentIndex,
+    heap: &CellHeap,
+    uf: &mut LayeredUf,
+) -> Term {
+    let cell = heap.value(cell_id);
+    match cell.as_ref() {
+        Cell::Var { name } => Term::new_var(name.clone()),
+        Cell::Struct { functor, arity } => {
+            if *arity == 0 {
+                Term::new_struct(functor.clone(), vec![])
+            } else {
+                // 構造体の引数はuf_id + 1からarity個連続している
+                let args = (1..=*arity)
+                    .map(|i| {
+                        let arg_uf_id = GlobalParentIndex::offset(uf_id, i);
+                        let arg_root = uf.find_root(arg_uf_id);
+                        cell_to_term(arg_root.cell, arg_uf_id, heap, uf)
+                    })
+                    .collect();
+                Term::new_struct(functor.clone(), args)
+            }
+        }
+        Cell::Empty => Term::new_var("_".to_string()),
     }
 }
 
@@ -268,42 +368,42 @@ mod tests {
         parse::{self, Term},
     };
 
-    fn compile_program(db_src: &str, query_src: &str) -> (Vec<WamInstr>, Vec<Term>) {
+    fn compile_program(db_src: &str, query_src: &str) -> (CompiledQuery, Vec<Term>) {
         let db_clauses = parse::database(db_src).expect("failed to parse db");
 
         let query_terms = parse::query(query_src).expect("failed to parse query").1;
-        let instructions = compile_link(
+        let linked = compile_link(
             compile_query(query_terms.clone()),
             compile_db(db_clauses.clone()),
         );
-        println!("{:?}", WamInstrs(&instructions));
-        (instructions, query_terms)
+        println!("{:?}", WamInstrs(&linked.instructions));
+        (linked, query_terms)
     }
 
     #[test]
     fn simple_atom_match() {
-        let (instructions, query_term) = compile_program("hello.", "hello.");
-        let result = execute_instructions(instructions, query_term.clone());
+        let (query, query_term) = compile_program("hello.", "hello.");
+        let result = execute_instructions(query, query_term.clone());
         assert_eq!(result, Ok(query_term));
     }
     #[test]
     fn fail_unmatched() {
-        let (instructions, query_term) = compile_program("hello.", "bye.");
-        let result = execute_instructions(instructions, query_term);
+        let (query, query_term) = compile_program("hello.", "bye.");
+        let result = execute_instructions(query, query_term);
         assert_eq!(result, Err(()));
     }
 
     #[test]
     fn db_var_matches_constant_query() {
-        let (instructions, query_term) = compile_program("honi(X).", "honi(fuwa).");
-        let result = execute_instructions(instructions, query_term.clone());
+        let (query, query_term) = compile_program("honi(X).", "honi(fuwa).");
+        let result = execute_instructions(query, query_term.clone());
         assert_eq!(result, Ok(query_term));
     }
 
     #[test]
     fn query_var_binds_to_constant_fact() {
-        let (instructions, query_term) = compile_program("honi(fuwa).", "honi(X).");
-        let result = execute_instructions(instructions, query_term);
+        let (query, query_term) = compile_program("honi(fuwa).", "honi(X).");
+        let result = execute_instructions(query, query_term);
         let expected = vec![Term::new_struct(
             "honi".to_string(),
             vec![Term::new_struct("fuwa".to_string(), vec![])],

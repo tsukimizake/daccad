@@ -4,7 +4,14 @@ use crate::compiler_bytecode::{WamInstr, WamReg};
 use crate::parse::{Term, TermId};
 use crate::register_managers::{RegisterManager, alloc_registers};
 
-pub fn compile_query(query_terms: Vec<Term>) -> Vec<WamInstr> {
+/// コンパイル済みクエリ
+#[derive(Debug)]
+pub struct CompiledQuery {
+    pub instructions: Vec<WamInstr>,
+    pub term_to_reg: HashMap<TermId, WamReg>,
+}
+
+pub fn compile_query(query_terms: Vec<Term>) -> CompiledQuery {
     // すべてのゴールに対して累積的にレジスタを割り当て
     let mut reg_map = HashMap::new();
     let mut reg_manager = RegisterManager::new();
@@ -29,7 +36,10 @@ pub fn compile_query(query_terms: Vec<Term>) -> Vec<WamInstr> {
             &mut declared_vars,
         ));
     }
-    result
+    CompiledQuery {
+        instructions: result,
+        term_to_reg: reg_map,
+    }
 }
 
 fn collect_vars_recursive(
@@ -204,12 +214,12 @@ mod tests {
 
     fn test_compile_query(source: &str, expected: Vec<WamInstr>) {
         let parsed_query = query(source).unwrap().1;
-        let instructions = compile_query(parsed_query);
+        let compiled = compile_query(parsed_query);
         assert!(
-            instructions == expected,
+            compiled.instructions == expected,
             "Mismatch for query: {}\n\nActual:\n{:?}\nExpected:\n{:?}",
             source,
-            WamInstrs(&instructions),
+            WamInstrs(&compiled.instructions),
             WamInstrs(&expected)
         );
     }
