@@ -135,10 +135,8 @@ pub(super) fn on_preview_generated(
         // Offscreen camera rendering only that layer
         commands.spawn((
             Camera3d::default(),
-            Camera {
-                target: RenderTarget::Image(rt_image.clone().into()),
-                ..default()
-            },
+            Camera::default(),
+            RenderTarget::Image(rt_image.clone().into()),
             Transform::from_xyz(2.5, 2.5, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
             layer_only.clone(),
         ));
