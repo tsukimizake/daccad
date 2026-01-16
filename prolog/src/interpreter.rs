@@ -6,51 +6,33 @@ use crate::parse::{Term, TermId};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Register {
-    CellRef { id: CellIndex },
-    UfRef { id: GlobalParentIndex },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 struct Registers {
-    registers: Vec<Register>,
+    registers: Vec<GlobalParentIndex>,
 }
 
 impl Registers {
     fn new() -> Self {
-        let mut registers = Vec::with_capacity(32);
-        for _ in 0..32 {
-            registers.push(Register::CellRef {
-                id: CellIndex::EMPTY,
-            });
+        Self {
+            registers: vec![GlobalParentIndex::EMPTY; 32],
         }
-        Self { registers }
     }
 
-    pub fn get_arg_registers(&self) -> &[Register] {
-        &self.registers
-    }
-    pub fn get_register(&mut self, reg: &WamReg) -> Register {
+    #[inline]
+    pub fn get_register(&self, reg: &WamReg) -> GlobalParentIndex {
         let index = match reg {
             WamReg::X(index) => *index,
         };
-        while index >= self.registers.len() {
-            self.registers.push(Register::CellRef {
-                id: CellIndex::EMPTY,
-            });
-        }
-        self.registers[index].clone()
+        self.registers.get(index).copied().unwrap_or(GlobalParentIndex::EMPTY)
     }
 
-    pub fn set_register(&mut self, reg: &WamReg, value: Register) {
+    #[inline]
+    pub fn set_register(&mut self, reg: &WamReg, value: GlobalParentIndex) {
         let index = match reg {
             WamReg::X(index) => *index,
         };
 
-        while index >= self.registers.len() {
-            self.registers.push(Register::CellRef {
-                id: CellIndex::EMPTY,
-            });
+        if index >= self.registers.len() {
+            self.registers.resize(index + 1, GlobalParentIndex::EMPTY);
         }
         self.registers[index] = value;
     }
@@ -76,6 +58,7 @@ fn getstruct_cell_ref(
     arity: &usize,
     registers: &mut Registers,
     heap: &mut CellHeap,
+    layered_uf: &mut LayeredUf,
     read_write_mode: &mut ReadWriteMode,
     exec_mode: &mut ExecMode,
 ) {
@@ -89,7 +72,9 @@ fn getstruct_cell_ref(
         } => {
             if existing_functor == functor && existing_arity == arity {
                 let cell_id = heap.insert_struct(functor, *arity);
-                registers.set_register(reg, Register::CellRef { id: cell_id });
+                let uf_id = layered_uf.alloc_node();
+                layered_uf.set_cell(uf_id, cell_id);
+                registers.set_register(reg, uf_id);
 
                 *read_write_mode = ReadWriteMode::Read;
             } else {
@@ -118,22 +103,25 @@ fn exectute_impl(
                 arity,
                 reg,
             } => {
-                let id = heap.insert_struct(functor, *arity);
-                registers.set_register(reg, Register::CellRef { id });
+                let cell_id = heap.insert_struct(functor, *arity);
+                let uf_id = layered_uf.alloc_node();
+                layered_uf.set_cell(uf_id, cell_id);
+                registers.set_register(reg, uf_id);
             }
 
             WamInstr::SetVar { name, reg } => {
                 let cell_id = heap.insert_var(name.clone());
                 let uf_id = layered_uf.alloc_node();
                 layered_uf.set_cell(uf_id, cell_id);
-                registers.set_register(reg, Register::UfRef { id: uf_id });
+                registers.set_register(reg, uf_id);
             }
 
             WamInstr::SetVal { reg, .. } => {
-                if let Register::UfRef { id: prev_id } = registers.get_register(reg) {
+                let prev_id = registers.get_register(reg);
+                if !prev_id.is_empty() {
                     layered_uf.alloc_node_with_parent(prev_id);
                 } else {
-                    panic!("SetVal: register does not contain UfRef");
+                    panic!("SetVal: register is empty");
                 }
             }
 
@@ -143,28 +131,16 @@ fn exectute_impl(
                 let cell_id = heap.insert_var(name.clone());
                 let uf_id = layered_uf.alloc_node();
                 layered_uf.set_cell(uf_id, cell_id);
-                registers.set_register(reg, Register::UfRef { id: uf_id });
+                registers.set_register(reg, uf_id);
             }
 
             WamInstr::GetStruct {
                 functor,
                 arity,
                 reg,
-            } => match registers.get_register(reg) {
-                Register::CellRef { id } => {
-                    let cell = heap.value(id);
-                    getstruct_cell_ref(
-                        cell.as_ref(),
-                        reg,
-                        functor,
-                        arity,
-                        registers,
-                        heap,
-                        read_write_mode,
-                        exec_mode,
-                    );
-                }
-                Register::UfRef { id } => {
+            } => {
+                let id = registers.get_register(reg);
+                if !id.is_empty() {
                     let Parent { cell, .. } = layered_uf.find_root(id);
                     let cell = heap.value(*cell);
                     getstruct_cell_ref(
@@ -174,11 +150,14 @@ fn exectute_impl(
                         arity,
                         registers,
                         heap,
+                        layered_uf,
                         read_write_mode,
                         exec_mode,
                     );
+                } else {
+                    panic!("GetStruct: register is empty");
                 }
-            },
+            }
 
             WamInstr::Call {
                 predicate: _,
@@ -200,8 +179,10 @@ fn exectute_impl(
                     }
                     ReadWriteMode::Write => {
                         // set
-                        let id = heap.insert_var(name.clone());
-                        registers.set_register(reg, Register::CellRef { id });
+                        let cell_id = heap.insert_var(name.clone());
+                        let uf_id = layered_uf.alloc_node();
+                        layered_uf.set_cell(uf_id, cell_id);
+                        registers.set_register(reg, uf_id);
                     }
                 }
             }
@@ -278,28 +259,13 @@ fn resolve_term(
     match term {
         Term::Var { id, name, .. } => {
             if let Some(reg) = term_to_reg.get(id) {
-                match registers.get_register(reg) {
-                    Register::UfRef { id: uf_id } => {
-                        let root = uf.find_root(uf_id);
-                        cell_to_term(root.cell, uf_id, heap, uf)
-                    }
-                    Register::CellRef { id: cell_id } => {
-                        let cell = heap.value(cell_id);
-                        match cell.as_ref() {
-                            Cell::Var { name } => Term::new_var(name.clone()),
-                            Cell::Struct { functor, arity } => {
-                                // CellRefの場合はUfRefではないのでargsの取得が難しい
-                                // 現状ではarity=0の場合のみ対応
-                                if *arity == 0 {
-                                    Term::new_struct(functor.clone(), vec![])
-                                } else {
-                                    // TODO: ネストした構造体の対応
-                                    Term::new_var(name.clone())
-                                }
-                            }
-                            Cell::Empty => Term::new_var(name.clone()),
-                        }
-                    }
+                let uf_id = registers.get_register(reg);
+                if !uf_id.is_empty() {
+                    let root = uf.find_root(uf_id);
+                    cell_to_term(root.cell, uf_id, heap, uf)
+                } else {
+                    // レジスタが空の場合は未束縛変数
+                    Term::new_var(name.clone())
                 }
             } else {
                 // term_to_regに登録されていない変数はそのまま

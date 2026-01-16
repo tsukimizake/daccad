@@ -65,16 +65,25 @@ impl<'a> IndexMut<LocalParentIndex> for CurrentLayerParents<'a> {
 pub struct GlobalParentIndex(usize);
 
 impl GlobalParentIndex {
+    /// 無効値（番兵）
+    pub(crate) const EMPTY: GlobalParentIndex = GlobalParentIndex(usize::MAX);
+
     fn from_local_index(index: LocalParentIndex, old_layers_len: usize) -> GlobalParentIndex {
         GlobalParentIndex(index.0 + old_layers_len)
     }
 
     fn layer_end_sentry() -> Self {
-        GlobalParentIndex(usize::max_value())
+        GlobalParentIndex(usize::MAX)
+    }
+
+    /// 無効値かどうかを判定
+    #[inline]
+    pub(crate) fn is_empty(self) -> bool {
+        self.0 == usize::MAX
     }
 
     /// オフセットを加算した新しいGlobalParentIndexを返す
-    pub fn offset(base: GlobalParentIndex, offset: usize) -> GlobalParentIndex {
+    pub(crate) fn offset(base: GlobalParentIndex, offset: usize) -> GlobalParentIndex {
         GlobalParentIndex(base.0 + offset)
     }
 }
