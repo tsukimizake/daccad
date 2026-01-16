@@ -8,3 +8,4 @@ mod layered_uf;
 pub mod mock;
 pub mod parse;
 mod register_managers;
+mod resolve_term;
