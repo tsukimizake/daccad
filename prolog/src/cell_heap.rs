@@ -9,6 +9,10 @@ impl CellIndex {
         self.0 == 0
     }
     pub(crate) const EMPTY: CellIndex = CellIndex(0);
+
+    pub fn is_var(&self, heap: &CellHeap) -> bool {
+        matches!(&*heap[*self], Cell::Var { .. })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

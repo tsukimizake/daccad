@@ -48,9 +48,11 @@ enum ExecMode {
     ResolvedToFalse,
 }
 
+// Readが持っているのは構造体の親Indexを起点としたカーソル。WAMでいうSレジスタの値
+// 子要素までRead/Writeし終わった後はそのままの値で放置され、次回のGetStructで再設定される。
 #[derive(PartialEq, Eq, Debug)]
 enum ReadWriteMode {
-    Read,
+    Read(GlobalParentIndex),
     Write,
 }
 
@@ -83,8 +85,9 @@ fn getstruct_cell_ref(
                 let uf_id = layered_uf.alloc_node();
                 layered_uf.set_cell(uf_id, existing_cell);
                 registers.set_register(op_reg, uf_id);
-
-                *read_write_mode = ReadWriteMode::Read;
+                let local_root = layered_uf.find_root(existing_parent_index);
+                *read_write_mode =
+                    ReadWriteMode::Read(GlobalParentIndex::offset(local_root.rooted, 1));
             } else {
                 *exec_mode = ExecMode::ResolvedToFalse;
             }
@@ -182,9 +185,12 @@ fn exectute_impl(
 
             WamInstr::UnifyVar { name, reg } => {
                 match read_write_mode {
-                    ReadWriteMode::Read => {
-                        // unify
-                        todo!("unify read var: {}, {:?}", name, reg);
+                    ReadWriteMode::Read(read_index) => {
+                        // read and set to register
+                        registers.set_register(reg, *read_index);
+
+                        *read_write_mode =
+                            ReadWriteMode::Read(GlobalParentIndex::offset(*read_index, 1));
                     }
                     ReadWriteMode::Write => {
                         // set
@@ -232,7 +238,7 @@ pub fn execute_instructions(query: CompiledQuery, orig_query: Vec<Term>) -> Resu
             &mut cell_heap,
             &mut layered_uf,
             &mut exec_mode,
-            &mut ReadWriteMode::Read,
+            &mut ReadWriteMode::Write,
         );
         program_counter += 1;
     }
