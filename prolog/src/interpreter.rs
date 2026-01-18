@@ -316,4 +316,15 @@ mod tests {
         )];
         assert_eq!(result, Ok(expected));
     }
+
+    #[test]
+    fn var_to_var_binding() {
+        let (query, query_term) = compile_program("honi(X).", "honi(Y).");
+        let result = execute_instructions(query, query_term);
+        let expected = vec![Term::new_struct(
+            "honi".to_string(),
+            vec![Term::new_var("X".to_string())],
+        )];
+        assert_eq!(result, Ok(expected));
+    }
 }
