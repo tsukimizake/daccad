@@ -327,4 +327,46 @@ mod tests {
         )];
         assert_eq!(result, Ok(expected));
     }
+
+    #[test]
+    fn multiple_usages_of_same_variable() {
+        let (query, query_term) = compile_program("likes(X, X).", "likes(fuwa, Y).");
+        let result = execute_instructions(query, query_term);
+        let expected = vec![Term::new_struct(
+            "likes".to_string(),
+            vec![
+                Term::new_struct("fuwa".to_string(), vec![]),
+                Term::new_struct("fuwa".to_string(), vec![]),
+            ],
+        )];
+        assert_eq!(result, Ok(expected));
+    }
+
+    #[test]
+    fn deep_struct_on_db() {
+        let (query, query_term) = compile_program("a(b(c)).", "a(X).");
+        let result = execute_instructions(query, query_term);
+        let expected = vec![Term::new_struct(
+            "a".to_string(),
+            vec![Term::new_struct(
+                "b".to_string(),
+                vec![Term::new_struct("c".to_string(), vec![])],
+            )],
+        )];
+        assert_eq!(result, Ok(expected));
+    }
+
+    #[test]
+    fn deep_struct_on_query() {
+        let (query, query_term) = compile_program("a(X).", "a(b(c)).");
+        let result = execute_instructions(query, query_term);
+        let expected = vec![Term::new_struct(
+            "a".to_string(),
+            vec![Term::new_struct(
+                "b".to_string(),
+                vec![Term::new_struct("c".to_string(), vec![])],
+            )],
+        )];
+        assert_eq!(result, Ok(expected));
+    }
 }
