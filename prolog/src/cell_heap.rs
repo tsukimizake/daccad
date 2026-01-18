@@ -19,6 +19,7 @@ impl CellIndex {
 pub enum Cell {
     Empty,
     Var { name: VarName },
+    VarRef { name: VarName, ref_index: CellIndex },
     Struct { functor: String, arity: usize },
 }
 
@@ -53,6 +54,17 @@ impl CellHeap {
             arity,
         }));
         id
+    }
+
+    pub fn set_ref(&mut self, from_id: CellIndex, to_id: CellIndex) {
+        if let Cell::Var { name } = &*self.cells[from_id.0] {
+            self.cells[from_id.0] = Rc::new(Cell::VarRef {
+                name: name.clone(),
+                ref_index: to_id,
+            });
+        } else {
+            panic!("Attempted to set reference on a non-variable cell");
+        }
     }
 
     pub fn value(&self, id: CellIndex) -> Rc<Cell> {

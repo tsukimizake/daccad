@@ -76,6 +76,7 @@ fn cell_to_term(
                 Term::new_struct(functor.clone(), args)
             }
         }
+        Cell::VarRef { ref_index, .. } => cell_to_term(*ref_index, uf_id, heap, uf),
         Cell::Empty => Term::new_var("_".to_string()),
     }
 }

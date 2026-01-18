@@ -71,10 +71,11 @@ fn getstruct_cell_ref(
     match heap.value(existing_cell).as_ref() {
         Cell::Var { .. } => {
             let struct_cell = heap.insert_struct(functor, *arity);
-            let id = layered_uf.alloc_node();
-            registers.set_register(op_reg, id);
-            layered_uf.union(existing_parent_index, id);
-            layered_uf.set_cell(id, struct_cell);
+            let new_id = layered_uf.alloc_node();
+            registers.set_register(op_reg, new_id);
+            layered_uf.union(existing_parent_index, new_id);
+            layered_uf.set_cell(new_id, struct_cell);
+            heap.set_ref(existing_cell, struct_cell);
             *read_write_mode = ReadWriteMode::Write;
         }
         Cell::Struct {
@@ -91,6 +92,20 @@ fn getstruct_cell_ref(
             } else {
                 *exec_mode = ExecMode::ResolvedToFalse;
             }
+        }
+        Cell::VarRef { ref_index, .. } => {
+            getstruct_cell_ref(
+                existing_parent_index,
+                *ref_index,
+                op_reg,
+                functor,
+                arity,
+                registers,
+                heap,
+                layered_uf,
+                read_write_mode,
+                exec_mode,
+            );
         }
         Cell::Empty => {
             panic!("getstruct_cell_ref: cell is Empty");
@@ -186,7 +201,7 @@ fn exectute_impl(
             WamInstr::UnifyVar { name, reg } => {
                 match read_write_mode {
                     ReadWriteMode::Read(read_index) => {
-                        // read and set to register
+                        // just reference from register
                         registers.set_register(reg, *read_index);
 
                         *read_write_mode =
@@ -201,6 +216,19 @@ fn exectute_impl(
                     }
                 }
             }
+            WamInstr::UnifyVal { reg, .. } => match read_write_mode {
+                ReadWriteMode::Read(read_index) => {
+                    let id = registers.get_register(reg);
+                    layered_uf.union(id, *read_index);
+                    *read_write_mode =
+                        ReadWriteMode::Read(GlobalParentIndex::offset(*read_index, 1));
+                }
+                ReadWriteMode::Write => {
+                    let id = registers.get_register(reg);
+                    let new_id = layered_uf.alloc_node();
+                    layered_uf.union(id, new_id);
+                }
+            },
 
             WamInstr::Label { name: _, arity: _ } => {}
             WamInstr::Proceed => {
