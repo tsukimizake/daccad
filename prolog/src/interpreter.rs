@@ -1,4 +1,4 @@
-use crate::cell_heap::{Cell, CellHeap};
+use crate::cell_heap::{Cell, CellHeap, CellIndex};
 use crate::compile_query::CompiledQuery;
 use crate::compiler_bytecode::{WamInstr, WamReg};
 use crate::layered_uf::{GlobalParentIndex, LayeredUf, Parent};
@@ -22,7 +22,10 @@ impl Registers {
         let index = match reg {
             WamReg::X(index) => *index,
         };
-        self.registers.get(index).copied().unwrap_or(GlobalParentIndex::EMPTY)
+        self.registers
+            .get(index)
+            .copied()
+            .unwrap_or(GlobalParentIndex::EMPTY)
     }
 
     #[inline]
@@ -52,8 +55,9 @@ enum ReadWriteMode {
 }
 
 fn getstruct_cell_ref(
-    cell: &Cell,
-    reg: &WamReg,
+    existing_parent_index: GlobalParentIndex,
+    existing_cell: CellIndex,
+    op_reg: &WamReg,
     functor: &String,
     arity: &usize,
     registers: &mut Registers,
@@ -62,8 +66,13 @@ fn getstruct_cell_ref(
     read_write_mode: &mut ReadWriteMode,
     exec_mode: &mut ExecMode,
 ) {
-    match cell {
+    match heap.value(existing_cell).as_ref() {
         Cell::Var { .. } => {
+            let struct_cell = heap.insert_struct(functor, *arity);
+            let id = layered_uf.alloc_node();
+            registers.set_register(op_reg, id);
+            layered_uf.union(existing_parent_index, id);
+            layered_uf.set_cell(id, struct_cell);
             *read_write_mode = ReadWriteMode::Write;
         }
         Cell::Struct {
@@ -71,10 +80,9 @@ fn getstruct_cell_ref(
             arity: existing_arity,
         } => {
             if existing_functor == functor && existing_arity == arity {
-                let cell_id = heap.insert_struct(functor, *arity);
                 let uf_id = layered_uf.alloc_node();
-                layered_uf.set_cell(uf_id, cell_id);
-                registers.set_register(reg, uf_id);
+                layered_uf.set_cell(uf_id, existing_cell);
+                registers.set_register(op_reg, uf_id);
 
                 *read_write_mode = ReadWriteMode::Read;
             } else {
@@ -119,7 +127,8 @@ fn exectute_impl(
             WamInstr::SetVal { reg, .. } => {
                 let prev_id = registers.get_register(reg);
                 if !prev_id.is_empty() {
-                    layered_uf.alloc_node_with_parent(prev_id);
+                    let new_id = layered_uf.alloc_node();
+                    layered_uf.union(prev_id, new_id);
                 } else {
                     panic!("SetVal: register is empty");
                 }
@@ -137,15 +146,15 @@ fn exectute_impl(
             WamInstr::GetStruct {
                 functor,
                 arity,
-                reg,
+                reg: op_reg,
             } => {
-                let id = registers.get_register(reg);
+                let id = registers.get_register(op_reg);
                 if !id.is_empty() {
-                    let Parent { cell, .. } = layered_uf.find_root(id);
-                    let cell = heap.value(*cell);
+                    let Parent { cell, rooted, .. } = layered_uf.find_root(id);
                     getstruct_cell_ref(
-                        cell.as_ref(),
-                        reg,
+                        *rooted,
+                        *cell,
+                        op_reg,
                         functor,
                         arity,
                         registers,

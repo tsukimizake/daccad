@@ -26,7 +26,7 @@ pub struct LayeredUf {
 pub struct Parent {
     // layerをまたぐ親への参照
     // top layer以外では不変性を保つため更新されない
-    rooted: GlobalParentIndex,
+    pub(crate) rooted: GlobalParentIndex,
     // layer内での親への参照
     // top layer以外では不変性を保つため更新されない
     // rooted, local共にindexが小さい物へと参照する.結果として代表元は最もindexが小さいものとなる
@@ -272,7 +272,6 @@ impl LayeredUf {
         global_id
     }
 
-    #[allow(unused)]
     pub fn set_cell(&mut self, id: GlobalParentIndex, cell: CellIndex) {
         let (old_layers, mut current_layer, is_top_layer) = self.split_layers(id);
         debug_assert!(is_top_layer, "set_cell called on non-top layer");
