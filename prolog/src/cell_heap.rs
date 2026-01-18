@@ -17,7 +17,6 @@ impl CellIndex {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Cell {
-    Empty,
     Var { name: VarName },
     VarRef { name: VarName, ref_index: CellIndex },
     Struct { functor: String, arity: usize },
@@ -31,9 +30,7 @@ pub struct CellHeap {
 
 impl CellHeap {
     pub fn new() -> Self {
-        let mut cells = Vec::with_capacity(16);
-        // 0は常にEmptyセル
-        cells.push(Rc::new(Cell::Empty {}));
+        let cells = Vec::with_capacity(16);
         Self { cells }
     }
 

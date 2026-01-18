@@ -107,9 +107,6 @@ fn getstruct_cell_ref(
                 exec_mode,
             );
         }
-        Cell::Empty => {
-            panic!("getstruct_cell_ref: cell is Empty");
-        }
     }
 }
 

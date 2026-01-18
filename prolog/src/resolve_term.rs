@@ -77,6 +77,5 @@ fn cell_to_term(
             }
         }
         Cell::VarRef { ref_index, .. } => cell_to_term(*ref_index, uf_id, heap, uf),
-        Cell::Empty => Term::new_var("_".to_string()),
     }
 }
