@@ -40,6 +40,7 @@ pub enum WamInstr {
     // 初回出現変数の場合はGetVarでregに変数をセットする。ufにも登録する
     GetVar {
         name: VarName,
+        with: WamReg,
         reg: WamReg,
     },
     // 2回目以降の出現変数の場合はGetValでregをufに登録してwithとunifyする。

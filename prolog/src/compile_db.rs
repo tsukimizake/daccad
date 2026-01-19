@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 
 use crate::{
     compiler_bytecode::{WamInstr, WamReg},
@@ -13,7 +13,7 @@ pub fn compile_db(db: Vec<Clause>) -> Vec<WamInstr> {
                 let mut reg_map = HashMap::new();
                 let mut reg_manager = RegisterManager::new();
                 alloc_registers(&term, &mut reg_map, &mut reg_manager);
-                let mut declared_vars = HashSet::new();
+                let mut declared_vars = HashMap::new();
                 compile_db_term_top(&term, &reg_map, &mut declared_vars)
             }
             Clause::Rule { head: _, body: _ } => {
@@ -26,7 +26,7 @@ pub fn compile_db(db: Vec<Clause>) -> Vec<WamInstr> {
 fn compile_db_term_top(
     term: &Term,
     reg_map: &HashMap<TermId, WamReg>,
-    declared_vars: &mut HashSet<String>,
+    declared_vars: &mut HashMap<String, WamReg>,
 ) -> Vec<WamInstr> {
     match term {
         Term::Struct { functor, args, .. } => {
@@ -36,9 +36,17 @@ fn compile_db_term_top(
                 arity: args.len(),
             });
             let mut postponed_functors = VecDeque::with_capacity(10);
-            for arg in args {
-                let child_ops =
-                    compile_db_term(arg, reg_map, declared_vars, &mut postponed_functors);
+            // 恒久変数レジスタは引数の数から始まる
+            let mut perm_reg_counter = args.len();
+            for (arg_index, arg) in args.iter().enumerate() {
+                let child_ops = compile_db_term_toplevel_arg(
+                    arg,
+                    arg_index,
+                    reg_map,
+                    declared_vars,
+                    &mut postponed_functors,
+                    &mut perm_reg_counter,
+                );
                 res.extend(child_ops);
             }
             while let Some((_, term)) = postponed_functors.pop_front() {
@@ -56,10 +64,51 @@ fn compile_db_term_top(
     }
 }
 
+fn compile_db_term_toplevel_arg(
+    term: &Term,
+    arg_index: usize,
+    reg_map: &HashMap<TermId, WamReg>,
+    declared_vars: &mut HashMap<String, WamReg>,
+    postponed_functors: &mut VecDeque<(WamReg, Term)>,
+    perm_reg_counter: &mut usize,
+) -> Vec<WamInstr> {
+    match term {
+        Term::Struct { .. } => {
+            // Structの場合は従来通りcompile_db_termを使う
+            compile_db_term(term, reg_map, declared_vars, postponed_functors)
+        }
+        Term::Var { name, .. } => {
+            // トップレベルの変数引数にはGetVar/GetValを使う
+            // reg は引数レジスタ (X0, X1, ...)
+            let reg = WamReg::X(arg_index);
+            if name != "_" && declared_vars.contains_key(name) {
+                vec![WamInstr::GetVal {
+                    name: name.to_string(),
+                    with: declared_vars[name],
+                    reg,
+                }]
+            } else {
+                // with は恒久変数レジスタ (引数の数から始まる)
+                let with = WamReg::X(*perm_reg_counter);
+                *perm_reg_counter += 1;
+                if name != "_" {
+                    declared_vars.insert(name.to_string(), with);
+                }
+                vec![WamInstr::GetVar {
+                    name: name.to_string(),
+                    with,
+                    reg,
+                }]
+            }
+        }
+        _ => todo!("{:?}", term),
+    }
+}
+
 fn compile_db_term(
     term: &Term,
     reg_map: &HashMap<TermId, WamReg>,
-    declared_vars: &mut HashSet<String>,
+    declared_vars: &mut HashMap<String, WamReg>,
     postponed_functors: &mut VecDeque<(WamReg, Term)>,
 ) -> Vec<WamInstr> {
     match term {
@@ -107,20 +156,21 @@ fn gen_unify_var_or_val(
     term_id: &TermId,
     name: &str,
     reg_map: &HashMap<TermId, WamReg>,
-    declared_vars: &mut HashSet<String>,
+    declared_vars: &mut HashMap<String, WamReg>,
 ) -> WamInstr {
-    if name != "_" && declared_vars.contains(name) {
+    let reg = reg_map[term_id];
+    if name != "_" && declared_vars.contains_key(name) {
         WamInstr::UnifyVal {
             name: name.to_string(),
-            reg: reg_map[term_id],
+            reg,
         }
     } else {
         if name != "_" {
-            declared_vars.insert(name.to_string());
+            declared_vars.insert(name.to_string(), reg);
         }
         WamInstr::UnifyVar {
             name: name.to_string(),
-            reg: reg_map[term_id],
+            reg,
         }
     }
 }
@@ -180,9 +230,10 @@ mod tests {
                     reg: WamReg::X(5),
                 },
                 // Y (3rd arg, 2nd occurrence)
-                WamInstr::UnifyVal {
+                WamInstr::GetVal {
                     name: "Y".to_string(),
                     reg: WamReg::X(2),
+                    with: WamReg::X(4),
                 },
                 // f(a) from h's 2nd arg
                 WamInstr::GetStruct {
@@ -199,6 +250,76 @@ mod tests {
                     functor: "a".to_string(),
                     arity: 0,
                     reg: WamReg::X(6),
+                },
+                WamInstr::Proceed,
+            ],
+        );
+    }
+
+    #[test]
+    fn toplevel_vars_xxy() {
+        test_compile_db_helper(
+            "honi(X, X, Y).",
+            vec![
+                WamInstr::Label {
+                    name: "honi".to_string(),
+                    arity: 3,
+                },
+                // X (1st occurrence)
+                WamInstr::GetVar {
+                    name: "X".to_string(),
+                    with: WamReg::X(3),
+                    reg: WamReg::X(0),
+                },
+                // X (2nd occurrence)
+                WamInstr::GetVal {
+                    name: "X".to_string(),
+                    with: WamReg::X(3),
+                    reg: WamReg::X(1),
+                },
+                // Y (1st occurrence)
+                WamInstr::GetVar {
+                    name: "Y".to_string(),
+                    with: WamReg::X(4),
+                    reg: WamReg::X(2),
+                },
+                WamInstr::Proceed,
+            ],
+        );
+    }
+
+    #[test]
+    fn toplevel_vars_xyxy() {
+        test_compile_db_helper(
+            "honi(X, Y, X, Y).",
+            vec![
+                WamInstr::Label {
+                    name: "honi".to_string(),
+                    arity: 4,
+                },
+                // X (1st occurrence)
+                WamInstr::GetVar {
+                    name: "X".to_string(),
+                    with: WamReg::X(4),
+                    reg: WamReg::X(0),
+                },
+                // Y (1st occurrence)
+                WamInstr::GetVar {
+                    name: "Y".to_string(),
+                    with: WamReg::X(5),
+                    reg: WamReg::X(1),
+                },
+                // X (2nd occurrence)
+                WamInstr::GetVal {
+                    name: "X".to_string(),
+                    with: WamReg::X(4),
+                    reg: WamReg::X(2),
+                },
+                // Y (2nd occurrence)
+                WamInstr::GetVal {
+                    name: "Y".to_string(),
+                    with: WamReg::X(5),
+                    reg: WamReg::X(3),
                 },
                 WamInstr::Proceed,
             ],

@@ -355,7 +355,6 @@ mod tests {
 
     #[test]
     fn multiple_usages_of_same_variable() {
-        // TODO コンパイラがunifyを返すのがおかしい putvar/valになるはず
         let (query, query_term) = compile_program("likes(X, X).", "likes(fuwa, Y).");
         let result = execute_instructions(query, query_term);
         let expected = vec![Term::new_struct(
