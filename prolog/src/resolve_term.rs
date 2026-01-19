@@ -16,7 +16,7 @@ pub fn resolve_term(
     match term {
         Term::Var { id, name, .. } => {
             if let Some(reg) = term_to_reg.get(id) {
-                let uf_id = registers.get_register(reg);
+                let uf_id = registers.get(reg);
                 if !uf_id.is_empty() {
                     let root = uf.find_root(uf_id);
                     cell_to_term(root.cell, uf_id, heap, uf)

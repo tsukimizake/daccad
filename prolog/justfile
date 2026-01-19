@@ -1,8 +1,8 @@
 test arg:
-  cargo test -- --nocapture {{arg}}
+  RUST_BACKTRACE=1 cargo test -- --nocapture {{arg}}
 
 test_all:
-  cargo test -- --nocapture
+  RUST_BACKTRACE=1 cargo test -- --nocapture
 
 build:
   cargo build

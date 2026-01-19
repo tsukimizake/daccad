@@ -8,7 +8,7 @@ use crate::cell_heap::CellIndex;
 // [(0,0), (0,0), (2,2)]
 // find_rootでレイヤ内参照をまず優先して見てpath compactionして、そののちrootを見に行って自分だけcompactionしてという動作をし、レイヤ1以降はこのようになる
 // [(0,0), (0,0), (2,2), | (0, 0), (3, 0), (5, 2), (2,3) | (6,0) | (8,0)]
-// 参照は必ずインデックスが小さいものへと参照し、最もインデックスが小さいものがレイヤ内の代表元となる
+// レイヤをまたいで大きい方向に参照することはない（古いレイヤから新しいレイヤへの参照は発生しない）
 pub struct LayeredUf {
     // union-findの親ノードを示す配列 いつものやつ
     // 自分より新しいレイヤのノードは参照しない制約
@@ -323,7 +323,7 @@ impl LayeredUf {
         &self.parent[root_idx]
     }
 
-    // 必ずindexが大きいものから小さいものを参照
+    // 常に l <- r の向きでリンク（レイヤをまたいで大きい方向に参照することはない）
     // l_id, r_idはともにtop layerに存在することが前提
     #[allow(unused)]
     pub fn union(&mut self, l_id: GlobalParentIndex, r_id: GlobalParentIndex) -> bool {
@@ -340,24 +340,11 @@ impl LayeredUf {
 
         if l_localroot == r_localroot {
             return true;
-        } else if l_localroot < r_localroot {
-            current_layer[r_localroot].local = l_localroot;
-        } else {
-            current_layer[l_localroot].local = r_localroot;
         }
 
-        match (
-            current_layer[l_localroot].cell,
-            current_layer[r_localroot].cell,
-        ) {
-            (cell_l, CellIndex::EMPTY) => {}
-            (CellIndex::EMPTY, cell_r) => {
-                current_layer[l_localroot].cell = cell_r;
-            }
-            (cell_l, cell_r) => {
-                return false;
-            }
-        }
+        // 常に l <- r の向きでリンク (lがrを指す、rがルートになる)
+        current_layer[l_localroot].local = r_localroot;
+
         return true;
     }
 

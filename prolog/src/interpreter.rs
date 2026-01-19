@@ -18,7 +18,7 @@ impl Registers {
     }
 
     #[inline]
-    pub(crate) fn get_register(&self, reg: &WamReg) -> GlobalParentIndex {
+    pub(crate) fn get(&self, reg: &WamReg) -> GlobalParentIndex {
         let index = match reg {
             WamReg::X(index) => *index,
         };
@@ -29,7 +29,7 @@ impl Registers {
     }
 
     #[inline]
-    pub fn set_register(&mut self, reg: &WamReg, value: GlobalParentIndex) {
+    pub fn set(&mut self, reg: &WamReg, value: GlobalParentIndex) {
         let index = match reg {
             WamReg::X(index) => *index,
         };
@@ -72,7 +72,7 @@ fn getstruct_cell_ref(
         Cell::Var { .. } => {
             let struct_cell = heap.insert_struct(functor, *arity);
             let new_id = layered_uf.alloc_node();
-            registers.set_register(op_reg, new_id);
+            registers.set(op_reg, new_id);
             layered_uf.union(existing_parent_index, new_id);
             layered_uf.set_cell(new_id, struct_cell);
             heap.set_ref(existing_cell, struct_cell);
@@ -85,7 +85,7 @@ fn getstruct_cell_ref(
             if existing_functor == functor && existing_arity == arity {
                 let uf_id = layered_uf.alloc_node();
                 layered_uf.set_cell(uf_id, existing_cell);
-                registers.set_register(op_reg, uf_id);
+                registers.set(op_reg, uf_id);
                 let local_root = layered_uf.find_root(existing_parent_index);
                 *read_write_mode =
                     ReadWriteMode::Read(GlobalParentIndex::offset(local_root.rooted, 1));
@@ -110,6 +110,76 @@ fn getstruct_cell_ref(
     }
 }
 
+/// 2つのUFノードを統一する
+/// - Var + Var: union (r がルートになる)
+/// - Var + Struct: Var を Struct への参照に変更し、Struct がルートになるように union
+/// - Struct + Struct: functor/arity が一致すれば成功（引数の再帰的統一は未実装）、不一致なら失敗
+///
+/// 戻り値: 統一成功なら true、失敗なら false
+
+/// CellIndex から VarRef を辿って実際のセルを取得
+fn deref_cell(cell: CellIndex, heap: &CellHeap) -> CellIndex {
+    match heap.value(cell).as_ref() {
+        Cell::VarRef { ref_index, .. } => deref_cell(*ref_index, heap),
+        _ => cell,
+    }
+}
+
+fn unify(
+    l_id: GlobalParentIndex,
+    r_id: GlobalParentIndex,
+    heap: &CellHeap,
+    uf: &mut LayeredUf,
+) -> bool {
+    let l_cell = deref_cell(uf.find_root(l_id).cell, heap);
+    let r_cell = deref_cell(uf.find_root(r_id).cell, heap);
+
+    match (heap.value(l_cell).as_ref(), heap.value(r_cell).as_ref()) {
+        // Var + Var: そのまま union (l <- r で r がルート)
+        (Cell::Var { .. }, Cell::Var { .. }) => {
+            uf.union(l_id, r_id);
+            true
+        }
+        // Var + Struct: Struct がルートになるように union
+        (Cell::Var { .. }, Cell::Struct { .. }) => {
+            uf.union(l_id, r_id); // l <- r で r (Struct) がルート
+            true
+        }
+        // Struct + Var: Struct がルートになるように union
+        (Cell::Struct { .. }, Cell::Var { .. }) => {
+            uf.union(r_id, l_id); // r <- l で l (Struct) がルート
+            true
+        }
+        // Struct + Struct: functor/arity チェック
+        (
+            Cell::Struct {
+                functor: f1,
+                arity: a1,
+            },
+            Cell::Struct {
+                functor: f2,
+                arity: a2,
+            },
+        ) => {
+            if f1 == f2 && a1 == a2 {
+                // TODO: 引数の再帰的統一
+                uf.union(l_id, r_id);
+                true
+            } else {
+                false
+            }
+        }
+        // VarRef は deref_cell で解決されているはずなので到達しない
+        _ => {
+            panic!(
+                "unify: unexpected cell combination: {:?} and {:?}",
+                heap.value(l_cell),
+                heap.value(r_cell)
+            );
+        }
+    }
+}
+
 fn exectute_impl(
     instructions: &[WamInstr],
     program_counter: &mut usize,
@@ -129,18 +199,18 @@ fn exectute_impl(
                 let cell_id = heap.insert_struct(functor, *arity);
                 let uf_id = layered_uf.alloc_node();
                 layered_uf.set_cell(uf_id, cell_id);
-                registers.set_register(reg, uf_id);
+                registers.set(reg, uf_id);
             }
 
             WamInstr::SetVar { name, reg } => {
                 let cell_id = heap.insert_var(name.clone());
                 let uf_id = layered_uf.alloc_node();
                 layered_uf.set_cell(uf_id, cell_id);
-                registers.set_register(reg, uf_id);
+                registers.set(reg, uf_id);
             }
 
             WamInstr::SetVal { reg, .. } => {
-                let prev_id = registers.get_register(reg);
+                let prev_id = registers.get(reg);
                 if !prev_id.is_empty() {
                     let new_id = layered_uf.alloc_node();
                     layered_uf.union(prev_id, new_id);
@@ -155,7 +225,7 @@ fn exectute_impl(
                 let cell_id = heap.insert_var(name.clone());
                 let uf_id = layered_uf.alloc_node();
                 layered_uf.set_cell(uf_id, cell_id);
-                registers.set_register(reg, uf_id);
+                registers.set(reg, uf_id);
             }
 
             WamInstr::GetStruct {
@@ -163,7 +233,7 @@ fn exectute_impl(
                 arity,
                 reg: op_reg,
             } => {
-                let id = registers.get_register(op_reg);
+                let id = registers.get(op_reg);
                 if !id.is_empty() {
                     let Parent { cell, rooted, .. } = layered_uf.find_root(id);
                     getstruct_cell_ref(
@@ -199,7 +269,7 @@ fn exectute_impl(
                 match read_write_mode {
                     ReadWriteMode::Read(read_index) => {
                         // just reference from register
-                        registers.set_register(reg, *read_index);
+                        registers.set(reg, *read_index);
 
                         *read_write_mode =
                             ReadWriteMode::Read(GlobalParentIndex::offset(*read_index, 1));
@@ -209,19 +279,19 @@ fn exectute_impl(
                         let cell_id = heap.insert_var(name.clone());
                         let uf_id = layered_uf.alloc_node();
                         layered_uf.set_cell(uf_id, cell_id);
-                        registers.set_register(reg, uf_id);
+                        registers.set(reg, uf_id);
                     }
                 }
             }
             WamInstr::UnifyVal { reg, .. } => match read_write_mode {
                 ReadWriteMode::Read(read_index) => {
-                    let id = registers.get_register(reg);
+                    let id = registers.get(reg);
                     layered_uf.union(id, *read_index);
                     *read_write_mode =
                         ReadWriteMode::Read(GlobalParentIndex::offset(*read_index, 1));
                 }
                 ReadWriteMode::Write => {
-                    let id = registers.get_register(reg);
+                    let id = registers.get(reg);
                     let new_id = layered_uf.alloc_node();
                     layered_uf.union(id, new_id);
                 }
@@ -235,8 +305,34 @@ fn exectute_impl(
                 // }
             }
             WamInstr::Error { message } => {
-                println!("{}", message);
                 *exec_mode = ExecMode::ResolvedToFalse;
+                println!("Error instruction executed: {}", message);
+            }
+
+            // トップレベル引数の変数の初回出現。レジスタには既にクエリからの値が入っている。
+            WamInstr::GetVar { name, reg, with } => {
+                let reg_id = registers.get(reg);
+                debug_assert!(!reg_id.is_empty(), "GetVar: register is empty");
+
+                // DB側の変数用に新しいノードとセルを作成
+                let db_var_cell = heap.insert_var(name.clone());
+                let with_id = layered_uf.alloc_node();
+                layered_uf.set_cell(with_id, db_var_cell);
+                registers.set(with, with_id);
+
+                if !unify(reg_id, with_id, heap, layered_uf) {
+                    println!("  unify failed!");
+                    *exec_mode = ExecMode::ResolvedToFalse;
+                }
+            }
+
+            // トップレベル引数の変数の2回目以降の出現
+            WamInstr::GetVal { with, reg, .. } => {
+                let with_id = registers.get(with);
+                let reg_id = registers.get(reg);
+                if !unify(with_id, reg_id, heap, layered_uf) {
+                    *exec_mode = ExecMode::ResolvedToFalse;
+                }
             }
 
             instr => {
