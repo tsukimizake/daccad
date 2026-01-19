@@ -131,53 +131,67 @@ fn unify(
     heap: &CellHeap,
     uf: &mut LayeredUf,
 ) -> bool {
-    let l_cell = deref_cell(uf.find_root(l_id).cell, heap);
-    let r_cell = deref_cell(uf.find_root(r_id).cell, heap);
+    let mut ids_to_unify = Vec::with_capacity(10);
+    ids_to_unify.push((l_id, r_id));
+    let mut success = true;
 
-    match (heap.value(l_cell).as_ref(), heap.value(r_cell).as_ref()) {
-        // Var + Var: そのまま union (l <- r で r がルート)
-        (Cell::Var { .. }, Cell::Var { .. }) => {
-            uf.union(l_id, r_id);
-            true
-        }
-        // Var + Struct: Struct がルートになるように union
-        (Cell::Var { .. }, Cell::Struct { .. }) => {
-            uf.union(l_id, r_id); // l <- r で r (Struct) がルート
-            true
-        }
-        // Struct + Var: Struct がルートになるように union
-        (Cell::Struct { .. }, Cell::Var { .. }) => {
-            uf.union(r_id, l_id); // r <- l で l (Struct) がルート
-            true
-        }
-        // Struct + Struct: functor/arity チェック
-        (
-            Cell::Struct {
-                functor: f1,
-                arity: a1,
-            },
-            Cell::Struct {
-                functor: f2,
-                arity: a2,
-            },
-        ) => {
-            if f1 == f2 && a1 == a2 {
-                // TODO: 引数の再帰的統一
+    while (!ids_to_unify.is_empty()) && success {
+        let (l_id, r_id) = ids_to_unify.pop().unwrap();
+        let l_cell = deref_cell(uf.find_root(l_id).cell, heap);
+        let r_cell = deref_cell(uf.find_root(r_id).cell, heap);
+        match (heap.value(l_cell).as_ref(), heap.value(r_cell).as_ref()) {
+            // Var + Var: そのまま union (l <- r で r がルート)
+            (Cell::Var { .. }, Cell::Var { .. }) => {
                 uf.union(l_id, r_id);
-                true
-            } else {
-                false
+                success = true
+            }
+            // Var + Struct: Struct がルートになるように union
+            (Cell::Var { .. }, Cell::Struct { .. }) => {
+                uf.union(l_id, r_id); // l <- r で r (Struct) がルート
+                success = true
+            }
+            // Struct + Var: Struct がルートになるように union
+            (Cell::Struct { .. }, Cell::Var { .. }) => {
+                uf.union(r_id, l_id); // r <- l で l (Struct) がルート
+                success = true
+            }
+            // Struct + Struct: functor/arity チェック
+            (
+                Cell::Struct {
+                    functor: f1,
+                    arity: a1,
+                },
+                Cell::Struct {
+                    functor: f2,
+                    arity: a2,
+                },
+            ) => {
+                if f1 == f2 && a1 == a2 {
+                    uf.union(l_id, r_id);
+
+                    // 引数の再帰的unify
+                    for i in 0..*a1 {
+                        ids_to_unify.push((
+                            GlobalParentIndex::offset(l_id, 1 + i),
+                            GlobalParentIndex::offset(r_id, 1 + i),
+                        ));
+                    }
+                    success = true
+                } else {
+                    success = false
+                }
+            }
+            // VarRef は deref_cell で解決されているはずなので到達しない
+            _ => {
+                panic!(
+                    "unify: unexpected cell combination: {:?} and {:?}",
+                    heap.value(l_cell),
+                    heap.value(r_cell)
+                );
             }
         }
-        // VarRef は deref_cell で解決されているはずなので到達しない
-        _ => {
-            panic!(
-                "unify: unexpected cell combination: {:?} and {:?}",
-                heap.value(l_cell),
-                heap.value(r_cell)
-            );
-        }
     }
+    success
 }
 
 fn exectute_impl(
