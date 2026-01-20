@@ -590,4 +590,19 @@ mod tests {
         let result = execute_instructions(query, query_term.clone());
         assert_eq!(result, Ok(query_term));
     }
+
+    // #[test]
+    // fn sample_rule() {
+    //     let (query, query_term) =
+    //         compile_program("p(X,Y) :- q(X, Z), r(Z, Y). q(a, b). r(b, c).", "p(a, B).");
+    //     let result = execute_instructions(query, query_term);
+    //     let expected = vec![Term::new_struct(
+    //         "p".to_string(),
+    //         vec![
+    //             Term::new_struct("a".to_string(), vec![]),
+    //             Term::new_struct("c".to_string(), vec![]),
+    //         ],
+    //     )];
+    //     assert_eq!(result, Ok(expected));
+    // }
 }

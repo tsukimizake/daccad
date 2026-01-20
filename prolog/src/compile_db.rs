@@ -325,4 +325,57 @@ mod tests {
             ],
         );
     }
+
+    #[test]
+    fn sample_rule() {
+        test_compile_db_helper(
+            "p(X,Y) :- q(X, Z), r(Z, Y).",
+            vec![
+                WamInstr::Label {
+                    name: "p".to_string(),
+                    arity: 2,
+                },
+                WamInstr::Allocate { size: 2 },
+                WamInstr::GetVar {
+                    name: "X".to_string(),
+                    with: WamReg::X(2),
+                    reg: WamReg::X(0),
+                },
+                WamInstr::GetVar {
+                    name: "Y".to_string(),
+                    with: WamReg::X(3),
+                    reg: WamReg::X(1),
+                },
+                WamInstr::PutVal {
+                    name: "X".to_string(),
+                    reg: WamReg::X(0),
+                    with: WamReg::X(2),
+                },
+                WamInstr::PutVar {
+                    name: "Z".to_string(),
+                    reg: WamReg::X(0),
+                    with: WamReg::X(4),
+                },
+                WamInstr::CallTemp {
+                    predicate: "q".to_string(),
+                    arity: 2,
+                },
+                WamInstr::PutVal {
+                    name: "Z".to_string(),
+                    reg: WamReg::X(0),
+                    with: WamReg::X(4),
+                },
+                WamInstr::PutVal {
+                    name: "Y".to_string(),
+                    reg: WamReg::X(1),
+                    with: WamReg::X(3),
+                },
+                WamInstr::CallTemp {
+                    predicate: "r".to_string(),
+                    arity: 2,
+                },
+                WamInstr::Deallocate,
+            ],
+        );
+    }
 }
