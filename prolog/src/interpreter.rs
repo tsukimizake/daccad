@@ -364,6 +364,7 @@ pub fn execute_instructions(query: CompiledQuery, orig_query: Vec<Term>) -> Resu
     let mut layered_uf = LayeredUf::new();
     let mut cell_heap = CellHeap::new();
     let mut registers = Registers::new();
+    let mut read_write_mode = ReadWriteMode::Write;
 
     while exec_mode == ExecMode::Continue {
         exectute_impl(
@@ -373,7 +374,7 @@ pub fn execute_instructions(query: CompiledQuery, orig_query: Vec<Term>) -> Resu
             &mut cell_heap,
             &mut layered_uf,
             &mut exec_mode,
-            &mut ReadWriteMode::Write,
+            &mut read_write_mode,
         );
         program_counter += 1;
     }
