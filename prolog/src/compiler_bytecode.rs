@@ -62,8 +62,13 @@ pub enum WamInstr {
     // 初回出現変数の場合はPutVarでregに変数をセット
     PutVar {
         name: VarName,
-        argreg: WamReg,
-        reg2: WamReg,
+        reg: WamReg,
+        with: WamReg,
+    },
+    PutVal {
+        name: VarName,
+        reg: WamReg,
+        with: WamReg,
     },
     PutNumber {
         val: i64,

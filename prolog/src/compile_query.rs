@@ -119,8 +119,8 @@ fn compile_top_arg(
                     declared_vars.insert(name.clone(), reg2);
                     vec![WamInstr::PutVar {
                         name: name.clone(),
-                        argreg: reg,
-                        reg2,
+                        reg: reg,
+                        with,
                     }]
                 } else {
                     // 1回しか出現しない → SetVar
@@ -246,8 +246,8 @@ mod tests {
             vec![
                 WamInstr::PutVar {
                     name: "Z".to_string(),
-                    argreg: WamReg::X(0),
-                    reg2: WamReg::X(3),
+                    reg: WamReg::X(0),
+                    with: WamReg::X(3),
                 },
                 WamInstr::PutStruct {
                     functor: "h".to_string(),

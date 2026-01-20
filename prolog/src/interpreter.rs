@@ -233,9 +233,7 @@ fn exectute_impl(
                 }
             }
 
-            WamInstr::PutVar {
-                name, argreg: reg, ..
-            } => {
+            WamInstr::PutVar { name, reg, .. } => {
                 let cell_id = heap.insert_var(name.clone());
                 let uf_id = layered_uf.alloc_node();
                 layered_uf.set_cell(uf_id, cell_id);
