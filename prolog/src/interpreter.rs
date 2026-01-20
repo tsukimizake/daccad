@@ -227,7 +227,7 @@ fn exectute_impl(
                 let prev_id = registers.get(reg);
                 if !prev_id.is_empty() {
                     let new_id = layered_uf.alloc_node();
-                    layered_uf.union(prev_id, new_id);
+                    layered_uf.union(new_id, prev_id);
                 } else {
                     panic!("SetVal: register is empty");
                 }
@@ -318,9 +318,8 @@ fn exectute_impl(
                 *exec_mode = ExecMode::ResolvedToTrue;
                 // }
             }
-            WamInstr::Error { message } => {
+            WamInstr::Error { message: _ } => {
                 *exec_mode = ExecMode::ResolvedToFalse;
-                println!("Error instruction executed: {}", message);
             }
 
             // トップレベル引数の変数の初回出現。レジスタには既にクエリからの値が入っている。
@@ -335,7 +334,6 @@ fn exectute_impl(
                 registers.set(with, with_id);
 
                 if !unify(reg_id, with_id, heap, layered_uf) {
-                    println!("  unify failed!");
                     *exec_mode = ExecMode::ResolvedToFalse;
                 }
             }
