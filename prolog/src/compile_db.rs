@@ -16,8 +16,15 @@ pub fn compile_db(db: Vec<Clause>) -> Vec<WamInstr> {
                 let mut declared_vars = HashMap::new();
                 compile_db_term_top(&term, &reg_map, &mut declared_vars)
             }
-            Clause::Rule { head: _, body: _ } => {
-                todo!();
+            Clause::Rule { head, body } => {
+                let mut reg_map = HashMap::new();
+                let mut reg_manager = RegisterManager::new();
+                alloc_registers(&head, &mut reg_map, &mut reg_manager);
+                for goal in &body {
+                    alloc_registers(goal, &mut reg_map, &mut reg_manager);
+                }
+                let mut declared_vars = HashMap::new();
+                compile_rule(&head, &body, &reg_map, &mut declared_vars)
             }
         })
         .collect()
@@ -61,6 +68,146 @@ fn compile_db_term_top(
         _ => {
             todo!("{:?}", term)
         }
+    }
+}
+
+fn compile_rule(
+    head: &Term,
+    body: &[Term],
+    _reg_map: &HashMap<TermId, WamReg>,
+    declared_vars: &mut HashMap<String, WamReg>,
+) -> Vec<WamInstr> {
+    match head {
+        Term::Struct { functor, args, .. } => {
+            let mut res = Vec::with_capacity(20);
+            res.push(WamInstr::Label {
+                name: functor.clone(),
+                arity: args.len(),
+            });
+
+            // bodyの複数のトップレベルfunctorにわたって出現する変数の数をカウント
+            let cross_goal_var_count = count_cross_goal_vars(body) as u32;
+            res.push(WamInstr::Allocate {
+                size: cross_goal_var_count,
+            });
+
+            // head引数をGetVar/GetValで処理
+            let mut perm_reg_counter = args.len();
+            for (arg_index, arg) in args.iter().enumerate() {
+                let reg = WamReg::X(arg_index);
+                match arg {
+                    Term::Var { name, .. } => {
+                        if name != "_" && declared_vars.contains_key(name) {
+                            res.push(WamInstr::GetVal {
+                                name: name.to_string(),
+                                with: declared_vars[name],
+                                reg,
+                            });
+                        } else {
+                            let with = WamReg::X(perm_reg_counter);
+                            perm_reg_counter += 1;
+                            if name != "_" {
+                                declared_vars.insert(name.to_string(), with);
+                            }
+                            res.push(WamInstr::GetVar {
+                                name: name.to_string(),
+                                with,
+                                reg,
+                            });
+                        }
+                    }
+                    _ => todo!("{:?}", arg),
+                }
+            }
+
+            // bodyの各ゴールをコンパイル
+            for goal in body {
+                res.extend(compile_body_goal(goal, declared_vars, &mut perm_reg_counter));
+            }
+
+            res.push(WamInstr::Deallocate);
+            res
+        }
+        _ => todo!("{:?}", head),
+    }
+}
+
+fn count_cross_goal_vars(body: &[Term]) -> usize {
+    use std::collections::HashMap;
+    let mut var_goal_count: HashMap<String, usize> = HashMap::new();
+
+    for goal in body {
+        let mut goal_vars = std::collections::HashSet::new();
+        collect_var_names(goal, &mut goal_vars);
+        for var in goal_vars {
+            *var_goal_count.entry(var).or_insert(0) += 1;
+        }
+    }
+
+    var_goal_count.values().filter(|&&count| count > 1).count()
+}
+
+fn collect_var_names(term: &Term, result: &mut std::collections::HashSet<String>) {
+    match term {
+        Term::Var { name, .. } => {
+            if name != "_" {
+                result.insert(name.clone());
+            }
+        }
+        Term::Struct { args, .. } => {
+            for arg in args {
+                collect_var_names(arg, result);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn compile_body_goal(
+    goal: &Term,
+    declared_vars: &mut HashMap<String, WamReg>,
+    perm_reg_counter: &mut usize,
+) -> Vec<WamInstr> {
+    match goal {
+        Term::Struct { functor, args, .. } => {
+            let mut res = Vec::new();
+
+            // 各引数をPutVar/PutValで引数レジスタにセット
+            for (arg_index, arg) in args.iter().enumerate() {
+                let target_reg = WamReg::X(arg_index);
+                match arg {
+                    Term::Var { name, .. } => {
+                        if name != "_" && declared_vars.contains_key(name) {
+                            res.push(WamInstr::PutVal {
+                                name: name.to_string(),
+                                reg: target_reg,
+                                with: declared_vars[name],
+                            });
+                        } else {
+                            let with = WamReg::X(*perm_reg_counter);
+                            *perm_reg_counter += 1;
+                            if name != "_" {
+                                declared_vars.insert(name.to_string(), with);
+                            }
+                            res.push(WamInstr::PutVar {
+                                name: name.to_string(),
+                                reg: target_reg,
+                                with,
+                            });
+                        }
+                    }
+                    _ => todo!("{:?}", arg),
+                }
+            }
+
+            res.push(WamInstr::CallTemp {
+                predicate: functor.clone(),
+                arity: args.len(),
+            });
+
+            res
+        }
+        _ => todo!("{:?}", goal),
     }
 }
 
@@ -335,7 +482,7 @@ mod tests {
                     name: "p".to_string(),
                     arity: 2,
                 },
-                WamInstr::Allocate { size: 2 },
+                WamInstr::Allocate { size: 1 },
                 WamInstr::GetVar {
                     name: "X".to_string(),
                     with: WamReg::X(2),
@@ -353,7 +500,7 @@ mod tests {
                 },
                 WamInstr::PutVar {
                     name: "Z".to_string(),
-                    reg: WamReg::X(0),
+                    reg: WamReg::X(1),
                     with: WamReg::X(4),
                 },
                 WamInstr::CallTemp {

@@ -115,11 +115,11 @@ fn compile_top_arg(
                 let occurrences = &var_occurrences[name];
                 if occurrences.len() > 1 {
                     // 他にも出現がある → PutVar
-                    let reg2 = occurrences[1]; // 2番目の出現のレジスタ
+                    let with = occurrences[1]; // 2番目の出現のレジスタ
                     declared_vars.insert(name.clone(), reg2);
                     vec![WamInstr::PutVar {
                         name: name.clone(),
-                        reg: reg,
+                        reg,
                         with,
                     }]
                 } else {
