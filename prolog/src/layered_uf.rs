@@ -345,7 +345,7 @@ impl LayeredUf {
         // 常に l <- r の向きでリンク (lがrを指す、rがルートになる)
         current_layer[l_localroot].local = r_localroot;
 
-        return true;
+        true
     }
 
     #[allow(unused)]
