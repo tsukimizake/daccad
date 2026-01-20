@@ -6,9 +6,9 @@ use std::rc::Rc;
 pub struct CellIndex(usize);
 impl CellIndex {
     pub fn is_empty(&self) -> bool {
-        self.0 == 0
+        self.0 == usize::MAX
     }
-    pub(crate) const EMPTY: CellIndex = CellIndex(0);
+    pub(crate) const EMPTY: CellIndex = CellIndex(usize::MAX);
 
     pub fn is_var(&self, heap: &CellHeap) -> bool {
         matches!(&*heap[*self], Cell::Var { .. })
