@@ -504,4 +504,93 @@ mod tests {
         )];
         assert_eq!(result, Ok(expected));
     }
+
+    // 再帰的unifyのテスト
+
+    #[test]
+    fn recursive_unify_nested_struct_match() {
+        // 両方同じネスト構造 -> 成功
+        let (query, query_term) = compile_program("f(a(b)).", "f(a(b)).");
+        let result = execute_instructions(query, query_term.clone());
+        assert_eq!(result, Ok(query_term));
+    }
+
+    #[test]
+    fn recursive_unify_nested_struct_mismatch_inner() {
+        // 内側の引数が異なる -> 失敗
+        let (query, query_term) = compile_program("f(a(b)).", "f(a(c)).");
+        let result = execute_instructions(query, query_term);
+        assert_eq!(result, Err(()));
+    }
+
+    #[test]
+    fn recursive_unify_nested_struct_mismatch_functor() {
+        // 内側のファンクタが異なる -> 失敗
+        let (query, query_term) = compile_program("f(a(b)).", "f(c(b)).");
+        let result = execute_instructions(query, query_term);
+        assert_eq!(result, Err(()));
+    }
+
+    #[test]
+    fn recursive_unify_var_in_nested_struct() {
+        // DBの変数がネスト構造内の値に束縛される
+        let (query, query_term) = compile_program("f(a(X)).", "f(a(b)).");
+        let result = execute_instructions(query, query_term.clone());
+        assert_eq!(result, Ok(query_term));
+    }
+
+    #[test]
+    fn recursive_unify_query_var_binds_in_nested() {
+        // クエリ変数がネスト構造内の値に束縛される
+        let (query, query_term) = compile_program("f(a(b)).", "f(a(X)).");
+        let result = execute_instructions(query, query_term);
+        let expected = vec![Term::new_struct(
+            "f".to_string(),
+            vec![Term::new_struct(
+                "a".to_string(),
+                vec![Term::new_struct("b".to_string(), vec![])],
+            )],
+        )];
+        assert_eq!(result, Ok(expected));
+    }
+
+    #[test]
+    fn recursive_unify_multiple_args() {
+        // 複数引数でそれぞれネスト構造を持つ
+        let (query, query_term) = compile_program("f(a(b), c(d)).", "f(a(b), c(d)).");
+        let result = execute_instructions(query, query_term.clone());
+        assert_eq!(result, Ok(query_term));
+    }
+
+    #[test]
+    fn recursive_unify_multiple_args_one_mismatch() {
+        // 複数引数の一つがミスマッチ
+        let (query, query_term) = compile_program("f(a(b), c(d)).", "f(a(b), c(e)).");
+        let result = execute_instructions(query, query_term);
+        assert_eq!(result, Err(()));
+    }
+
+    #[test]
+    fn recursive_unify_three_levels_deep() {
+        // 3段階のネスト
+        let (query, query_term) = compile_program("f(a(b(c))).", "f(a(b(c))).");
+        let result = execute_instructions(query, query_term.clone());
+        assert_eq!(result, Ok(query_term));
+    }
+
+    #[test]
+    fn recursive_unify_three_levels_deep_mismatch() {
+        // 3段階のネストで最深部がミスマッチ
+        let (query, query_term) = compile_program("f(a(b(c))).", "f(a(b(d))).");
+        let result = execute_instructions(query, query_term);
+        assert_eq!(result, Err(()));
+    }
+
+    #[test]
+    fn recursive_unify_var_at_deep_level() {
+        // 深い位置の変数が束縛される
+        let (query, query_term) = compile_program("f(a(b(X))).", "f(a(b(c))).");
+        let result = execute_instructions(query, query_term.clone());
+        assert_eq!(result, Ok(query_term));
+    }
 }
