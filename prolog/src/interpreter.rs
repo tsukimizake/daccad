@@ -208,12 +208,12 @@ fn exectute_impl(
             WamInstr::PutStruct {
                 functor,
                 arity,
-                reg,
+                arg_reg,
             } => {
                 let cell_id = heap.insert_struct(functor, *arity);
                 let uf_id = layered_uf.alloc_node();
                 layered_uf.set_cell(uf_id, cell_id);
-                registers.set(reg, uf_id);
+                registers.set(arg_reg, uf_id);
             }
 
             WamInstr::SetVar { name, reg } => {
@@ -233,11 +233,11 @@ fn exectute_impl(
                 }
             }
 
-            WamInstr::PutVar { name, reg, .. } => {
+            WamInstr::PutVar { name, arg_reg, .. } => {
                 let cell_id = heap.insert_var(name.clone());
                 let uf_id = layered_uf.alloc_node();
                 layered_uf.set_cell(uf_id, cell_id);
-                registers.set(reg, uf_id);
+                registers.set(arg_reg, uf_id);
             }
 
             WamInstr::GetStruct {

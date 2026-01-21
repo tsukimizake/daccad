@@ -174,13 +174,13 @@ fn compile_body_goal(
 
             // 各引数をPutVar/PutValで引数レジスタにセット
             for (arg_index, arg) in args.iter().enumerate() {
-                let target_reg = WamReg::X(arg_index);
+                let arg_reg = WamReg::X(arg_index);
                 match arg {
                     Term::Var { name, .. } => {
                         if name != "_" && declared_vars.contains_key(name) {
                             res.push(WamInstr::PutVal {
                                 name: name.to_string(),
-                                reg: target_reg,
+                                arg_reg,
                                 with: declared_vars[name],
                             });
                         } else {
@@ -191,7 +191,7 @@ fn compile_body_goal(
                             }
                             res.push(WamInstr::PutVar {
                                 name: name.to_string(),
-                                reg: target_reg,
+                                arg_reg,
                                 with,
                             });
                         }
@@ -495,12 +495,12 @@ mod tests {
                 },
                 WamInstr::PutVal {
                     name: "X".to_string(),
-                    reg: WamReg::X(0),
+                    arg_reg: WamReg::X(0),
                     with: WamReg::X(2),
                 },
                 WamInstr::PutVar {
                     name: "Z".to_string(),
-                    reg: WamReg::X(1),
+                    arg_reg: WamReg::X(1),
                     with: WamReg::X(4),
                 },
                 WamInstr::CallTemp {
@@ -509,12 +509,12 @@ mod tests {
                 },
                 WamInstr::PutVal {
                     name: "Z".to_string(),
-                    reg: WamReg::X(0),
+                    arg_reg: WamReg::X(0),
                     with: WamReg::X(4),
                 },
                 WamInstr::PutVal {
                     name: "Y".to_string(),
-                    reg: WamReg::X(1),
+                    arg_reg: WamReg::X(1),
                     with: WamReg::X(3),
                 },
                 WamInstr::CallTemp {

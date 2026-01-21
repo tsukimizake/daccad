@@ -72,7 +72,7 @@ mod tests {
                 WamInstr::PutStruct {
                     functor: "john".to_string(),
                     arity: 0,
-                    reg: WamReg::X(0),
+                    arg_reg: WamReg::X(0),
                 },
                 WamInstr::CallTemp {
                     predicate: "parent".to_string(),
@@ -88,7 +88,7 @@ mod tests {
             WamInstr::PutStruct {
                 functor: "john".to_string(),
                 arity: 0,
-                reg: WamReg::X(0),
+                arg_reg: WamReg::X(0),
             },
             WamInstr::Call {
                 predicate: "parent".to_string(),

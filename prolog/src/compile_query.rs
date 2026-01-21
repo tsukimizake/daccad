@@ -93,21 +93,21 @@ fn compile_top_arg(
         Term::Var { name, .. } => {
             if let Some(&existing_reg) = declared_vars.get(name) {
                 // 2回目以降 → PutVal
-                // reg: 引数位置, with: 初回出現時に割り当てたother register
+                // arg_reg: 引数位置, with: 初回出現時に割り当てたother register
                 vec![WamInstr::PutVal {
                     name: name.clone(),
-                    reg: existing_reg,
-                    with: arg_reg,
+                    arg_reg,
+                    with: existing_reg,
                 }]
             } else {
                 // 初出 → PutVar
-                // reg: 引数位置, with: 新しいother register
+                // arg_reg: 引数位置, with: 新しいother register
                 let with = WamReg::X(*other_reg_counter);
                 *other_reg_counter += 1;
                 declared_vars.insert(name.clone(), with);
                 vec![WamInstr::PutVar {
                     name: name.clone(),
-                    reg: arg_reg,
+                    arg_reg,
                     with,
                 }]
             }
@@ -152,11 +152,11 @@ fn compile_struct_arg(
                 }
             }
 
-            // PutStruct を発行（regは引数レジスタ）
+            // PutStruct を発行（arg_regは引数レジスタ）
             result.push(WamInstr::PutStruct {
                 functor: functor.clone(),
                 arity: args.len(),
-                reg: arg_reg,
+                arg_reg,
             });
 
             // 各引数について SetVar/SetVal を発行
@@ -239,13 +239,13 @@ mod tests {
             vec![
                 WamInstr::PutVar {
                     name: "Z".to_string(),
-                    reg: WamReg::X(0),
+                    arg_reg: WamReg::X(0),
                     with: WamReg::X(3),
                 },
                 WamInstr::PutStruct {
                     functor: "h".to_string(),
                     arity: 2,
-                    reg: WamReg::X(1),
+                    arg_reg: WamReg::X(1),
                 },
                 WamInstr::SetVal {
                     name: "Z".to_string(),
@@ -258,7 +258,7 @@ mod tests {
                 WamInstr::PutStruct {
                     functor: "f".to_string(),
                     arity: 1,
-                    reg: WamReg::X(2),
+                    arg_reg: WamReg::X(2),
                 },
                 WamInstr::SetVal {
                     name: "W".to_string(),
@@ -282,7 +282,7 @@ mod tests {
                 WamInstr::PutStruct {
                     functor: "a".to_string(),
                     arity: 1,
-                    reg: WamReg::X(0),
+                    arg_reg: WamReg::X(0),
                 },
                 WamInstr::SetVar {
                     name: "X".to_string(),
@@ -291,7 +291,7 @@ mod tests {
                 WamInstr::PutStruct {
                     functor: "a".to_string(),
                     arity: 1,
-                    reg: WamReg::X(1),
+                    arg_reg: WamReg::X(1),
                 },
                 WamInstr::SetVar {
                     name: "Y".to_string(),
@@ -316,7 +316,7 @@ mod tests {
             vec![
                 WamInstr::PutVar {
                     name: "X".to_string(),
-                    reg: WamReg::X(0),
+                    arg_reg: WamReg::X(0),
                     with: WamReg::X(1),
                 },
                 WamInstr::CallTemp {
@@ -325,7 +325,7 @@ mod tests {
                 },
                 WamInstr::PutVar {
                     name: "Y".to_string(),
-                    reg: WamReg::X(0), // q(Y)の第0引数
+                    arg_reg: WamReg::X(0), // q(Y)の第0引数
                     with: WamReg::X(2),
                 },
                 WamInstr::CallTemp {

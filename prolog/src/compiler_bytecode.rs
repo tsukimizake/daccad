@@ -51,28 +51,28 @@ pub enum WamInstr {
     },
 
     // Query, rule bodyで使用。
-    // 構造体を新たにheap上に作成し、regにセットする。
+    // 構造体を新たにheap上に作成し、arg_regにセットする。
     PutStruct {
         functor: String,
         arity: usize,
-        reg: WamReg,
+        arg_reg: WamReg,
     },
 
     // Query, rule bodyで使用。
-    // 初回出現変数の場合はPutVarでregに変数をセット
+    // 初回出現変数の場合はPutVarでarg_regに変数をセット
     PutVar {
         name: VarName,
-        reg: WamReg,
+        arg_reg: WamReg,
         with: WamReg,
     },
     PutVal {
         name: VarName,
-        reg: WamReg,
+        arg_reg: WamReg,
         with: WamReg,
     },
     PutNumber {
         val: i64,
-        reg: WamReg,
+        arg_reg: WamReg,
     },
 
     SetVar {
