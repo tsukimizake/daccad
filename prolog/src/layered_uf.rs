@@ -19,17 +19,8 @@ pub struct LayeredUf {
     // top layerは最後尾で、それ以前のレイヤーは不変データ構造として扱う
     // layer_indexは半開区間で、layer i は [start_i, start_{i+1}) を意味する
     layer_index: AllLayers,
-
-    // コールスタック
-    // メモリの回収は今のところ実装していない
-    call_stack: Vec<StackFrame>,
 }
 
-#[derive(Debug)]
-pub struct StackFrame {
-    pub return_address: usize,
-    // pub env_base: GlobalParentIndex,
-}
 
 // 本来cellを持つかどうかでenumにしたいところだが性能のためにこの形
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -208,7 +199,6 @@ impl LayeredUf {
         Self {
             parent: Parents(Vec::with_capacity(1000)),
             layer_index,
-            call_stack: Vec::with_capacity(100),
         }
     }
 
@@ -348,25 +338,6 @@ impl LayeredUf {
         current_layer[l_localroot].local = r_localroot;
 
         true
-    }
-
-    pub fn push_stack_frame(&mut self, return_address: usize) {
-        println!("push_stack_frame called stack: {:?}", self.call_stack);
-        // let env_base = GlobalParentIndex(self.parent.len());
-        self.call_stack.push(StackFrame { return_address });
-    }
-
-    pub fn pop_stack_frame(&mut self) -> usize {
-        println!("pop_stack_frame called stack: {:?}", self.call_stack);
-        if let Some(top) = self.call_stack.pop() {
-            top.return_address
-        } else {
-            panic!("pop_stack_frame on empty call_stack")
-        }
-    }
-
-    pub fn stack_frame_is_empty(&self) -> bool {
-        self.call_stack.is_empty()
     }
 
     #[allow(unused)]

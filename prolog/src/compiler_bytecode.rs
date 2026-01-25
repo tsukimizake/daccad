@@ -3,12 +3,14 @@ use std::fmt;
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WamReg {
     X(usize),
+    Y(usize),
 }
 
 impl fmt::Debug for WamReg {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             WamReg::X(n) => write!(f, "X{}", n),
+            WamReg::Y(n) => write!(f, "Y{}", n),
         }
     }
 }

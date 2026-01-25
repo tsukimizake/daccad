@@ -92,7 +92,8 @@ fn compile_rule(
             });
 
             // head引数をGetVar/GetValで処理
-            let mut perm_reg_counter = args.len();
+            // 恒久変数はYレジスタに配置
+            let mut perm_reg_counter = 0;
             for (arg_index, arg) in args.iter().enumerate() {
                 let reg = WamReg::X(arg_index);
                 match arg {
@@ -104,7 +105,7 @@ fn compile_rule(
                                 reg,
                             });
                         } else {
-                            let with = WamReg::X(perm_reg_counter);
+                            let with = WamReg::Y(perm_reg_counter);
                             perm_reg_counter += 1;
                             if name != "_" {
                                 declared_vars.insert(name.to_string(), with);
@@ -178,6 +179,7 @@ fn compile_body_goal(
             let mut res = Vec::new();
 
             // 各引数をPutVar/PutValで引数レジスタにセット
+            // 恒久変数はYレジスタに配置
             for (arg_index, arg) in args.iter().enumerate() {
                 let arg_reg = WamReg::X(arg_index);
                 match arg {
@@ -189,7 +191,7 @@ fn compile_body_goal(
                                 with: declared_vars[name],
                             });
                         } else {
-                            let with = WamReg::X(*perm_reg_counter);
+                            let with = WamReg::Y(*perm_reg_counter);
                             *perm_reg_counter += 1;
                             if name != "_" {
                                 declared_vars.insert(name.to_string(), with);
@@ -490,23 +492,23 @@ mod tests {
                 WamInstr::Allocate { size: 1 },
                 WamInstr::GetVar {
                     name: "X".to_string(),
-                    with: WamReg::X(2),
+                    with: WamReg::Y(0),
                     reg: WamReg::X(0),
                 },
                 WamInstr::GetVar {
                     name: "Y".to_string(),
-                    with: WamReg::X(3),
+                    with: WamReg::Y(1),
                     reg: WamReg::X(1),
                 },
                 WamInstr::PutVal {
                     name: "X".to_string(),
                     arg_reg: WamReg::X(0),
-                    with: WamReg::X(2),
+                    with: WamReg::Y(0),
                 },
                 WamInstr::PutVar {
                     name: "Z".to_string(),
                     arg_reg: WamReg::X(1),
-                    with: WamReg::X(4),
+                    with: WamReg::Y(2),
                 },
                 WamInstr::CallTemp {
                     predicate: "q".to_string(),
@@ -515,12 +517,12 @@ mod tests {
                 WamInstr::PutVal {
                     name: "Z".to_string(),
                     arg_reg: WamReg::X(0),
-                    with: WamReg::X(4),
+                    with: WamReg::Y(2),
                 },
                 WamInstr::PutVal {
                     name: "Y".to_string(),
                     arg_reg: WamReg::X(1),
-                    with: WamReg::X(3),
+                    with: WamReg::Y(1),
                 },
                 WamInstr::CallTemp {
                     predicate: "r".to_string(),

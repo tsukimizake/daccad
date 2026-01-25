@@ -5,39 +5,65 @@ use crate::layered_uf::{GlobalParentIndex, LayeredUf, Parent};
 use crate::parse::Term;
 use crate::resolve_term::resolve_term;
 
+type XReg = GlobalParentIndex;
+type YReg = GlobalParentIndex;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Registers {
-    registers: Vec<GlobalParentIndex>,
+    regs: Vec<XReg>,
 }
 
 impl Registers {
     fn new() -> Self {
         Self {
-            registers: vec![GlobalParentIndex::EMPTY; 32],
+            regs: vec![GlobalParentIndex::EMPTY; 32],
         }
     }
+}
 
-    #[inline]
-    pub(crate) fn get(&self, reg: &WamReg) -> GlobalParentIndex {
-        let index = match reg {
-            WamReg::X(index) => *index,
-        };
-        self.registers
-            .get(index)
+#[inline]
+pub(crate) fn get_reg(
+    registers: &Registers,
+    call_stack: &[StackFrame],
+    reg: &WamReg,
+) -> GlobalParentIndex {
+    match reg {
+        WamReg::X(index) => registers
+            .regs
+            .get(*index)
             .copied()
-            .unwrap_or(GlobalParentIndex::EMPTY)
+            .unwrap_or(GlobalParentIndex::EMPTY),
+        WamReg::Y(index) => call_stack
+            .last()
+            .and_then(|frame| frame.regs.get(*index).copied())
+            .unwrap_or(GlobalParentIndex::EMPTY),
     }
+}
 
-    #[inline]
-    pub fn set(&mut self, reg: &WamReg, value: GlobalParentIndex) {
-        let index = match reg {
-            WamReg::X(index) => *index,
-        };
-
-        if index >= self.registers.len() {
-            self.registers.resize(index + 1, GlobalParentIndex::EMPTY);
+#[inline]
+pub(crate) fn set_reg(
+    registers: &mut Registers,
+    call_stack: &mut [StackFrame],
+    reg: &WamReg,
+    value: GlobalParentIndex,
+) {
+    match reg {
+        WamReg::X(index) => {
+            if *index >= registers.regs.len() {
+                registers.regs.resize(*index + 1, GlobalParentIndex::EMPTY);
+            }
+            registers.regs[*index] = value;
         }
-        self.registers[index] = value;
+        WamReg::Y(index) => {
+            if let Some(frame) = call_stack.last_mut() {
+                if *index >= frame.regs.len() {
+                    frame.regs.resize(*index + 1, GlobalParentIndex::EMPTY);
+                }
+                frame.regs[*index] = value;
+            } else {
+                panic!("set_reg Y: call_stack is empty");
+            }
+        }
     }
 }
 
@@ -46,6 +72,12 @@ enum ExecMode {
     Continue,
     ResolvedToTrue,
     ResolvedToFalse,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct StackFrame {
+    return_address: usize,
+    pub(crate) regs: Vec<YReg>,
 }
 
 // Readが持っているのは構造体の親Indexを起点としたカーソル。WAMでいうSレジスタの値
@@ -67,12 +99,13 @@ fn getstruct_cell_ref(
     layered_uf: &mut LayeredUf,
     read_write_mode: &mut ReadWriteMode,
     exec_mode: &mut ExecMode,
+    call_stack: &mut [StackFrame],
 ) {
     match heap.value(existing_cell).as_ref() {
         Cell::Var { .. } => {
             let struct_cell = heap.insert_struct(functor, *arity);
             let new_id = layered_uf.alloc_node();
-            registers.set(op_reg, new_id);
+            set_reg(registers, call_stack, op_reg, new_id);
             layered_uf.union(existing_parent_index, new_id);
             layered_uf.set_cell(new_id, struct_cell);
             heap.set_ref(existing_cell, struct_cell);
@@ -85,7 +118,7 @@ fn getstruct_cell_ref(
             if existing_functor == functor && existing_arity == arity {
                 let uf_id = layered_uf.alloc_node();
                 layered_uf.set_cell(uf_id, existing_cell);
-                registers.set(op_reg, uf_id);
+                set_reg(registers, call_stack, op_reg, uf_id);
                 let local_root = layered_uf.find_root(existing_parent_index);
                 *read_write_mode =
                     ReadWriteMode::Read(GlobalParentIndex::offset(local_root.rooted, 1));
@@ -105,6 +138,7 @@ fn getstruct_cell_ref(
                 layered_uf,
                 read_write_mode,
                 exec_mode,
+                call_stack,
             );
         }
     }
@@ -199,6 +233,7 @@ fn exectute_impl(
     layered_uf: &mut LayeredUf,
     exec_mode: &mut ExecMode,
     read_write_mode: &mut ReadWriteMode,
+    call_stack: &mut Vec<StackFrame>,
 ) {
     if let Some(current_instr) = instructions.get(*program_counter) {
         match current_instr {
@@ -210,18 +245,18 @@ fn exectute_impl(
                 let cell_id = heap.insert_struct(functor, *arity);
                 let uf_id = layered_uf.alloc_node();
                 layered_uf.set_cell(uf_id, cell_id);
-                registers.set(arg_reg, uf_id);
+                set_reg(registers, call_stack, arg_reg, uf_id);
             }
 
             WamInstr::SetVar { name, reg } => {
                 let cell_id = heap.insert_var(name.clone());
                 let uf_id = layered_uf.alloc_node();
                 layered_uf.set_cell(uf_id, cell_id);
-                registers.set(reg, uf_id);
+                set_reg(registers, call_stack, reg, uf_id);
             }
 
             WamInstr::SetVal { reg, .. } => {
-                let prev_id = registers.get(reg);
+                let prev_id = get_reg(registers, call_stack, reg);
                 if !prev_id.is_empty() {
                     let new_id = layered_uf.alloc_node();
                     layered_uf.union(new_id, prev_id);
@@ -239,15 +274,15 @@ fn exectute_impl(
                 let cell_id = heap.insert_var(name.clone());
                 let uf_id = layered_uf.alloc_node();
                 layered_uf.set_cell(uf_id, cell_id);
-                registers.set(arg_reg, uf_id);
-                registers.set(with, uf_id);
+                set_reg(registers, call_stack, arg_reg, uf_id);
+                set_reg(registers, call_stack, with, uf_id);
             }
 
             WamInstr::PutVal { arg_reg, with, .. } => {
                 // with レジスタの内容を arg_reg にコピー
-                let with_id = registers.get(with);
+                let with_id = get_reg(registers, call_stack, with);
                 if !with_id.is_empty() {
-                    registers.set(arg_reg, with_id);
+                    set_reg(registers, call_stack, arg_reg, with_id);
                 } else {
                     panic!("PutVal: with register is empty");
                 }
@@ -258,7 +293,7 @@ fn exectute_impl(
                 arity,
                 reg: op_reg,
             } => {
-                let id = registers.get(op_reg);
+                let id = get_reg(registers, call_stack, op_reg);
                 if !id.is_empty() {
                     let Parent { cell, rooted, .. } = layered_uf.find_root(id);
                     getstruct_cell_ref(
@@ -272,6 +307,7 @@ fn exectute_impl(
                         layered_uf,
                         read_write_mode,
                         exec_mode,
+                        call_stack,
                     );
                 } else {
                     panic!("GetStruct: register is empty");
@@ -282,7 +318,7 @@ fn exectute_impl(
                 match read_write_mode {
                     ReadWriteMode::Read(read_index) => {
                         // just reference from register
-                        registers.set(reg, *read_index);
+                        set_reg(registers, call_stack, reg, *read_index);
 
                         *read_write_mode =
                             ReadWriteMode::Read(GlobalParentIndex::offset(*read_index, 1));
@@ -292,19 +328,19 @@ fn exectute_impl(
                         let cell_id = heap.insert_var(name.clone());
                         let uf_id = layered_uf.alloc_node();
                         layered_uf.set_cell(uf_id, cell_id);
-                        registers.set(reg, uf_id);
+                        set_reg(registers, call_stack, reg, uf_id);
                     }
                 }
             }
             WamInstr::UnifyVal { reg, .. } => match read_write_mode {
                 ReadWriteMode::Read(read_index) => {
-                    let id = registers.get(reg);
+                    let id = get_reg(registers, call_stack, reg);
                     layered_uf.union(id, *read_index);
                     *read_write_mode =
                         ReadWriteMode::Read(GlobalParentIndex::offset(*read_index, 1));
                 }
                 ReadWriteMode::Write => {
-                    let id = registers.get(reg);
+                    let id = get_reg(registers, call_stack, reg);
                     let new_id = layered_uf.alloc_node();
                     layered_uf.union(id, new_id);
                 }
@@ -315,14 +351,23 @@ fn exectute_impl(
                 arity: _,
                 to_program_counter,
             } => {
-                layered_uf.push_stack_frame(*program_counter);
+                println!("push_stack_frame called stack: {:?}", call_stack);
+                // 現在のフレームに return_address を設定
+                if let Some(frame) = call_stack.last_mut() {
+                    frame.return_address = *program_counter;
+                }
                 *program_counter = *to_program_counter;
             }
             WamInstr::Label { name: _, arity: _ } => {}
             WamInstr::Proceed => {
-                *program_counter = layered_uf.pop_stack_frame();
-                if layered_uf.stack_frame_is_empty() {
+                println!("pop_stack_frame called stack: {:?}", call_stack);
+                // クエリのフレームだけが残っている場合は終了
+                if call_stack.len() <= 1 {
                     *exec_mode = ExecMode::ResolvedToTrue;
+                } else if let Some(frame) = call_stack.last() {
+                    *program_counter = frame.return_address;
+                } else {
+                    panic!("Proceed on empty call_stack")
                 }
             }
             WamInstr::Error { message: _ } => {
@@ -331,14 +376,14 @@ fn exectute_impl(
 
             // トップレベル引数の変数の初回出現。レジスタには既にクエリからの値が入っている。
             WamInstr::GetVar { name, reg, with } => {
-                let reg_id = registers.get(reg);
+                let reg_id = get_reg(registers, call_stack, reg);
                 debug_assert!(!reg_id.is_empty(), "GetVar: register is empty");
 
                 // DB側の変数用に新しいノードとセルを作成
                 let db_var_cell = heap.insert_var(name.clone());
                 let with_id = layered_uf.alloc_node();
                 layered_uf.set_cell(with_id, db_var_cell);
-                registers.set(with, with_id);
+                set_reg(registers, call_stack, with, with_id);
 
                 if !unify(reg_id, with_id, heap, layered_uf) {
                     *exec_mode = ExecMode::ResolvedToFalse;
@@ -347,16 +392,25 @@ fn exectute_impl(
 
             // トップレベル引数の変数の2回目以降の出現
             WamInstr::GetVal { with, reg, .. } => {
-                let with_id = registers.get(with);
-                let reg_id = registers.get(reg);
+                let with_id = get_reg(registers, call_stack, with);
+                let reg_id = get_reg(registers, call_stack, reg);
                 if !unify(with_id, reg_id, heap, layered_uf) {
                     *exec_mode = ExecMode::ResolvedToFalse;
                 }
             }
 
-            // 現状全ての命令でスタックに確保しており、バックトラックまで解放していないためnop
-            WamInstr::Allocate { .. } => {}
-            WamInstr::Deallocate => {}
+            // スタックフレームを確保してYレジスタを初期化
+            WamInstr::Allocate { size } => {
+                call_stack.push(StackFrame {
+                    return_address: 0,
+                    regs: vec![GlobalParentIndex::EMPTY; *size as usize],
+                });
+            }
+            WamInstr::Deallocate => {
+                // フレームをポップ
+                println!("deallocate called stack: {:?}", call_stack);
+                call_stack.pop();
+            }
 
             instr => {
                 todo!("{:?}", instr);
@@ -374,6 +428,12 @@ pub fn execute_instructions(query: CompiledQuery, orig_query: Vec<Term>) -> Resu
     let mut cell_heap = CellHeap::new();
     let mut registers = Registers::new();
     let mut read_write_mode = ReadWriteMode::Write;
+    let mut call_stack: Vec<StackFrame> = Vec::with_capacity(100);
+
+    call_stack.push(StackFrame {
+        return_address: 0,
+        regs: vec![GlobalParentIndex::EMPTY; 32],
+    });
 
     while exec_mode == ExecMode::Continue {
         exectute_impl(
@@ -384,6 +444,7 @@ pub fn execute_instructions(query: CompiledQuery, orig_query: Vec<Term>) -> Resu
             &mut layered_uf,
             &mut exec_mode,
             &mut read_write_mode,
+            &mut call_stack,
         );
         program_counter += 1;
     }
@@ -402,6 +463,7 @@ pub fn execute_instructions(query: CompiledQuery, orig_query: Vec<Term>) -> Resu
                 &mut registers,
                 &cell_heap,
                 &mut layered_uf,
+                &call_stack,
             )
         })
         .collect();
@@ -839,3 +901,4 @@ mod tests {
         assert_eq!(result, Ok(expected));
     }
 }
+
