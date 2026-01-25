@@ -19,6 +19,16 @@ pub struct LayeredUf {
     // top layerは最後尾で、それ以前のレイヤーは不変データ構造として扱う
     // layer_indexは半開区間で、layer i は [start_i, start_{i+1}) を意味する
     layer_index: AllLayers,
+
+    // コールスタック
+    // メモリの回収は今のところ実装していない
+    call_stack: Vec<StackFrame>,
+}
+
+#[derive(Debug)]
+pub struct StackFrame {
+    pub return_address: usize,
+    // pub env_base: GlobalParentIndex,
 }
 
 // 本来cellを持つかどうかでenumにしたいところだが性能のためにこの形
@@ -123,19 +133,13 @@ impl DerefMut for Parents {
     }
 }
 
-struct OldLayersParents<'a>(&'a mut [Parent]);
+struct OldLayersParents<'a>(&'a [Parent]);
 struct CurrentLayerParents<'a>(&'a mut [Parent]);
 
 impl<'a> Index<GlobalParentIndex> for OldLayersParents<'a> {
     type Output = Parent;
     fn index(&self, i: GlobalParentIndex) -> &Self::Output {
         &self.0[i.0]
-    }
-}
-
-impl<'a> IndexMut<GlobalParentIndex> for OldLayersParents<'a> {
-    fn index_mut(&mut self, i: GlobalParentIndex) -> &mut Self::Output {
-        &mut self.0[i.0]
     }
 }
 
@@ -204,6 +208,7 @@ impl LayeredUf {
         Self {
             parent: Parents(Vec::with_capacity(1000)),
             layer_index,
+            call_stack: Vec::with_capacity(100),
         }
     }
 
@@ -240,7 +245,6 @@ impl LayeredUf {
         println!("{}", out);
     }
 
-    #[allow(unused)]
     pub fn alloc_node(&mut self) -> GlobalParentIndex {
         let global_id = GlobalParentIndex(self.parent.len());
         let top_layer_start = self.layer_index.get_top();
@@ -316,18 +320,16 @@ impl LayeredUf {
     }
 
     // nodeのrootを返す. 注意点として、local_rootにcellが設定されている場合はそれを優先して返す
-    #[allow(unused)]
     pub fn find_root<'a>(&'a mut self, id: GlobalParentIndex) -> &'a Parent {
-        let (mut old_layers, mut current_layer, is_top_layer) = self.split_layers(id);
+        let (old_layers, mut current_layer, is_top_layer) = self.split_layers(id);
         let root_idx = find_root_impl(&old_layers, &mut current_layer, is_top_layer, id);
         &self.parent[root_idx]
     }
 
     // 常に l <- r の向きでリンク（レイヤをまたいで大きい方向に参照することはない）
     // l_id, r_idはともにtop layerに存在することが前提
-    #[allow(unused)]
     pub fn union(&mut self, l_id: GlobalParentIndex, r_id: GlobalParentIndex) -> bool {
-        let (mut old_layers, mut current_layer, is_top_layer) = self.split_layers(l_id);
+        let (old_layers, mut current_layer, is_top_layer) = self.split_layers(l_id);
 
         debug_assert!(is_top_layer, "union called on non-top layer(l)");
         debug_assert!(
@@ -346,6 +348,25 @@ impl LayeredUf {
         current_layer[l_localroot].local = r_localroot;
 
         true
+    }
+
+    pub fn push_stack_frame(&mut self, return_address: usize) {
+        println!("push_stack_frame called stack: {:?}", self.call_stack);
+        // let env_base = GlobalParentIndex(self.parent.len());
+        self.call_stack.push(StackFrame { return_address });
+    }
+
+    pub fn pop_stack_frame(&mut self) -> usize {
+        println!("pop_stack_frame called stack: {:?}", self.call_stack);
+        if let Some(top) = self.call_stack.pop() {
+            top.return_address
+        } else {
+            panic!("pop_stack_frame on empty call_stack")
+        }
+    }
+
+    pub fn stack_frame_is_empty(&self) -> bool {
+        self.call_stack.is_empty()
     }
 
     #[allow(unused)]

@@ -110,13 +110,6 @@ fn getstruct_cell_ref(
     }
 }
 
-/// 2つのUFノードを統一する
-/// - Var + Var: union (r がルートになる)
-/// - Var + Struct: Var を Struct への参照に変更し、Struct がルートになるように union
-/// - Struct + Struct: functor/arity が一致すれば成功（引数の再帰的統一は未実装）、不一致なら失敗
-///
-/// 戻り値: 統一成功なら true、失敗なら false
-
 /// CellIndex から VarRef を辿って実際のセルを取得
 fn deref_cell(cell: CellIndex, heap: &CellHeap) -> CellIndex {
     match heap.value(cell).as_ref() {
@@ -125,6 +118,10 @@ fn deref_cell(cell: CellIndex, heap: &CellHeap) -> CellIndex {
     }
 }
 
+/// 2つのUFノードを統一する
+/// - Var + Var: union (r がルートになる)
+/// - Var + Struct: Var を Struct への参照に変更し、Struct がルートになるように union
+/// - Struct + Struct: functor/arity が一致すれば成功（引数の再帰的統一は未実装）、不一致なら失敗
 fn unify(
     l_id: GlobalParentIndex,
     r_id: GlobalParentIndex,
@@ -233,11 +230,27 @@ fn exectute_impl(
                 }
             }
 
-            WamInstr::PutVar { name, arg_reg, .. } => {
+            WamInstr::PutVar {
+                name,
+                arg_reg,
+                with,
+                ..
+            } => {
                 let cell_id = heap.insert_var(name.clone());
                 let uf_id = layered_uf.alloc_node();
                 layered_uf.set_cell(uf_id, cell_id);
                 registers.set(arg_reg, uf_id);
+                registers.set(with, uf_id);
+            }
+
+            WamInstr::PutVal { arg_reg, with, .. } => {
+                // with レジスタの内容を arg_reg にコピー
+                let with_id = registers.get(with);
+                if !with_id.is_empty() {
+                    registers.set(arg_reg, with_id);
+                } else {
+                    panic!("PutVal: with register is empty");
+                }
             }
 
             WamInstr::GetStruct {
@@ -263,18 +276,6 @@ fn exectute_impl(
                 } else {
                     panic!("GetStruct: register is empty");
                 }
-            }
-
-            WamInstr::Call {
-                predicate: _,
-                arity: _,
-                to_program_counter,
-            } => {
-                // stack.push(Frame::Environment {
-                //     return_pc: *program_counter,
-                //     registers: Vec::new(), // TODO
-                // });
-                *program_counter = *to_program_counter;
             }
 
             WamInstr::UnifyVar { name, reg } => {
@@ -309,12 +310,20 @@ fn exectute_impl(
                 }
             },
 
+            WamInstr::Call {
+                predicate: _,
+                arity: _,
+                to_program_counter,
+            } => {
+                layered_uf.push_stack_frame(*program_counter);
+                *program_counter = *to_program_counter;
+            }
             WamInstr::Label { name: _, arity: _ } => {}
             WamInstr::Proceed => {
-                // stack.pop();
-                // if stack.len() == 0 {
-                *exec_mode = ExecMode::ResolvedToTrue;
-                // }
+                *program_counter = layered_uf.pop_stack_frame();
+                if layered_uf.stack_frame_is_empty() {
+                    *exec_mode = ExecMode::ResolvedToTrue;
+                }
             }
             WamInstr::Error { message: _ } => {
                 *exec_mode = ExecMode::ResolvedToFalse;
@@ -344,6 +353,10 @@ fn exectute_impl(
                     *exec_mode = ExecMode::ResolvedToFalse;
                 }
             }
+
+            // 現状全ての命令でスタックに確保しており、バックトラックまで解放していないためnop
+            WamInstr::Allocate { .. } => {}
+            WamInstr::Deallocate => {}
 
             instr => {
                 todo!("{:?}", instr);
@@ -591,18 +604,18 @@ mod tests {
         assert_eq!(result, Ok(query_term));
     }
 
-    // #[test]
-    // fn sample_rule() {
-    //     let (query, query_term) =
-    //         compile_program("p(X,Y) :- q(X, Z), r(Z, Y). q(a, b). r(b, c).", "p(a, B).");
-    //     let result = execute_instructions(query, query_term);
-    //     let expected = vec![Term::new_struct(
-    //         "p".to_string(),
-    //         vec![
-    //             Term::new_struct("a".to_string(), vec![]),
-    //             Term::new_struct("c".to_string(), vec![]),
-    //         ],
-    //     )];
-    //     assert_eq!(result, Ok(expected));
-    // }
+    #[test]
+    fn sample_rule() {
+        let (query, query_term) =
+            compile_program("p(X,Y) :- q(X, Z), r(Z, Y). q(a, b). r(b, c).", "p(a, B).");
+        let result = execute_instructions(query, query_term);
+        let expected = vec![Term::new_struct(
+            "p".to_string(),
+            vec![
+                Term::new_struct("a".to_string(), vec![]),
+                Term::new_struct("c".to_string(), vec![]),
+            ],
+        )];
+        assert_eq!(result, Ok(expected));
+    }
 }

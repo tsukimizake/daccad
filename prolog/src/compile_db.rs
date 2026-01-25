@@ -122,10 +122,15 @@ fn compile_rule(
 
             // bodyの各ゴールをコンパイル
             for goal in body {
-                res.extend(compile_body_goal(goal, declared_vars, &mut perm_reg_counter));
+                res.extend(compile_body_goal(
+                    goal,
+                    declared_vars,
+                    &mut perm_reg_counter,
+                ));
             }
 
             res.push(WamInstr::Deallocate);
+            res.push(WamInstr::Proceed);
             res
         }
         _ => todo!("{:?}", head),
@@ -522,6 +527,7 @@ mod tests {
                     arity: 2,
                 },
                 WamInstr::Deallocate,
+                WamInstr::Proceed,
             ],
         );
     }
