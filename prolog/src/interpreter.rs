@@ -607,7 +607,7 @@ mod tests {
     #[test]
     fn sample_rule() {
         let (query, query_term) =
-            compile_program("p(X,Y) :- q(X, Z), r(Z, Y). q(a, b). r(b, c).", "p(a, B).");
+            compile_program("p(X,Y) :- q(X, Z), r(Z, Y). q(a, b). r(b, c).", "p(A, B).");
         let result = execute_instructions(query, query_term);
         let expected = vec![Term::new_struct(
             "p".to_string(),
@@ -615,6 +615,226 @@ mod tests {
                 Term::new_struct("a".to_string(), vec![]),
                 Term::new_struct("c".to_string(), vec![]),
             ],
+        )];
+        assert_eq!(result, Ok(expected));
+    }
+
+    // ===== ルールのテストケース =====
+
+    #[test]
+    fn rule_single_goal() {
+        let (query, query_term) =
+            compile_program("parent(X) :- father(X). father(tom).", "parent(tom).");
+        let result = execute_instructions(query, query_term.clone());
+        assert_eq!(result, Ok(query_term));
+    }
+
+    #[test]
+    fn rule_single_goal_with_var_query() {
+        let (query, query_term) =
+            compile_program("parent(X) :- father(X). father(tom).", "parent(Y).");
+        let result = execute_instructions(query, query_term);
+        let expected = vec![Term::new_struct(
+            "parent".to_string(),
+            vec![Term::new_struct("tom".to_string(), vec![])],
+        )];
+        assert_eq!(result, Ok(expected));
+    }
+
+    #[test]
+    fn rule_multiple_goals() {
+        let (query, query_term) = compile_program(
+            "grandparent(X, Z) :- parent(X, Y), parent(Y, Z). parent(a, b). parent(b, c).",
+            "grandparent(a, c).",
+        );
+        let result = execute_instructions(query, query_term.clone());
+        assert_eq!(result, Ok(query_term));
+    }
+
+    #[test]
+    fn rule_multiple_goals_with_var() {
+        let (query, query_term) = compile_program(
+            "grandparent(X, Z) :- parent(X, Y), parent(Y, Z). parent(a, b). parent(b, c).",
+            "grandparent(a, W).",
+        );
+        let result = execute_instructions(query, query_term);
+        let expected = vec![Term::new_struct(
+            "grandparent".to_string(),
+            vec![
+                Term::new_struct("a".to_string(), vec![]),
+                Term::new_struct("c".to_string(), vec![]),
+            ],
+        )];
+        assert_eq!(result, Ok(expected));
+    }
+
+    #[test]
+    fn rule_fails_first_subgoal() {
+        let (query, query_term) = compile_program("p(X) :- q(X), r(X). q(b). r(a).", "p(a).");
+        let result = execute_instructions(query, query_term);
+        assert_eq!(result, Err(()));
+    }
+
+    #[test]
+    fn rule_fails_second_subgoal() {
+        let (query, query_term) = compile_program("p(X) :- q(X), r(X). q(a). r(b).", "p(a).");
+        let result = execute_instructions(query, query_term);
+        assert_eq!(result, Err(()));
+    }
+
+    #[test]
+    fn rule_fails_no_matching_fact() {
+        let (query, query_term) = compile_program("p(X) :- q(X). q(a).", "p(b).");
+        let result = execute_instructions(query, query_term);
+        assert_eq!(result, Err(()));
+    }
+
+    #[test]
+    fn rule_chain_two_levels() {
+        let (query, query_term) = compile_program("a(X) :- b(X). b(X) :- c(X). c(foo).", "a(foo).");
+        let result = execute_instructions(query, query_term.clone());
+        assert_eq!(result, Ok(query_term));
+    }
+
+    #[test]
+    fn rule_chain_three_levels() {
+        let (query, query_term) = compile_program(
+            "a(X) :- b(X). b(X) :- c(X). c(X) :- d(X). d(bar).",
+            "a(bar).",
+        );
+        let result = execute_instructions(query, query_term.clone());
+        assert_eq!(result, Ok(query_term));
+    }
+
+    #[test]
+    fn rule_chain_with_var_binding() {
+        let (query, query_term) = compile_program("a(X) :- b(X). b(X) :- c(X). c(baz).", "a(Y).");
+        let result = execute_instructions(query, query_term);
+        let expected = vec![Term::new_struct(
+            "a".to_string(),
+            vec![Term::new_struct("baz".to_string(), vec![])],
+        )];
+        assert_eq!(result, Ok(expected));
+    }
+
+    #[test]
+    fn rule_with_nested_struct_in_fact() {
+        let (query, query_term) = compile_program(
+            "outer(X) :- inner(X). inner(pair(a, b)).",
+            "outer(pair(a, b)).",
+        );
+        let result = execute_instructions(query, query_term.clone());
+        assert_eq!(result, Ok(query_term));
+    }
+
+    #[test]
+    fn rule_with_nested_struct_var_binding() {
+        let (query, query_term) =
+            compile_program("outer(X) :- inner(X). inner(pair(a, b)).", "outer(Y).");
+        let result = execute_instructions(query, query_term);
+        let expected = vec![Term::new_struct(
+            "outer".to_string(),
+            vec![Term::new_struct(
+                "pair".to_string(),
+                vec![
+                    Term::new_struct("a".to_string(), vec![]),
+                    Term::new_struct("b".to_string(), vec![]),
+                ],
+            )],
+        )];
+        assert_eq!(result, Ok(expected));
+    }
+
+    #[test]
+    fn rule_with_deeply_nested_struct() {
+        let (query, query_term) = compile_program(
+            "wrap(X) :- data(X). data(node(leaf(a), leaf(b))).",
+            "wrap(node(leaf(a), leaf(b))).",
+        );
+        let result = execute_instructions(query, query_term.clone());
+        assert_eq!(result, Ok(query_term));
+    }
+
+    #[test]
+    fn rule_shared_variable_in_body() {
+        let (query, query_term) = compile_program("same(X) :- eq(X, X). eq(a, a).", "same(a).");
+        let result = execute_instructions(query, query_term.clone());
+        assert_eq!(result, Ok(query_term));
+    }
+
+    #[test]
+    fn rule_shared_variable_propagation() {
+        let (query, query_term) = compile_program(
+            "connect(X, Z) :- link(X, Y), link(Y, Z). link(a, b). link(b, c).",
+            "connect(a, Z).",
+        );
+        let result = execute_instructions(query, query_term);
+        let expected = vec![Term::new_struct(
+            "connect".to_string(),
+            vec![
+                Term::new_struct("a".to_string(), vec![]),
+                Term::new_struct("c".to_string(), vec![]),
+            ],
+        )];
+        assert_eq!(result, Ok(expected));
+    }
+
+    #[test]
+    fn rule_three_args() {
+        let (query, query_term) = compile_program(
+            "triple(X, Y, Z) :- first(X), second(Y), third(Z). first(a). second(b). third(c).",
+            "triple(A, B, C).",
+        );
+        let result = execute_instructions(query, query_term);
+        let expected = vec![Term::new_struct(
+            "triple".to_string(),
+            vec![
+                Term::new_struct("a".to_string(), vec![]),
+                Term::new_struct("b".to_string(), vec![]),
+                Term::new_struct("c".to_string(), vec![]),
+            ],
+        )];
+        assert_eq!(result, Ok(expected));
+    }
+
+    // バックトラックが必要（同じ述語に複数のファクトがある）
+    #[test]
+    #[ignore]
+    fn rule_mixed_with_facts() {
+        let (query, query_term) = compile_program(
+            "animal(dog). animal(cat). is_pet(X) :- animal(X).",
+            "is_pet(dog).",
+        );
+        let result = execute_instructions(query, query_term.clone());
+        assert_eq!(result, Ok(query_term));
+    }
+
+    #[test]
+    fn rule_head_with_struct() {
+        let (query, query_term) = compile_program(
+            "make_pair(pair(X, Y)) :- left(X), right(Y). left(a). right(b).",
+            "make_pair(pair(a, b)).",
+        );
+        let result = execute_instructions(query, query_term.clone());
+        assert_eq!(result, Ok(query_term));
+    }
+
+    #[test]
+    fn rule_head_with_struct_var_query() {
+        let (query, query_term) = compile_program(
+            "make_pair(pair(X, Y)) :- left(X), right(Y). left(a). right(b).",
+            "make_pair(P).",
+        );
+        let result = execute_instructions(query, query_term);
+        let expected = vec![Term::new_struct(
+            "make_pair".to_string(),
+            vec![Term::new_struct(
+                "pair".to_string(),
+                vec![
+                    Term::new_struct("a".to_string(), vec![]),
+                    Term::new_struct("b".to_string(), vec![]),
+                ],
+            )],
         )];
         assert_eq!(result, Ok(expected));
     }
