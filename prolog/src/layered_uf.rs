@@ -1,6 +1,9 @@
-use std::ops::{Add, Deref, DerefMut, Index, IndexMut, Sub};
+mod internal_vecs;
 
 use crate::cell_heap::CellIndex;
+use internal_vecs::{AllLayers, AllLayersIndex, CurrentLayerParents, LocalParentIndex, OldLayersParents, Parents};
+
+pub use internal_vecs::{GlobalParentIndex, Parent};
 
 // parent配列はglobal indexとlocal indexの2種類のインデックスを持つ
 // local indexはそのlayer内でのindexで、2レイヤ目以降も0から始まる
@@ -21,176 +24,6 @@ pub struct LayeredUf {
     layer_index: AllLayers,
 }
 
-
-// 本来cellを持つかどうかでenumにしたいところだが性能のためにこの形
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Parent {
-    // layerをまたぐ親への参照
-    // top layer以外では不変性を保つため更新されない
-    pub(crate) rooted: GlobalParentIndex,
-    // layer内での親への参照
-    // top layer以外では不変性を保つため更新されない
-    // rooted, local共にindexが小さい物へと参照する.結果として代表元は最もindexが小さいものとなる
-    local: LocalParentIndex,
-
-    // cellへの参照(id)を持つ. 代表元以外の場合は意味を持たない
-    // local rootの場合もそのlayerで書き込まれた場合はそこがそのlayerでのcellとなる
-    pub(crate) cell: CellIndex,
-}
-
-struct Parents(Vec<Parent>);
-
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
-struct LocalParentIndex(usize);
-
-impl LocalParentIndex {
-    fn from_global_index(index: GlobalParentIndex, old_layers_len: usize) -> LocalParentIndex {
-        LocalParentIndex(index.0 - old_layers_len)
-    }
-}
-impl<'a> Index<LocalParentIndex> for CurrentLayerParents<'a> {
-    type Output = Parent;
-    fn index(&self, i: LocalParentIndex) -> &Self::Output {
-        &self.0[i.0]
-    }
-}
-
-impl<'a> IndexMut<LocalParentIndex> for CurrentLayerParents<'a> {
-    fn index_mut(&mut self, i: LocalParentIndex) -> &mut Self::Output {
-        &mut self.0[i.0]
-    }
-}
-
-// Parents全てに対するインデックス型
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
-pub struct GlobalParentIndex(usize);
-
-impl GlobalParentIndex {
-    /// 無効値（番兵）
-    pub(crate) const EMPTY: GlobalParentIndex = GlobalParentIndex(usize::MAX);
-
-    fn from_local_index(index: LocalParentIndex, old_layers_len: usize) -> GlobalParentIndex {
-        GlobalParentIndex(index.0 + old_layers_len)
-    }
-
-    fn layer_end_sentry() -> Self {
-        GlobalParentIndex(usize::MAX)
-    }
-
-    /// 無効値かどうかを判定
-    #[inline]
-    pub(crate) fn is_empty(self) -> bool {
-        self.0 == usize::MAX
-    }
-
-    /// オフセットを加算した新しいGlobalParentIndexを返す
-    pub(crate) fn offset(base: GlobalParentIndex, offset: usize) -> GlobalParentIndex {
-        GlobalParentIndex(base.0 + offset)
-    }
-}
-
-impl Parents {
-    fn split_at_mut(&mut self, mid: GlobalParentIndex) -> (&mut [Parent], &mut [Parent]) {
-        let (left, right) = self.0.split_at_mut(mid.0);
-        (left, right)
-    }
-}
-
-impl Index<GlobalParentIndex> for Parents {
-    type Output = Parent;
-
-    fn index(&self, index: GlobalParentIndex) -> &Self::Output {
-        &self.0[index.0]
-    }
-}
-
-impl IndexMut<GlobalParentIndex> for Parents {
-    fn index_mut(&mut self, index: GlobalParentIndex) -> &mut Self::Output {
-        &mut self.0[index.0]
-    }
-}
-
-impl Deref for Parents {
-    type Target = Vec<Parent>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for Parents {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-struct OldLayersParents<'a>(&'a [Parent]);
-struct CurrentLayerParents<'a>(&'a mut [Parent]);
-
-impl<'a> Index<GlobalParentIndex> for OldLayersParents<'a> {
-    type Output = Parent;
-    fn index(&self, i: GlobalParentIndex) -> &Self::Output {
-        &self.0[i.0]
-    }
-}
-
-struct AllLayers(Vec<GlobalParentIndex>);
-
-impl AllLayers {
-    fn get_top(&self) -> &GlobalParentIndex {
-        // top layerとsentryは必ず入っているので常にlenは2以上
-        // lastに入っているsentryを飛ばして返すため-2
-        &self.0[self.0.len() - 2]
-    }
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
-struct AllLayersIndex(usize);
-
-impl Index<AllLayersIndex> for AllLayers {
-    type Output = GlobalParentIndex;
-
-    fn index(&self, index: AllLayersIndex) -> &Self::Output {
-        &self.0[index.0]
-    }
-}
-
-impl IndexMut<AllLayersIndex> for AllLayers {
-    fn index_mut(&mut self, index: AllLayersIndex) -> &mut Self::Output {
-        &mut self.0[index.0]
-    }
-}
-
-impl Deref for AllLayers {
-    type Target = Vec<GlobalParentIndex>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for AllLayers {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl Add<usize> for AllLayersIndex {
-    type Output = AllLayersIndex;
-
-    fn add(self, rhs: usize) -> Self::Output {
-        AllLayersIndex(self.0 + rhs)
-    }
-}
-
-impl Sub<usize> for AllLayersIndex {
-    type Output = AllLayersIndex;
-
-    fn sub(self, rhs: usize) -> Self::Output {
-        AllLayersIndex(self.0 - rhs)
-    }
-}
-
 impl LayeredUf {
     pub fn new() -> Self {
         let mut layer_index = AllLayers(Vec::with_capacity(100));
@@ -207,29 +40,30 @@ impl LayeredUf {
         use std::fmt::Write;
 
         let mut out = String::new();
-        writeln!(out, "LayeredUf");
-        writeln!(out, "parents_len: {}", self.parent.len());
+        writeln!(out, "LayeredUf").unwrap();
+        writeln!(out, "parents_len: {}", self.parent.len()).unwrap();
 
-        write!(out, "layer_index(raw): [");
+        write!(out, "layer_index(raw): [").unwrap();
         for (i, idx) in self.layer_index.iter().enumerate() {
             if i > 0 {
-                write!(out, ", ");
+                write!(out, ", ").unwrap();
             }
-            if idx.0 == usize::MAX {
-                write!(out, "MAX");
+            if idx.is_empty() {
+                write!(out, "MAX").unwrap();
             } else {
-                write!(out, "{}", idx.0);
+                write!(out, "{}", idx.0).unwrap();
             }
         }
-        writeln!(out, "]");
+        writeln!(out, "]").unwrap();
 
-        writeln!(out, "parents:");
+        writeln!(out, "parents:").unwrap();
         for (global, parent) in self.parent.iter().enumerate() {
             writeln!(
                 out,
                 "  [{}] local={} rooted={}  cell={:?}",
                 global, parent.local.0, parent.rooted.0, parent.cell
-            );
+            )
+            .unwrap();
         }
 
         println!("{}", out);
@@ -239,11 +73,7 @@ impl LayeredUf {
         let global_id = GlobalParentIndex(self.parent.len());
         let top_layer_start = self.layer_index.get_top();
         let local_id = LocalParentIndex::from_global_index(global_id, top_layer_start.0);
-        self.parent.push(Parent {
-            rooted: global_id,
-            local: local_id,
-            cell: CellIndex::EMPTY,
-        });
+        self.parent.push(Parent::new(global_id, local_id));
         global_id
     }
 
@@ -258,11 +88,7 @@ impl LayeredUf {
         );
 
         let local_id = LocalParentIndex::from_global_index(global_id, top_layer_start.0);
-        self.parent.push(Parent {
-            rooted: old_node,
-            local: local_id,
-            cell: CellIndex::EMPTY,
-        });
+        self.parent.push(Parent::new(old_node, local_id));
         global_id
     }
 
@@ -275,7 +101,7 @@ impl LayeredUf {
     }
 
     // (nodeを含むlayerより下のlayers, nodeを含むlayer, is_top_layer)を返す
-    fn split_layers<'a>(
+    fn split_layers(
         &mut self,
         node: GlobalParentIndex,
     ) -> (OldLayersParents<'_>, CurrentLayerParents<'_>, bool) {
@@ -371,6 +197,7 @@ impl LayeredUf {
             .push(GlobalParentIndex::layer_end_sentry());
     }
 }
+
 // 渡ってくるnodeはalloc_node済みであることが前提
 fn find_local_root(
     node: GlobalParentIndex,
@@ -464,14 +291,7 @@ mod tests {
         let id = uf.alloc_node();
         assert_eq!(id, GlobalParentIndex(0));
         let root = uf.find_root(id);
-        assert_eq!(
-            *root,
-            Parent {
-                rooted: id,
-                local: LocalParentIndex(0),
-                cell: CellIndex::EMPTY,
-            }
-        );
+        assert_eq!(*root, Parent::new(id, LocalParentIndex(0)),);
     }
 
     #[test]
@@ -596,22 +416,8 @@ mod tests {
         assert_eq!(id1, GlobalParentIndex(0));
         assert_eq!(id2, GlobalParentIndex(1));
         let root1 = uf.find_root(id1);
-        assert_eq!(
-            *root1,
-            Parent {
-                rooted: id1,
-                local: LocalParentIndex(0),
-                cell: CellIndex::EMPTY,
-            }
-        );
+        assert_eq!(*root1, Parent::new(id1, LocalParentIndex(0)),);
         let root2 = uf.find_root(id2);
-        assert_eq!(
-            *root2,
-            Parent {
-                rooted: id2,
-                local: LocalParentIndex(0),
-                cell: CellIndex::EMPTY,
-            }
-        );
+        assert_eq!(*root2, Parent::new(id2, LocalParentIndex(0)),);
     }
 }
