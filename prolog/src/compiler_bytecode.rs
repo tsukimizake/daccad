@@ -117,7 +117,7 @@ pub enum WamInstr {
         arity: usize,
     },
     Allocate {
-        size: u32,
+        size: usize,
     },
     Deallocate,
     Proceed,

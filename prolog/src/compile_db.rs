@@ -88,7 +88,7 @@ fn compile_rule(
             // bodyの複数のgoalにまたがって出現する変数を取得
             let cross_goal_vars = get_cross_goal_vars(body);
             res.push(WamInstr::Allocate {
-                size: cross_goal_vars.len() as u32,
+                size: cross_goal_vars.len(),
             });
 
             // head引数をGetVar/GetValで処理

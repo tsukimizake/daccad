@@ -403,7 +403,7 @@ fn exectute_impl(
             WamInstr::Allocate { size } => {
                 call_stack.push(StackFrame {
                     return_address: 0,
-                    regs: vec![GlobalParentIndex::EMPTY; *size as usize],
+                    regs: Vec::with_capacity(*size),
                 });
             }
             WamInstr::Deallocate => {
@@ -432,7 +432,7 @@ pub fn execute_instructions(query: CompiledQuery, orig_query: Vec<Term>) -> Resu
 
     call_stack.push(StackFrame {
         return_address: 0,
-        regs: vec![GlobalParentIndex::EMPTY; 32],
+        regs: Vec::with_capacity(32),
     });
 
     while exec_mode == ExecMode::Continue {
@@ -901,4 +901,3 @@ mod tests {
         assert_eq!(result, Ok(expected));
     }
 }
-
