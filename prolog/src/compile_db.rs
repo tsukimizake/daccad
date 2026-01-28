@@ -85,15 +85,16 @@ fn compile_rule(
                 arity: args.len(),
             });
 
-            // bodyの複数のトップレベルfunctorにわたって出現する変数の数をカウント
-            let cross_goal_var_count = count_cross_goal_vars(body) as u32;
+            // bodyの複数のgoalにまたがって出現する変数を取得
+            let cross_goal_vars = get_cross_goal_vars(body);
             res.push(WamInstr::Allocate {
-                size: cross_goal_var_count,
+                size: cross_goal_vars.len() as u32,
             });
 
             // head引数をGetVar/GetValで処理
-            // 恒久変数はYレジスタに配置
+            // cross-goal変数のみYレジスタに配置
             let mut perm_reg_counter = 0;
+            let mut temp_reg_counter = args.len(); // Xレジスタは引数の後から
             for (arg_index, arg) in args.iter().enumerate() {
                 let reg = WamReg::X(arg_index);
                 match arg {
@@ -105,8 +106,16 @@ fn compile_rule(
                                 reg,
                             });
                         } else {
-                            let with = WamReg::Y(perm_reg_counter);
-                            perm_reg_counter += 1;
+                            // cross-goal変数ならYレジスタ、そうでなければXレジスタ
+                            let with = if cross_goal_vars.contains(name) {
+                                let w = WamReg::Y(perm_reg_counter);
+                                perm_reg_counter += 1;
+                                w
+                            } else {
+                                let w = WamReg::X(temp_reg_counter);
+                                temp_reg_counter += 1;
+                                w
+                            };
                             if name != "_" {
                                 declared_vars.insert(name.to_string(), with);
                             }
@@ -126,7 +135,9 @@ fn compile_rule(
                 res.extend(compile_body_goal(
                     goal,
                     declared_vars,
+                    &cross_goal_vars,
                     &mut perm_reg_counter,
+                    &mut temp_reg_counter,
                 ));
             }
 
@@ -138,19 +149,25 @@ fn compile_rule(
     }
 }
 
-fn count_cross_goal_vars(body: &[Term]) -> usize {
-    use std::collections::HashMap;
+/// bodyの複数のgoalにまたがって出現する変数の集合を返す
+fn get_cross_goal_vars(body: &[Term]) -> std::collections::HashSet<String> {
+    use std::collections::{HashMap, HashSet};
     let mut var_goal_count: HashMap<String, usize> = HashMap::new();
 
+    // bodyの各goalをカウント
     for goal in body {
-        let mut goal_vars = std::collections::HashSet::new();
+        let mut goal_vars = HashSet::new();
         collect_var_names(goal, &mut goal_vars);
         for var in goal_vars {
             *var_goal_count.entry(var).or_insert(0) += 1;
         }
     }
 
-    var_goal_count.values().filter(|&&count| count > 1).count()
+    var_goal_count
+        .into_iter()
+        .filter(|(_, count)| *count > 1)
+        .map(|(name, _)| name)
+        .collect()
 }
 
 fn collect_var_names(term: &Term, result: &mut std::collections::HashSet<String>) {
@@ -172,14 +189,16 @@ fn collect_var_names(term: &Term, result: &mut std::collections::HashSet<String>
 fn compile_body_goal(
     goal: &Term,
     declared_vars: &mut HashMap<String, WamReg>,
+    cross_goal_vars: &std::collections::HashSet<String>,
     perm_reg_counter: &mut usize,
+    temp_reg_counter: &mut usize,
 ) -> Vec<WamInstr> {
     match goal {
         Term::Struct { functor, args, .. } => {
             let mut res = Vec::new();
 
             // 各引数をPutVar/PutValで引数レジスタにセット
-            // 恒久変数はYレジスタに配置
+            // cross-goal変数のみYレジスタに配置
             for (arg_index, arg) in args.iter().enumerate() {
                 let arg_reg = WamReg::X(arg_index);
                 match arg {
@@ -191,8 +210,16 @@ fn compile_body_goal(
                                 with: declared_vars[name],
                             });
                         } else {
-                            let with = WamReg::Y(*perm_reg_counter);
-                            *perm_reg_counter += 1;
+                            // cross-goal変数ならYレジスタ、そうでなければXレジスタ
+                            let with = if cross_goal_vars.contains(name) {
+                                let w = WamReg::Y(*perm_reg_counter);
+                                *perm_reg_counter += 1;
+                                w
+                            } else {
+                                let w = WamReg::X(*temp_reg_counter);
+                                *temp_reg_counter += 1;
+                                w
+                            };
                             if name != "_" {
                                 declared_vars.insert(name.to_string(), with);
                             }
@@ -482,6 +509,10 @@ mod tests {
 
     #[test]
     fn sample_rule() {
+        // p(X,Y) :- q(X, Z), r(Z, Y).
+        // X: headとq(X,Z)に出現 → bodyでは1つのgoalのみ → Xレジスタ
+        // Y: headとr(Z,Y)に出現 → bodyでは1つのgoalのみ → Xレジスタ
+        // Z: q(X,Z)とr(Z,Y)に出現 → bodyで複数のgoalにまたがる → Yレジスタ
         test_compile_db_helper(
             "p(X,Y) :- q(X, Z), r(Z, Y).",
             vec![
@@ -489,7 +520,96 @@ mod tests {
                     name: "p".to_string(),
                     arity: 2,
                 },
-                WamInstr::Allocate { size: 1 },
+                WamInstr::Allocate { size: 1 }, // Zのみ
+                WamInstr::GetVar {
+                    name: "X".to_string(),
+                    with: WamReg::X(2),
+                    reg: WamReg::X(0),
+                },
+                WamInstr::GetVar {
+                    name: "Y".to_string(),
+                    with: WamReg::X(3),
+                    reg: WamReg::X(1),
+                },
+                WamInstr::PutVal {
+                    name: "X".to_string(),
+                    arg_reg: WamReg::X(0),
+                    with: WamReg::X(2),
+                },
+                WamInstr::PutVar {
+                    name: "Z".to_string(),
+                    arg_reg: WamReg::X(1),
+                    with: WamReg::Y(0),
+                },
+                WamInstr::CallTemp {
+                    predicate: "q".to_string(),
+                    arity: 2,
+                },
+                WamInstr::PutVal {
+                    name: "Z".to_string(),
+                    arg_reg: WamReg::X(0),
+                    with: WamReg::Y(0),
+                },
+                WamInstr::PutVal {
+                    name: "Y".to_string(),
+                    arg_reg: WamReg::X(1),
+                    with: WamReg::X(3),
+                },
+                WamInstr::CallTemp {
+                    predicate: "r".to_string(),
+                    arity: 2,
+                },
+                WamInstr::Deallocate,
+                WamInstr::Proceed,
+            ],
+        );
+    }
+
+    #[test]
+    fn single_goal_rule_no_y_register() {
+        // p(X) :- q(X).
+        // Xはheadとbodyのゴールにあるがbodyはgoalが1つのみなのでXレジスタ
+        // Allocate size: 0 (Yレジスタ不要)
+        test_compile_db_helper(
+            "p(X) :- q(X).",
+            vec![
+                WamInstr::Label {
+                    name: "p".to_string(),
+                    arity: 1,
+                },
+                WamInstr::Allocate { size: 0 },
+                WamInstr::GetVar {
+                    name: "X".to_string(),
+                    with: WamReg::X(1),
+                    reg: WamReg::X(0),
+                },
+                WamInstr::PutVal {
+                    name: "X".to_string(),
+                    arg_reg: WamReg::X(0),
+                    with: WamReg::X(1),
+                },
+                WamInstr::CallTemp {
+                    predicate: "q".to_string(),
+                    arity: 1,
+                },
+                WamInstr::Deallocate,
+                WamInstr::Proceed,
+            ],
+        );
+    }
+
+    #[test]
+    fn multiple_cross_goal_vars() {
+        // p(X, Y) :- q(X, Y), r(X, Y).
+        // XとYの両方がbodyの複数goalにまたがる → 両方Yレジスタ
+        test_compile_db_helper(
+            "p(X, Y) :- q(X, Y), r(X, Y).",
+            vec![
+                WamInstr::Label {
+                    name: "p".to_string(),
+                    arity: 2,
+                },
+                WamInstr::Allocate { size: 2 }, // XとY
                 WamInstr::GetVar {
                     name: "X".to_string(),
                     with: WamReg::Y(0),
@@ -505,19 +625,19 @@ mod tests {
                     arg_reg: WamReg::X(0),
                     with: WamReg::Y(0),
                 },
-                WamInstr::PutVar {
-                    name: "Z".to_string(),
+                WamInstr::PutVal {
+                    name: "Y".to_string(),
                     arg_reg: WamReg::X(1),
-                    with: WamReg::Y(2),
+                    with: WamReg::Y(1),
                 },
                 WamInstr::CallTemp {
                     predicate: "q".to_string(),
                     arity: 2,
                 },
                 WamInstr::PutVal {
-                    name: "Z".to_string(),
+                    name: "X".to_string(),
                     arg_reg: WamReg::X(0),
-                    with: WamReg::Y(2),
+                    with: WamReg::Y(0),
                 },
                 WamInstr::PutVal {
                     name: "Y".to_string(),
@@ -533,4 +653,257 @@ mod tests {
             ],
         );
     }
+
+    #[test]
+    fn head_var_not_in_body() {
+        // p(X, Y) :- q(X).
+        // Xはheadとbodyにあるが、bodyは1 goalなのでXレジスタ
+        // Yはheadにしかないので、Xレジスタ（cross-goal変数ではない）
+        test_compile_db_helper(
+            "p(X, Y) :- q(X).",
+            vec![
+                WamInstr::Label {
+                    name: "p".to_string(),
+                    arity: 2,
+                },
+                WamInstr::Allocate { size: 0 }, // cross-goal変数なし
+                WamInstr::GetVar {
+                    name: "X".to_string(),
+                    with: WamReg::X(2),
+                    reg: WamReg::X(0),
+                },
+                WamInstr::GetVar {
+                    name: "Y".to_string(),
+                    with: WamReg::X(3),
+                    reg: WamReg::X(1),
+                },
+                WamInstr::PutVal {
+                    name: "X".to_string(),
+                    arg_reg: WamReg::X(0),
+                    with: WamReg::X(2),
+                },
+                WamInstr::CallTemp {
+                    predicate: "q".to_string(),
+                    arity: 1,
+                },
+                WamInstr::Deallocate,
+                WamInstr::Proceed,
+            ],
+        );
+    }
+
+    #[test]
+    fn anonymous_var_in_rule() {
+        test_compile_db_helper(
+            "p(X, _) :- q(X, _).",
+            vec![
+                WamInstr::Label {
+                    name: "p".to_string(),
+                    arity: 2,
+                },
+                WamInstr::Allocate { size: 0 },
+                WamInstr::GetVar {
+                    name: "X".to_string(),
+                    with: WamReg::X(2),
+                    reg: WamReg::X(0),
+                },
+                WamInstr::GetVar {
+                    name: "_".to_string(),
+                    with: WamReg::X(3),
+                    reg: WamReg::X(1),
+                },
+                WamInstr::PutVal {
+                    name: "X".to_string(),
+                    arg_reg: WamReg::X(0),
+                    with: WamReg::X(2),
+                },
+                WamInstr::PutVar {
+                    name: "_".to_string(),
+                    arg_reg: WamReg::X(1),
+                    with: WamReg::X(4),
+                },
+                WamInstr::CallTemp {
+                    predicate: "q".to_string(),
+                    arity: 2,
+                },
+                WamInstr::Deallocate,
+                WamInstr::Proceed,
+            ],
+        );
+    }
+
+    #[test]
+    fn three_goals_chain() {
+        // p(X, Y, Z) :- q(X, A), r(A, B), s(B, Z).
+        // X: qのみ → Xレジスタ
+        // Y: headのみ → Xレジスタ
+        // Z: sのみ → Xレジスタ
+        // A: q, r → Yレジスタ (cross-goal)
+        // B: r, s → Yレジスタ (cross-goal)
+        test_compile_db_helper(
+            "p(X, Y, Z) :- q(X, A), r(A, B), s(B, Z).",
+            vec![
+                WamInstr::Label {
+                    name: "p".to_string(),
+                    arity: 3,
+                },
+                WamInstr::Allocate { size: 2 }, // AとB
+                WamInstr::GetVar {
+                    name: "X".to_string(),
+                    with: WamReg::X(3),
+                    reg: WamReg::X(0),
+                },
+                WamInstr::GetVar {
+                    name: "Y".to_string(),
+                    with: WamReg::X(4),
+                    reg: WamReg::X(1),
+                },
+                WamInstr::GetVar {
+                    name: "Z".to_string(),
+                    with: WamReg::X(5),
+                    reg: WamReg::X(2),
+                },
+                // q(X, A)
+                WamInstr::PutVal {
+                    name: "X".to_string(),
+                    arg_reg: WamReg::X(0),
+                    with: WamReg::X(3),
+                },
+                WamInstr::PutVar {
+                    name: "A".to_string(),
+                    arg_reg: WamReg::X(1),
+                    with: WamReg::Y(0),
+                },
+                WamInstr::CallTemp {
+                    predicate: "q".to_string(),
+                    arity: 2,
+                },
+                // r(A, B)
+                WamInstr::PutVal {
+                    name: "A".to_string(),
+                    arg_reg: WamReg::X(0),
+                    with: WamReg::Y(0),
+                },
+                WamInstr::PutVar {
+                    name: "B".to_string(),
+                    arg_reg: WamReg::X(1),
+                    with: WamReg::Y(1),
+                },
+                WamInstr::CallTemp {
+                    predicate: "r".to_string(),
+                    arity: 2,
+                },
+                // s(B, Z)
+                WamInstr::PutVal {
+                    name: "B".to_string(),
+                    arg_reg: WamReg::X(0),
+                    with: WamReg::Y(1),
+                },
+                WamInstr::PutVal {
+                    name: "Z".to_string(),
+                    arg_reg: WamReg::X(1),
+                    with: WamReg::X(5),
+                },
+                WamInstr::CallTemp {
+                    predicate: "s".to_string(),
+                    arity: 2,
+                },
+                WamInstr::Deallocate,
+                WamInstr::Proceed,
+            ],
+        );
+    }
+
+    #[test]
+    fn head_var_used_across_all_goals() {
+        // append([], L, L) :- ...
+        // 簡易版: p(X) :- q(X), r(X), s(X).
+        // Xはすべてのgoalにまたがる → Yレジスタ
+        test_compile_db_helper(
+            "p(X) :- q(X), r(X), s(X).",
+            vec![
+                WamInstr::Label {
+                    name: "p".to_string(),
+                    arity: 1,
+                },
+                WamInstr::Allocate { size: 1 }, // X
+                WamInstr::GetVar {
+                    name: "X".to_string(),
+                    with: WamReg::Y(0),
+                    reg: WamReg::X(0),
+                },
+                // q(X)
+                WamInstr::PutVal {
+                    name: "X".to_string(),
+                    arg_reg: WamReg::X(0),
+                    with: WamReg::Y(0),
+                },
+                WamInstr::CallTemp {
+                    predicate: "q".to_string(),
+                    arity: 1,
+                },
+                // r(X)
+                WamInstr::PutVal {
+                    name: "X".to_string(),
+                    arg_reg: WamReg::X(0),
+                    with: WamReg::Y(0),
+                },
+                WamInstr::CallTemp {
+                    predicate: "r".to_string(),
+                    arity: 1,
+                },
+                // s(X)
+                WamInstr::PutVal {
+                    name: "X".to_string(),
+                    arg_reg: WamReg::X(0),
+                    with: WamReg::Y(0),
+                },
+                WamInstr::CallTemp {
+                    predicate: "s".to_string(),
+                    arity: 1,
+                },
+                WamInstr::Deallocate,
+                WamInstr::Proceed,
+            ],
+        );
+    }
+
+    #[test]
+    fn local_var_single_goal() {
+        // p(X) :- q(X, Y).
+        // Xはheadとbodyにあるがbodyは1goalなのでXレジスタ
+        // Yはbodyのみでかつ1goalなのでXレジスタ
+        test_compile_db_helper(
+            "p(X) :- q(X, Y).",
+            vec![
+                WamInstr::Label {
+                    name: "p".to_string(),
+                    arity: 1,
+                },
+                WamInstr::Allocate { size: 0 }, // cross-goal変数なし
+                WamInstr::GetVar {
+                    name: "X".to_string(),
+                    with: WamReg::X(1),
+                    reg: WamReg::X(0),
+                },
+                WamInstr::PutVal {
+                    name: "X".to_string(),
+                    arg_reg: WamReg::X(0),
+                    with: WamReg::X(1),
+                },
+                WamInstr::PutVar {
+                    name: "Y".to_string(),
+                    arg_reg: WamReg::X(1),
+                    with: WamReg::X(2),
+                },
+                WamInstr::CallTemp {
+                    predicate: "q".to_string(),
+                    arity: 2,
+                },
+                WamInstr::Deallocate,
+                WamInstr::Proceed,
+            ],
+        );
+    }
 }
+
