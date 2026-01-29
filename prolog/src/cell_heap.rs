@@ -24,6 +24,7 @@ pub enum Cell {
 
 impl Cell {}
 
+#[derive(Debug)]
 pub struct CellHeap {
     cells: Vec<Rc<Cell>>,
 }

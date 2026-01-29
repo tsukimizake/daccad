@@ -15,6 +15,15 @@ impl fmt::Debug for WamReg {
     }
 }
 
+impl WamReg {
+    pub fn index(&self) -> usize {
+        match self {
+            WamReg::X(n) => *n,
+            WamReg::Y(n) => *n,
+        }
+    }
+}
+
 #[cfg(debug_assertions)]
 pub(crate) type VarName = String;
 

@@ -8,7 +8,7 @@ use crate::resolve_term::resolve_term;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Register {
     UfRef(GlobalParentIndex),
-    XRef(usize),
+    YRef(usize),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,7 +49,7 @@ pub(crate) fn get_reg(
 fn resolve_register(registers: &Registers, register: &Register) -> GlobalParentIndex {
     match register {
         Register::UfRef(id) => *id,
-        Register::XRef(index) => {
+        Register::YRef(index) => {
             let next = registers
                 .regs
                 .get(*index)
@@ -123,6 +123,7 @@ fn getstruct_cell_ref(
     read_write_mode: &mut ReadWriteMode,
     exec_mode: &mut ExecMode,
     call_stack: &mut [StackFrame],
+    program_counter: &usize,
 ) {
     match heap.value(existing_cell).as_ref() {
         Cell::Var { .. } => {
@@ -146,6 +147,10 @@ fn getstruct_cell_ref(
                 *read_write_mode =
                     ReadWriteMode::Read(GlobalParentIndex::offset(local_root.rooted, 1));
             } else {
+                println!(
+                    "GetStruct failed: expected ({} / {}), found ({} / {}) at {:?}",
+                    functor, arity, existing_functor, existing_arity, program_counter
+                );
                 *exec_mode = ExecMode::ResolvedToFalse;
             }
         }
@@ -162,6 +167,7 @@ fn getstruct_cell_ref(
                 read_write_mode,
                 exec_mode,
                 call_stack,
+                program_counter,
             );
         }
     }
@@ -273,7 +279,7 @@ fn exectute_impl(
 
             WamInstr::SetVar { reg, .. } => match reg {
                 WamReg::X(index) => {
-                    set_reg(registers, call_stack, reg, Register::XRef(*index));
+                    set_reg(registers, call_stack, reg, Register::YRef(*index));
                 }
                 WamReg::Y(_) => {
                     panic!("SetVar arg should be X register");
@@ -299,7 +305,9 @@ fn exectute_impl(
                 let cell_id = heap.insert_var(name.clone());
                 let uf_id = layered_uf.alloc_node();
                 layered_uf.set_cell(uf_id, cell_id);
-                set_reg(registers, call_stack, arg_reg, Register::UfRef(uf_id));
+
+                // おかしい arg_reg更新時にwithも変更されるようになってしまう
+                set_reg(registers, call_stack, arg_reg, Register::YRef(with.index()));
                 set_reg(registers, call_stack, with, Register::UfRef(uf_id));
             }
 
@@ -333,6 +341,7 @@ fn exectute_impl(
                         read_write_mode,
                         exec_mode,
                         call_stack,
+                        program_counter,
                     );
                 } else {
                     panic!("GetStruct: register is empty");
@@ -396,6 +405,7 @@ fn exectute_impl(
                 }
             }
             WamInstr::Error { message: _ } => {
+                println!("Error instruction encountered");
                 *exec_mode = ExecMode::ResolvedToFalse;
             }
 
@@ -411,6 +421,10 @@ fn exectute_impl(
                 set_reg(registers, call_stack, with, Register::UfRef(with_id));
 
                 if !unify(reg_id, with_id, heap, layered_uf) {
+                    println!(
+                        "GetVar unify failed for reg_id: {:?}, with_id: {:?}",
+                        reg_id, with_id
+                    );
                     *exec_mode = ExecMode::ResolvedToFalse;
                 }
             }
@@ -420,6 +434,10 @@ fn exectute_impl(
                 let with_id = get_reg(registers, call_stack, with);
                 let reg_id = get_reg(registers, call_stack, reg);
                 if !unify(with_id, reg_id, heap, layered_uf) {
+                    println!(
+                        "GetVal unify failed for with_id: {:?}, reg_id: {:?}",
+                        with_id, reg_id
+                    );
                     *exec_mode = ExecMode::ResolvedToFalse;
                 }
             }
@@ -493,6 +511,7 @@ pub fn execute_instructions(query: CompiledQuery, orig_query: Vec<Term>) -> Resu
         })
         .collect();
     println!("layered_uf after execution: {:?}", layered_uf);
+    println!("cell_heap after execution: {:?}", cell_heap);
     Ok(resolved)
 }
 
