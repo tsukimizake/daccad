@@ -18,7 +18,7 @@ pub fn resolve_term(
         Term::Var { id, name, .. } => {
             if let Some(reg) = term_to_reg.get(id) {
                 let uf_id =
-                    resolve_register(call_stack, registers, get_reg(registers, call_stack, reg));
+                    resolve_register(call_stack, registers, get_reg(registers, call_stack, reg, usize::MAX), usize::MAX);
                 let root = uf.find_root(uf_id);
                 // rootedを使う: 構造体の引数はroot.rooted + 1から連続している
                 cell_to_term(root.cell, root.rooted, heap, uf)
