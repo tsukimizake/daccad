@@ -63,14 +63,15 @@ pub(crate) fn resolve_register(
     register: &Register,
     program_counter: usize,
 ) -> GlobalParentIndex {
-    println!("resolve_register: {:?}", register);
     match register {
         Register::UfRef(id) => *id,
         Register::XRef(index) => {
-            let next = registers
-                .regs
-                .get(*index)
-                .unwrap_or_else(|| panic!("resolve_register: XRef points to empty register at pc={}", program_counter));
+            let next = registers.regs.get(*index).unwrap_or_else(|| {
+                panic!(
+                    "resolve_register: XRef points to empty register at pc={}",
+                    program_counter
+                )
+            });
             resolve_register(call_stack, registers, next, program_counter)
         }
         Register::YRef(index) => {
@@ -79,7 +80,12 @@ pub(crate) fn resolve_register(
                 .unwrap()
                 .regs
                 .get(*index)
-                .unwrap_or_else(|| panic!("resolve_register: YRef points to empty register at pc={}", program_counter));
+                .unwrap_or_else(|| {
+                    panic!(
+                        "resolve_register: YRef points to empty register at pc={}",
+                        program_counter
+                    )
+                });
             resolve_register(call_stack, registers, next, program_counter)
         }
     }
@@ -156,7 +162,13 @@ fn getstruct_cell_ref(
         Cell::Var { .. } => {
             let struct_cell = heap.insert_struct(functor, *arity);
             let new_id = layered_uf.alloc_node();
-            set_reg(registers, call_stack, op_reg, Register::UfRef(new_id), *program_counter);
+            set_reg(
+                registers,
+                call_stack,
+                op_reg,
+                Register::UfRef(new_id),
+                *program_counter,
+            );
             layered_uf.union(existing_parent_index, new_id);
             layered_uf.set_cell(new_id, struct_cell);
             heap.set_ref(existing_cell, struct_cell);
@@ -169,7 +181,13 @@ fn getstruct_cell_ref(
             if existing_functor == functor && existing_arity == arity {
                 let uf_id = layered_uf.alloc_node();
                 layered_uf.set_cell(uf_id, existing_cell);
-                set_reg(registers, call_stack, op_reg, Register::UfRef(uf_id), *program_counter);
+                set_reg(
+                    registers,
+                    call_stack,
+                    op_reg,
+                    Register::UfRef(uf_id),
+                    *program_counter,
+                );
                 let local_root = layered_uf.find_root(existing_parent_index);
                 *read_write_mode =
                     ReadWriteMode::Read(GlobalParentIndex::offset(local_root.rooted, 1));
@@ -301,12 +319,24 @@ fn exectute_impl(
                 let cell_id = heap.insert_struct(functor, *arity);
                 let uf_id = layered_uf.alloc_node();
                 layered_uf.set_cell(uf_id, cell_id);
-                set_reg(registers, call_stack, arg_reg, Register::UfRef(uf_id), *program_counter);
+                set_reg(
+                    registers,
+                    call_stack,
+                    arg_reg,
+                    Register::UfRef(uf_id),
+                    *program_counter,
+                );
             }
 
             WamInstr::SetVar { reg, .. } => match reg {
                 WamReg::X(index) => {
-                    set_reg(registers, call_stack, reg, Register::XRef(*index), *program_counter);
+                    set_reg(
+                        registers,
+                        call_stack,
+                        reg,
+                        Register::XRef(*index),
+                        *program_counter,
+                    );
                 }
                 WamReg::Y(_) => {
                     panic!("SetVar arg should be X register at pc={}", program_counter);
@@ -314,8 +344,12 @@ fn exectute_impl(
             },
 
             WamInstr::SetVal { reg, .. } => {
-                let prev_id =
-                    resolve_register(call_stack, registers, get_reg(registers, call_stack, reg, *program_counter), *program_counter);
+                let prev_id = resolve_register(
+                    call_stack,
+                    registers,
+                    get_reg(registers, call_stack, reg, *program_counter),
+                    *program_counter,
+                );
                 let new_id = layered_uf.alloc_node();
                 layered_uf.union(new_id, prev_id);
             }
@@ -331,30 +365,70 @@ fn exectute_impl(
                 layered_uf.set_cell(uf_id, cell_id);
 
                 // おかしい arg_reg更新時にwithも変更されるようになってしまう
-                set_reg(registers, call_stack, arg_reg, (*with).into(), *program_counter);
-                set_reg(registers, call_stack, with, Register::UfRef(uf_id), *program_counter);
+                set_reg(
+                    registers,
+                    call_stack,
+                    arg_reg,
+                    (*with).into(),
+                    *program_counter,
+                );
+                set_reg(
+                    registers,
+                    call_stack,
+                    with,
+                    Register::UfRef(uf_id),
+                    *program_counter,
+                );
             }
 
             WamInstr::PutVal { arg_reg, with, .. } => {
                 // with レジスタの内容を arg_reg にコピー
-                let with_id =
-                    resolve_register(call_stack, registers, get_reg(registers, call_stack, with, *program_counter), *program_counter);
-                set_reg(registers, call_stack, arg_reg, Register::UfRef(with_id), *program_counter);
+                let with_id = resolve_register(
+                    call_stack,
+                    registers,
+                    get_reg(registers, call_stack, with, *program_counter),
+                    *program_counter,
+                );
+                set_reg(
+                    registers,
+                    call_stack,
+                    arg_reg,
+                    Register::UfRef(with_id),
+                    *program_counter,
+                );
             }
 
             // トップレベル引数の変数の初回出現。レジスタには既にクエリからの値が入っている。
             WamInstr::GetVar { reg, with, .. } => {
-                let reg_id =
-                    resolve_register(call_stack, registers, get_reg(registers, call_stack, reg, *program_counter), *program_counter);
-                set_reg(registers, call_stack, with, Register::UfRef(reg_id), *program_counter);
+                let reg_id = resolve_register(
+                    call_stack,
+                    registers,
+                    get_reg(registers, call_stack, reg, *program_counter),
+                    *program_counter,
+                );
+                set_reg(
+                    registers,
+                    call_stack,
+                    with,
+                    Register::UfRef(reg_id),
+                    *program_counter,
+                );
             }
 
             // トップレベル引数の変数の2回目以降の出現
             WamInstr::GetVal { with, reg, .. } => {
-                let with_id =
-                    resolve_register(call_stack, registers, get_reg(registers, call_stack, with, *program_counter), *program_counter);
-                let reg_id =
-                    resolve_register(call_stack, registers, get_reg(registers, call_stack, reg, *program_counter), *program_counter);
+                let with_id = resolve_register(
+                    call_stack,
+                    registers,
+                    get_reg(registers, call_stack, with, *program_counter),
+                    *program_counter,
+                );
+                let reg_id = resolve_register(
+                    call_stack,
+                    registers,
+                    get_reg(registers, call_stack, reg, *program_counter),
+                    *program_counter,
+                );
                 if !unify(with_id, reg_id, heap, layered_uf) {
                     println!(
                         "GetVal unify failed for with_id: {:?}, reg_id: {:?}",
@@ -395,7 +469,13 @@ fn exectute_impl(
                 match read_write_mode {
                     ReadWriteMode::Read(read_index) => {
                         // just reference from register
-                        set_reg(registers, call_stack, reg, Register::UfRef(*read_index), *program_counter);
+                        set_reg(
+                            registers,
+                            call_stack,
+                            reg,
+                            Register::UfRef(*read_index),
+                            *program_counter,
+                        );
 
                         *read_write_mode =
                             ReadWriteMode::Read(GlobalParentIndex::offset(*read_index, 1));
@@ -405,7 +485,13 @@ fn exectute_impl(
                         let cell_id = heap.insert_var(name.clone());
                         let uf_id = layered_uf.alloc_node();
                         layered_uf.set_cell(uf_id, cell_id);
-                        set_reg(registers, call_stack, reg, Register::UfRef(uf_id), *program_counter);
+                        set_reg(
+                            registers,
+                            call_stack,
+                            reg,
+                            Register::UfRef(uf_id),
+                            *program_counter,
+                        );
                     }
                 }
             }
@@ -442,6 +528,7 @@ fn exectute_impl(
                 // 現在のフレームに return_address を設定
                 if let Some(frame) = call_stack.last_mut() {
                     frame.return_address = *program_counter;
+                    println!("call set return_address: {}", frame.return_address);
                 }
                 *program_counter = *to_program_counter;
             }
@@ -452,6 +539,7 @@ fn exectute_impl(
                 if call_stack.len() <= 1 {
                     *exec_mode = ExecMode::ResolvedToTrue;
                 } else if let Some(frame) = call_stack.last() {
+                    println!("proceed to return_address: {}", frame.return_address);
                     *program_counter = frame.return_address;
                 } else {
                     panic!("Proceed on empty call_stack at pc={}", program_counter)
@@ -509,6 +597,7 @@ pub fn execute_instructions(query: CompiledQuery, orig_query: Vec<Term>) -> Resu
             &mut read_write_mode,
             &mut call_stack,
         );
+        println!("pc: {}", program_counter);
         program_counter += 1;
     }
 
