@@ -94,6 +94,7 @@ impl Parent {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct Parents(pub(crate) Vec<Parent>);
 
 impl Parents {
@@ -158,6 +159,7 @@ impl<'a> IndexMut<LocalParentIndex> for CurrentLayerParents<'a> {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct AllLayers(pub(crate) Vec<GlobalParentIndex>);
 
 impl AllLayers {

@@ -1,7 +1,9 @@
 mod internal_vecs;
 
 use crate::cell_heap::CellIndex;
-use internal_vecs::{AllLayers, AllLayersIndex, CurrentLayerParents, LocalParentIndex, OldLayersParents, Parents};
+use internal_vecs::{
+    AllLayers, AllLayersIndex, CurrentLayerParents, LocalParentIndex, OldLayersParents, Parents,
+};
 
 pub use internal_vecs::{GlobalParentIndex, Parent};
 
@@ -12,6 +14,7 @@ pub use internal_vecs::{GlobalParentIndex, Parent};
 // find_rootでレイヤ内参照をまず優先して見てpath compactionして、そののちrootを見に行って自分だけcompactionしてという動作をし、レイヤ1以降はこのようになる
 // [(0,0), (0,0), (2,2), | (0, 0), (3, 0), (5, 2), (2,3) | (6,0) | (8,0)]
 // レイヤをまたいで大きい方向に参照することはない（古いレイヤから新しいレイヤへの参照は発生しない）
+#[derive(Debug)]
 pub struct LayeredUf {
     // union-findの親ノードを示す配列 いつものやつ
     // 自分より新しいレイヤのノードは参照しない制約

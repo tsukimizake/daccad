@@ -492,6 +492,7 @@ pub fn execute_instructions(query: CompiledQuery, orig_query: Vec<Term>) -> Resu
             )
         })
         .collect();
+    println!("layered_uf after execution: {:?}", layered_uf);
     Ok(resolved)
 }
 
@@ -926,4 +927,3 @@ mod tests {
         assert_eq!(result, Ok(expected));
     }
 }
-
