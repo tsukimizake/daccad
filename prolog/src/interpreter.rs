@@ -5,38 +5,57 @@ use crate::layered_uf::{GlobalParentIndex, LayeredUf, Parent};
 use crate::parse::Term;
 use crate::resolve_term::resolve_term;
 
-type XReg = GlobalParentIndex;
-type YReg = GlobalParentIndex;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Register {
+    UfRef(GlobalParentIndex),
+    XRef(usize),
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Registers {
-    regs: Vec<XReg>,
+    regs: Vec<Register>,
 }
 
 impl Registers {
     fn new() -> Self {
         Self {
-            regs: vec![GlobalParentIndex::EMPTY; 32],
+            regs: Vec::with_capacity(32),
         }
     }
 }
 
+/// レジスタの値を取得する。XRefの場合は再帰的に辿り、最終的にUfRefを返す。
+/// UfRefでない場合はpanic!する。
 #[inline]
 pub(crate) fn get_reg(
     registers: &Registers,
     call_stack: &[StackFrame],
     reg: &WamReg,
 ) -> GlobalParentIndex {
-    match reg {
-        WamReg::X(index) => registers
-            .regs
-            .get(*index)
-            .copied()
-            .unwrap_or(GlobalParentIndex::EMPTY),
-        WamReg::Y(index) => call_stack
-            .last()
-            .and_then(|frame| frame.regs.get(*index).copied())
-            .unwrap_or(GlobalParentIndex::EMPTY),
+    let register = match reg {
+        WamReg::X(index) => registers.regs.get(*index),
+        WamReg::Y(index) => call_stack.last().and_then(|frame| frame.regs.get(*index)),
+    };
+
+    // XRefを再帰的に辿る
+    match register {
+        Some(r) => resolve_register(registers, r),
+        None => GlobalParentIndex::EMPTY,
+    }
+}
+
+/// Registerを再帰的に辿り、UfRefを返す。
+/// XRefの場合は参照先を辿り、最終的にUfRefでない場合はpanic!する。
+fn resolve_register(registers: &Registers, register: &Register) -> GlobalParentIndex {
+    match register {
+        Register::UfRef(id) => *id,
+        Register::XRef(index) => {
+            let next = registers
+                .regs
+                .get(*index)
+                .expect("resolve_register: XRef points to empty register");
+            resolve_register(registers, next)
+        }
     }
 }
 
@@ -45,19 +64,23 @@ pub(crate) fn set_reg(
     registers: &mut Registers,
     call_stack: &mut [StackFrame],
     reg: &WamReg,
-    value: GlobalParentIndex,
+    value: Register,
 ) {
     match reg {
         WamReg::X(index) => {
             if *index >= registers.regs.len() {
-                registers.regs.resize(*index + 1, GlobalParentIndex::EMPTY);
+                registers
+                    .regs
+                    .resize(*index + 1, Register::UfRef(GlobalParentIndex::EMPTY));
             }
             registers.regs[*index] = value;
         }
         WamReg::Y(index) => {
             if let Some(frame) = call_stack.last_mut() {
                 if *index >= frame.regs.len() {
-                    frame.regs.resize(*index + 1, GlobalParentIndex::EMPTY);
+                    frame
+                        .regs
+                        .resize(*index + 1, Register::UfRef(GlobalParentIndex::EMPTY));
                 }
                 frame.regs[*index] = value;
             } else {
@@ -77,7 +100,7 @@ enum ExecMode {
 #[derive(Debug, Clone)]
 pub(crate) struct StackFrame {
     return_address: usize,
-    pub(crate) regs: Vec<YReg>,
+    pub(crate) regs: Vec<Register>,
 }
 
 // Readが持っているのは構造体の親Indexを起点としたカーソル。WAMでいうSレジスタの値
@@ -105,7 +128,7 @@ fn getstruct_cell_ref(
         Cell::Var { .. } => {
             let struct_cell = heap.insert_struct(functor, *arity);
             let new_id = layered_uf.alloc_node();
-            set_reg(registers, call_stack, op_reg, new_id);
+            set_reg(registers, call_stack, op_reg, Register::UfRef(new_id));
             layered_uf.union(existing_parent_index, new_id);
             layered_uf.set_cell(new_id, struct_cell);
             heap.set_ref(existing_cell, struct_cell);
@@ -118,7 +141,7 @@ fn getstruct_cell_ref(
             if existing_functor == functor && existing_arity == arity {
                 let uf_id = layered_uf.alloc_node();
                 layered_uf.set_cell(uf_id, existing_cell);
-                set_reg(registers, call_stack, op_reg, uf_id);
+                set_reg(registers, call_stack, op_reg, Register::UfRef(uf_id));
                 let local_root = layered_uf.find_root(existing_parent_index);
                 *read_write_mode =
                     ReadWriteMode::Read(GlobalParentIndex::offset(local_root.rooted, 1));
@@ -245,15 +268,17 @@ fn exectute_impl(
                 let cell_id = heap.insert_struct(functor, *arity);
                 let uf_id = layered_uf.alloc_node();
                 layered_uf.set_cell(uf_id, cell_id);
-                set_reg(registers, call_stack, arg_reg, uf_id);
+                set_reg(registers, call_stack, arg_reg, Register::UfRef(uf_id));
             }
 
-            WamInstr::SetVar { name, reg } => {
-                let cell_id = heap.insert_var(name.clone());
-                let uf_id = layered_uf.alloc_node();
-                layered_uf.set_cell(uf_id, cell_id);
-                set_reg(registers, call_stack, reg, uf_id);
-            }
+            WamInstr::SetVar { reg, .. } => match reg {
+                WamReg::X(index) => {
+                    set_reg(registers, call_stack, reg, Register::XRef(*index));
+                }
+                WamReg::Y(_) => {
+                    panic!("SetVar arg should be X register");
+                }
+            },
 
             WamInstr::SetVal { reg, .. } => {
                 let prev_id = get_reg(registers, call_stack, reg);
@@ -274,15 +299,15 @@ fn exectute_impl(
                 let cell_id = heap.insert_var(name.clone());
                 let uf_id = layered_uf.alloc_node();
                 layered_uf.set_cell(uf_id, cell_id);
-                set_reg(registers, call_stack, arg_reg, uf_id);
-                set_reg(registers, call_stack, with, uf_id);
+                set_reg(registers, call_stack, arg_reg, Register::UfRef(uf_id));
+                set_reg(registers, call_stack, with, Register::UfRef(uf_id));
             }
 
             WamInstr::PutVal { arg_reg, with, .. } => {
                 // with レジスタの内容を arg_reg にコピー
                 let with_id = get_reg(registers, call_stack, with);
                 if !with_id.is_empty() {
-                    set_reg(registers, call_stack, arg_reg, with_id);
+                    set_reg(registers, call_stack, arg_reg, Register::UfRef(with_id));
                 } else {
                     panic!("PutVal: with register is empty");
                 }
@@ -318,7 +343,7 @@ fn exectute_impl(
                 match read_write_mode {
                     ReadWriteMode::Read(read_index) => {
                         // just reference from register
-                        set_reg(registers, call_stack, reg, *read_index);
+                        set_reg(registers, call_stack, reg, Register::UfRef(*read_index));
 
                         *read_write_mode =
                             ReadWriteMode::Read(GlobalParentIndex::offset(*read_index, 1));
@@ -328,7 +353,7 @@ fn exectute_impl(
                         let cell_id = heap.insert_var(name.clone());
                         let uf_id = layered_uf.alloc_node();
                         layered_uf.set_cell(uf_id, cell_id);
-                        set_reg(registers, call_stack, reg, uf_id);
+                        set_reg(registers, call_stack, reg, Register::UfRef(uf_id));
                     }
                 }
             }
@@ -383,7 +408,7 @@ fn exectute_impl(
                 let db_var_cell = heap.insert_var(name.clone());
                 let with_id = layered_uf.alloc_node();
                 layered_uf.set_cell(with_id, db_var_cell);
-                set_reg(registers, call_stack, with, with_id);
+                set_reg(registers, call_stack, with, Register::UfRef(with_id));
 
                 if !unify(reg_id, with_id, heap, layered_uf) {
                     *exec_mode = ExecMode::ResolvedToFalse;
@@ -901,3 +926,4 @@ mod tests {
         assert_eq!(result, Ok(expected));
     }
 }
+
