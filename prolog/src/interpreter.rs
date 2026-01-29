@@ -55,13 +55,12 @@ pub(crate) fn get_reg<'a>(
 }
 
 /// Registerを再帰的に辿り、UfRefを返す。
-/// YRefの場合は参照先を辿る。
+/// Refの場合は参照先を辿る。
 pub(crate) fn resolve_register(
     call_stack: &Vec<StackFrame>,
     registers: &Registers,
     register: &Register,
 ) -> GlobalParentIndex {
-    println!("resolve_register: {:?}", register);
     match register {
         Register::UfRef(id) => *id,
         Register::XRef(index) => {
@@ -432,7 +431,12 @@ fn exectute_impl(
                 arity: _,
                 to_program_counter,
             } => {
-                println!("push_stack_frame called stack: {:?}", call_stack);
+                call_stack.push(StackFrame {
+                    return_address: 0,
+                    regs: Vec::with_capacity(10),
+                });
+                println!("call called to: {}", to_program_counter);
+
                 // 現在のフレームに return_address を設定
                 if let Some(frame) = call_stack.last_mut() {
                     frame.return_address = *program_counter;
@@ -441,11 +445,11 @@ fn exectute_impl(
             }
             WamInstr::Label { name: _, arity: _ } => {}
             WamInstr::Proceed => {
-                println!("pop_stack_frame called stack: {:?}", call_stack);
+                println!("proceed called to: {}", program_counter);
                 // クエリのフレームだけが残っている場合は終了
                 if call_stack.len() <= 1 {
                     *exec_mode = ExecMode::ResolvedToTrue;
-                } else if let Some(frame) = call_stack.last() {
+                } else if let Some(frame) = call_stack.pop() {
                     *program_counter = frame.return_address;
                 } else {
                     panic!("Proceed on empty call_stack")
@@ -456,18 +460,9 @@ fn exectute_impl(
                 *exec_mode = ExecMode::ResolvedToFalse;
             }
 
-            // スタックフレームを確保してYレジスタを初期化
-            WamInstr::Allocate { size } => {
-                call_stack.push(StackFrame {
-                    return_address: 0,
-                    regs: Vec::with_capacity(*size),
-                });
-            }
-            WamInstr::Deallocate => {
-                // フレームをポップ
-                println!("deallocate called stack: {:?}", call_stack);
-                call_stack.pop();
-            }
+            // nop
+            WamInstr::Allocate { .. } => {}
+            WamInstr::Deallocate => {}
 
             instr => {
                 todo!("{:?}", instr);
