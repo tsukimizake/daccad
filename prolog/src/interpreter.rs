@@ -33,7 +33,10 @@ pub(crate) fn get_reg<'a>(
     reg: &WamReg,
 ) -> &'a Register {
     match reg {
-        WamReg::X(index) => registers.regs.get(*index).expect("get_reg: X register is empty"),
+        WamReg::X(index) => registers
+            .regs
+            .get(*index)
+            .expect("get_reg: X register is empty"),
         WamReg::Y(index) => call_stack
             .last()
             .and_then(|frame| frame.regs.get(*index))
@@ -329,8 +332,8 @@ fn exectute_impl(
                     read_write_mode,
                     exec_mode,
                     call_stack,
-                        program_counter,
-                    );
+                    program_counter,
+                );
             }
 
             WamInstr::UnifyVar { name, reg } => {
@@ -395,22 +398,9 @@ fn exectute_impl(
             }
 
             // トップレベル引数の変数の初回出現。レジスタには既にクエリからの値が入っている。
-            WamInstr::GetVar { name, reg, with } => {
+            WamInstr::GetVar { reg, with, .. } => {
                 let reg_id = resolve_register(registers, get_reg(registers, call_stack, reg));
-
-                // DB側の変数用に新しいノードとセルを作成
-                let db_var_cell = heap.insert_var(name.clone());
-                let with_id = layered_uf.alloc_node();
-                layered_uf.set_cell(with_id, db_var_cell);
-                set_reg(registers, call_stack, with, Register::UfRef(with_id));
-
-                if !unify(reg_id, with_id, heap, layered_uf) {
-                    println!(
-                        "GetVar unify failed for reg_id: {:?}, with_id: {:?}",
-                        reg_id, with_id
-                    );
-                    *exec_mode = ExecMode::ResolvedToFalse;
-                }
+                set_reg(registers, call_stack, with, Register::UfRef(reg_id));
             }
 
             // トップレベル引数の変数の2回目以降の出現
