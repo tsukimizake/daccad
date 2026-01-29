@@ -27,33 +27,30 @@ impl Registers {
 /// レジスタの値を取得する。XRefの場合は再帰的に辿り、最終的にUfRefを返す。
 /// UfRefでない場合はpanic!する。
 #[inline]
-pub(crate) fn get_reg(
-    registers: &Registers,
-    call_stack: &[StackFrame],
+pub(crate) fn get_reg<'a>(
+    registers: &'a Registers,
+    call_stack: &'a [StackFrame],
     reg: &WamReg,
-) -> GlobalParentIndex {
-    let register = match reg {
-        WamReg::X(index) => registers.regs.get(*index),
-        WamReg::Y(index) => call_stack.last().and_then(|frame| frame.regs.get(*index)),
-    };
-
-    // XRefを再帰的に辿る
-    match register {
-        Some(r) => resolve_register(registers, r),
-        None => GlobalParentIndex::EMPTY,
+) -> &'a Register {
+    match reg {
+        WamReg::X(index) => registers.regs.get(*index).expect("get_reg: X register is empty"),
+        WamReg::Y(index) => call_stack
+            .last()
+            .and_then(|frame| frame.regs.get(*index))
+            .expect("get_reg: Y register is empty"),
     }
 }
 
 /// Registerを再帰的に辿り、UfRefを返す。
-/// XRefの場合は参照先を辿り、最終的にUfRefでない場合はpanic!する。
-fn resolve_register(registers: &Registers, register: &Register) -> GlobalParentIndex {
+/// YRefの場合は参照先を辿る。
+pub(crate) fn resolve_register(registers: &Registers, register: &Register) -> GlobalParentIndex {
     match register {
         Register::UfRef(id) => *id,
         Register::YRef(index) => {
             let next = registers
                 .regs
                 .get(*index)
-                .expect("resolve_register: XRef points to empty register");
+                .expect("resolve_register: YRef points to empty register");
             resolve_register(registers, next)
         }
     }
@@ -287,13 +284,9 @@ fn exectute_impl(
             },
 
             WamInstr::SetVal { reg, .. } => {
-                let prev_id = get_reg(registers, call_stack, reg);
-                if !prev_id.is_empty() {
-                    let new_id = layered_uf.alloc_node();
-                    layered_uf.union(new_id, prev_id);
-                } else {
-                    panic!("SetVal: register is empty");
-                }
+                let prev_id = resolve_register(registers, get_reg(registers, call_stack, reg));
+                let new_id = layered_uf.alloc_node();
+                layered_uf.union(new_id, prev_id);
             }
 
             WamInstr::PutVar {
@@ -313,12 +306,8 @@ fn exectute_impl(
 
             WamInstr::PutVal { arg_reg, with, .. } => {
                 // with レジスタの内容を arg_reg にコピー
-                let with_id = get_reg(registers, call_stack, with);
-                if !with_id.is_empty() {
-                    set_reg(registers, call_stack, arg_reg, Register::UfRef(with_id));
-                } else {
-                    panic!("PutVal: with register is empty");
-                }
+                let with_id = resolve_register(registers, get_reg(registers, call_stack, with));
+                set_reg(registers, call_stack, arg_reg, Register::UfRef(with_id));
             }
 
             WamInstr::GetStruct {
@@ -326,26 +315,22 @@ fn exectute_impl(
                 arity,
                 reg: op_reg,
             } => {
-                let id = get_reg(registers, call_stack, op_reg);
-                if !id.is_empty() {
-                    let Parent { cell, rooted, .. } = layered_uf.find_root(id);
-                    getstruct_cell_ref(
-                        *rooted,
-                        *cell,
-                        op_reg,
-                        functor,
-                        arity,
-                        registers,
-                        heap,
-                        layered_uf,
-                        read_write_mode,
-                        exec_mode,
-                        call_stack,
+                let id = resolve_register(registers, get_reg(registers, call_stack, op_reg));
+                let Parent { cell, rooted, .. } = layered_uf.find_root(id);
+                getstruct_cell_ref(
+                    *rooted,
+                    *cell,
+                    op_reg,
+                    functor,
+                    arity,
+                    registers,
+                    heap,
+                    layered_uf,
+                    read_write_mode,
+                    exec_mode,
+                    call_stack,
                         program_counter,
                     );
-                } else {
-                    panic!("GetStruct: register is empty");
-                }
             }
 
             WamInstr::UnifyVar { name, reg } => {
@@ -368,13 +353,13 @@ fn exectute_impl(
             }
             WamInstr::UnifyVal { reg, .. } => match read_write_mode {
                 ReadWriteMode::Read(read_index) => {
-                    let id = get_reg(registers, call_stack, reg);
+                    let id = resolve_register(registers, get_reg(registers, call_stack, reg));
                     layered_uf.union(id, *read_index);
                     *read_write_mode =
                         ReadWriteMode::Read(GlobalParentIndex::offset(*read_index, 1));
                 }
                 ReadWriteMode::Write => {
-                    let id = get_reg(registers, call_stack, reg);
+                    let id = resolve_register(registers, get_reg(registers, call_stack, reg));
                     let new_id = layered_uf.alloc_node();
                     layered_uf.union(id, new_id);
                 }
@@ -411,8 +396,7 @@ fn exectute_impl(
 
             // トップレベル引数の変数の初回出現。レジスタには既にクエリからの値が入っている。
             WamInstr::GetVar { name, reg, with } => {
-                let reg_id = get_reg(registers, call_stack, reg);
-                debug_assert!(!reg_id.is_empty(), "GetVar: register is empty");
+                let reg_id = resolve_register(registers, get_reg(registers, call_stack, reg));
 
                 // DB側の変数用に新しいノードとセルを作成
                 let db_var_cell = heap.insert_var(name.clone());
@@ -431,8 +415,8 @@ fn exectute_impl(
 
             // トップレベル引数の変数の2回目以降の出現
             WamInstr::GetVal { with, reg, .. } => {
-                let with_id = get_reg(registers, call_stack, with);
-                let reg_id = get_reg(registers, call_stack, reg);
+                let with_id = resolve_register(registers, get_reg(registers, call_stack, with));
+                let reg_id = resolve_register(registers, get_reg(registers, call_stack, reg));
                 if !unify(with_id, reg_id, heap, layered_uf) {
                     println!(
                         "GetVal unify failed for with_id: {:?}, reg_id: {:?}",

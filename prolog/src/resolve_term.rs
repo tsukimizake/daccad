@@ -1,6 +1,6 @@
 use crate::cell_heap::{Cell, CellHeap, CellIndex};
 use crate::compiler_bytecode::WamReg;
-use crate::interpreter::{get_reg, Registers, StackFrame};
+use crate::interpreter::{get_reg, resolve_register, Registers, StackFrame};
 use crate::layered_uf::{GlobalParentIndex, LayeredUf};
 use crate::parse::{Term, TermId};
 use std::collections::HashMap;
@@ -17,15 +17,10 @@ pub fn resolve_term(
     match term {
         Term::Var { id, name, .. } => {
             if let Some(reg) = term_to_reg.get(id) {
-                let uf_id = get_reg(registers, call_stack, reg);
-                if !uf_id.is_empty() {
-                    let root = uf.find_root(uf_id);
-                    // rootedを使う: 構造体の引数はroot.rooted + 1から連続している
-                    cell_to_term(root.cell, root.rooted, heap, uf)
-                } else {
-                    // レジスタが空の場合は未束縛変数
-                    Term::new_var(name.clone())
-                }
+                let uf_id = resolve_register(registers, get_reg(registers, call_stack, reg));
+                let root = uf.find_root(uf_id);
+                // rootedを使う: 構造体の引数はroot.rooted + 1から連続している
+                cell_to_term(root.cell, root.rooted, heap, uf)
             } else {
                 // term_to_regに登録されていない変数はそのまま
                 Term::new_var(name.clone())
