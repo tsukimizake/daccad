@@ -8,7 +8,17 @@ use crate::resolve_term::resolve_term;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Register {
     UfRef(GlobalParentIndex),
+    XRef(usize),
     YRef(usize),
+}
+
+impl From<WamReg> for Register {
+    fn from(reg: WamReg) -> Self {
+        match reg {
+            WamReg::X(index) => Register::XRef(index),
+            WamReg::Y(index) => Register::YRef(index),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,15 +56,29 @@ pub(crate) fn get_reg<'a>(
 
 /// Registerを再帰的に辿り、UfRefを返す。
 /// YRefの場合は参照先を辿る。
-pub(crate) fn resolve_register(registers: &Registers, register: &Register) -> GlobalParentIndex {
+pub(crate) fn resolve_register(
+    call_stack: &Vec<StackFrame>,
+    registers: &Registers,
+    register: &Register,
+) -> GlobalParentIndex {
+    println!("resolve_register: {:?}", register);
     match register {
         Register::UfRef(id) => *id,
-        Register::YRef(index) => {
+        Register::XRef(index) => {
             let next = registers
                 .regs
                 .get(*index)
+                .expect("resolve_register: XRef points to empty register");
+            resolve_register(call_stack, registers, next)
+        }
+        Register::YRef(index) => {
+            let next = call_stack
+                .last()
+                .unwrap()
+                .regs
+                .get(*index)
                 .expect("resolve_register: YRef points to empty register");
-            resolve_register(registers, next)
+            resolve_register(call_stack, registers, next)
         }
     }
 }
@@ -279,7 +303,7 @@ fn exectute_impl(
 
             WamInstr::SetVar { reg, .. } => match reg {
                 WamReg::X(index) => {
-                    set_reg(registers, call_stack, reg, Register::YRef(*index));
+                    set_reg(registers, call_stack, reg, Register::XRef(*index));
                 }
                 WamReg::Y(_) => {
                     panic!("SetVar arg should be X register");
@@ -287,7 +311,8 @@ fn exectute_impl(
             },
 
             WamInstr::SetVal { reg, .. } => {
-                let prev_id = resolve_register(registers, get_reg(registers, call_stack, reg));
+                let prev_id =
+                    resolve_register(call_stack, registers, get_reg(registers, call_stack, reg));
                 let new_id = layered_uf.alloc_node();
                 layered_uf.union(new_id, prev_id);
             }
@@ -303,22 +328,48 @@ fn exectute_impl(
                 layered_uf.set_cell(uf_id, cell_id);
 
                 // おかしい arg_reg更新時にwithも変更されるようになってしまう
-                set_reg(registers, call_stack, arg_reg, Register::YRef(with.index()));
+                set_reg(registers, call_stack, arg_reg, (*with).into());
                 set_reg(registers, call_stack, with, Register::UfRef(uf_id));
             }
 
             WamInstr::PutVal { arg_reg, with, .. } => {
                 // with レジスタの内容を arg_reg にコピー
-                let with_id = resolve_register(registers, get_reg(registers, call_stack, with));
+                let with_id =
+                    resolve_register(call_stack, registers, get_reg(registers, call_stack, with));
                 set_reg(registers, call_stack, arg_reg, Register::UfRef(with_id));
             }
 
+            // トップレベル引数の変数の初回出現。レジスタには既にクエリからの値が入っている。
+            WamInstr::GetVar { reg, with, .. } => {
+                let reg_id =
+                    resolve_register(call_stack, registers, get_reg(registers, call_stack, reg));
+                set_reg(registers, call_stack, with, Register::UfRef(reg_id));
+            }
+
+            // トップレベル引数の変数の2回目以降の出現
+            WamInstr::GetVal { with, reg, .. } => {
+                let with_id =
+                    resolve_register(call_stack, registers, get_reg(registers, call_stack, with));
+                let reg_id =
+                    resolve_register(call_stack, registers, get_reg(registers, call_stack, reg));
+                if !unify(with_id, reg_id, heap, layered_uf) {
+                    println!(
+                        "GetVal unify failed for with_id: {:?}, reg_id: {:?}",
+                        with_id, reg_id
+                    );
+                    *exec_mode = ExecMode::ResolvedToFalse;
+                }
+            }
             WamInstr::GetStruct {
                 functor,
                 arity,
                 reg: op_reg,
             } => {
-                let id = resolve_register(registers, get_reg(registers, call_stack, op_reg));
+                let id = resolve_register(
+                    call_stack,
+                    registers,
+                    get_reg(registers, call_stack, op_reg),
+                );
                 let Parent { cell, rooted, .. } = layered_uf.find_root(id);
                 getstruct_cell_ref(
                     *rooted,
@@ -356,13 +407,21 @@ fn exectute_impl(
             }
             WamInstr::UnifyVal { reg, .. } => match read_write_mode {
                 ReadWriteMode::Read(read_index) => {
-                    let id = resolve_register(registers, get_reg(registers, call_stack, reg));
+                    let id = resolve_register(
+                        call_stack,
+                        registers,
+                        get_reg(registers, call_stack, reg),
+                    );
                     layered_uf.union(id, *read_index);
                     *read_write_mode =
                         ReadWriteMode::Read(GlobalParentIndex::offset(*read_index, 1));
                 }
                 ReadWriteMode::Write => {
-                    let id = resolve_register(registers, get_reg(registers, call_stack, reg));
+                    let id = resolve_register(
+                        call_stack,
+                        registers,
+                        get_reg(registers, call_stack, reg),
+                    );
                     let new_id = layered_uf.alloc_node();
                     layered_uf.union(id, new_id);
                 }
@@ -395,25 +454,6 @@ fn exectute_impl(
             WamInstr::Error { message: _ } => {
                 println!("Error instruction encountered");
                 *exec_mode = ExecMode::ResolvedToFalse;
-            }
-
-            // トップレベル引数の変数の初回出現。レジスタには既にクエリからの値が入っている。
-            WamInstr::GetVar { reg, with, .. } => {
-                let reg_id = resolve_register(registers, get_reg(registers, call_stack, reg));
-                set_reg(registers, call_stack, with, Register::UfRef(reg_id));
-            }
-
-            // トップレベル引数の変数の2回目以降の出現
-            WamInstr::GetVal { with, reg, .. } => {
-                let with_id = resolve_register(registers, get_reg(registers, call_stack, with));
-                let reg_id = resolve_register(registers, get_reg(registers, call_stack, reg));
-                if !unify(with_id, reg_id, heap, layered_uf) {
-                    println!(
-                        "GetVal unify failed for with_id: {:?}, reg_id: {:?}",
-                        with_id, reg_id
-                    );
-                    *exec_mode = ExecMode::ResolvedToFalse;
-                }
             }
 
             // スタックフレームを確保してYレジスタを初期化
@@ -467,6 +507,10 @@ pub fn execute_instructions(query: CompiledQuery, orig_query: Vec<Term>) -> Resu
     }
 
     if exec_mode == ExecMode::ResolvedToFalse {
+        println!("registers after execution: {:?}", registers);
+        println!("call_stack after execution: {:?}", call_stack);
+        println!("layered_uf after execution: {:?}", layered_uf);
+        println!("cell_heap after execution: {:?}", cell_heap);
         return Err(());
     }
 
@@ -484,6 +528,8 @@ pub fn execute_instructions(query: CompiledQuery, orig_query: Vec<Term>) -> Resu
             )
         })
         .collect();
+    println!("registers after execution: {:?}", registers);
+    println!("call_stack after execution: {:?}", call_stack);
     println!("layered_uf after execution: {:?}", layered_uf);
     println!("cell_heap after execution: {:?}", cell_heap);
     Ok(resolved)

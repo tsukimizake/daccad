@@ -1,6 +1,6 @@
 use crate::cell_heap::{Cell, CellHeap, CellIndex};
 use crate::compiler_bytecode::WamReg;
-use crate::interpreter::{get_reg, resolve_register, Registers, StackFrame};
+use crate::interpreter::{Registers, StackFrame, get_reg, resolve_register};
 use crate::layered_uf::{GlobalParentIndex, LayeredUf};
 use crate::parse::{Term, TermId};
 use std::collections::HashMap;
@@ -12,12 +12,13 @@ pub fn resolve_term(
     registers: &mut Registers,
     heap: &CellHeap,
     uf: &mut LayeredUf,
-    call_stack: &[StackFrame],
+    call_stack: &Vec<StackFrame>,
 ) -> Term {
     match term {
         Term::Var { id, name, .. } => {
             if let Some(reg) = term_to_reg.get(id) {
-                let uf_id = resolve_register(registers, get_reg(registers, call_stack, reg));
+                let uf_id =
+                    resolve_register(call_stack, registers, get_reg(registers, call_stack, reg));
                 let root = uf.find_root(uf_id);
                 // rootedを使う: 構造体の引数はroot.rooted + 1から連続している
                 cell_to_term(root.cell, root.rooted, heap, uf)
@@ -39,9 +40,16 @@ pub fn resolve_term(
                 .iter()
                 .map(|item| resolve_term(item, term_to_reg, registers, heap, uf, call_stack))
                 .collect();
-            let resolved_tail = tail
-                .as_ref()
-                .map(|t| Box::new(resolve_term(t, term_to_reg, registers, heap, uf, call_stack)));
+            let resolved_tail = tail.as_ref().map(|t| {
+                Box::new(resolve_term(
+                    t,
+                    term_to_reg,
+                    registers,
+                    heap,
+                    uf,
+                    call_stack,
+                ))
+            });
             Term::new_list(resolved_items, resolved_tail)
         }
     }
