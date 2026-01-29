@@ -686,6 +686,13 @@ mod tests {
     }
 
     #[test]
+    fn simpler_rule() {
+        let (query, query_term) = compile_program("p :- q(X, Z), r(Z, Y). q(a, b). r(b, c).", "p.");
+        let result = execute_instructions(query, query_term);
+        let expected = vec![Term::new_struct("p".to_string(), vec![])];
+        assert_eq!(result, Ok(expected));
+    }
+    #[test]
     fn sample_rule() {
         let (query, query_term) =
             compile_program("p(X,Y) :- q(X, Z), r(Z, Y). q(a, b). r(b, c).", "p(A, B).");
