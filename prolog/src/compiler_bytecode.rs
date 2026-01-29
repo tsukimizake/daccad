@@ -49,6 +49,7 @@ pub enum WamInstr {
     },
 
     // 初回出現変数の場合はGetVarでregに変数をセットする。ufにも登録する
+    // ruleのheadでも使用する。reg(arg_register) -> withに値をコピーする。
     GetVar {
         name: VarName,
         reg: WamReg,
@@ -70,12 +71,13 @@ pub enum WamInstr {
     },
 
     // Query, rule bodyで使用。
-    // 初回出現変数の場合はPutVarでarg_regに変数をセット
+    // 初回出現変数の場合はPutVarでarg_reg, withにvar変数をセット
     PutVar {
         name: VarName,
         arg_reg: WamReg,
         with: WamReg,
     },
+    // 2回目以降の出現変数の場合はPutValでwith->arg_regに値コピー
     PutVal {
         name: VarName,
         arg_reg: WamReg,
