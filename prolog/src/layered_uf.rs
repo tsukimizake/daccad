@@ -1,9 +1,10 @@
 mod internal_vecs;
 
-use crate::cell_heap::CellIndex;
+use crate::cell_heap::Cell;
 use internal_vecs::{
     AllLayers, AllLayersIndex, CurrentLayerParents, LocalParentIndex, OldLayersParents, Parents,
 };
+use std::rc::Rc;
 
 pub use internal_vecs::{GlobalParentIndex, Parent};
 
@@ -95,12 +96,12 @@ impl LayeredUf {
         global_id
     }
 
-    pub fn set_cell(&mut self, id: GlobalParentIndex, cell: CellIndex) {
+    pub fn set_cell(&mut self, id: GlobalParentIndex, cell: Rc<Cell>) {
         let (old_layers, mut current_layer, is_top_layer) = self.split_layers(id);
         debug_assert!(is_top_layer, "set_cell called on non-top layer");
         let local_root_idx =
             find_local_root(id, old_layers.0.len(), &mut current_layer, is_top_layer);
-        current_layer[local_root_idx].cell = cell;
+        current_layer[local_root_idx].cell = Some(cell);
     }
 
     // (nodeを含むlayerより下のlayers, nodeを含むlayer, is_top_layer)を返す
@@ -246,7 +247,7 @@ fn find_root_impl(
     let local_root = &current_layer[local_root_idx];
 
     // そのlayerでcellが更新されている場合はそれを返す
-    if !local_root.cell.is_empty() {
+    if local_root.has_cell() {
         return GlobalParentIndex::from_local_index(local_root_idx, old_layers_len);
     }
 
@@ -286,7 +287,7 @@ fn find_root_old_layers(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cell_heap::CellHeap;
+    use internal_vecs::LocalParentIndex;
 
     #[test]
     fn split_layers_simple() {
@@ -348,49 +349,46 @@ mod tests {
     #[test]
     fn find_root_uses_old_root_cell() {
         let mut uf = LayeredUf::new();
-        let mut heap = CellHeap::new();
         let base = uf.alloc_node();
-        let base_cell = heap.insert_var("base".to_string());
-        uf.set_cell(base, base_cell);
+        let base_cell = Cell::new_var("base".to_string());
+        uf.set_cell(base, base_cell.clone());
 
         uf.push_choicepoint();
         let child = uf.alloc_node_with_parent(base);
 
         let root = uf.find_root(child);
-        assert_eq!(root.cell, base_cell);
+        assert_eq!(root.cell, Some(base_cell));
     }
 
     #[test]
     fn find_root_uses_local_cell_over_old_root() {
         let mut uf = LayeredUf::new();
-        let mut heap = CellHeap::new();
         let base = uf.alloc_node();
-        let base_cell = heap.insert_var("base".to_string());
+        let base_cell = Cell::new_var("base".to_string());
         uf.set_cell(base, base_cell);
 
         uf.push_choicepoint();
         let child = uf.alloc_node_with_parent(base);
-        let child_cell = heap.insert_var("child".to_string());
-        uf.set_cell(child, child_cell);
+        let child_cell = Cell::new_var("child".to_string());
+        uf.set_cell(child, child_cell.clone());
 
         let root = uf.find_root(child);
-        assert_eq!(root.cell, child_cell);
+        assert_eq!(root.cell, Some(child_cell));
     }
 
     #[test]
     fn union_preserves_cell_from_non_root() {
         let mut uf = LayeredUf::new();
-        let mut heap = CellHeap::new();
         let left = uf.alloc_node();
         let right = uf.alloc_node();
-        let right_cell = heap.insert_var("right".to_string());
-        uf.set_cell(right, right_cell);
+        let right_cell = Cell::new_var("right".to_string());
+        uf.set_cell(right, right_cell.clone());
         uf.debug_dump();
 
         uf.union(left, right);
 
         let root = uf.find_root(left);
-        assert_eq!(root.cell, right_cell);
+        assert_eq!(root.cell, Some(right_cell));
     }
 
     #[test]

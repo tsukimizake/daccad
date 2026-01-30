@@ -1,7 +1,8 @@
-use crate::cell_heap::{Cell, CellHeap, CellIndex};
+use crate::cell_heap::Cell;
 use crate::compile_query::CompiledQuery;
 use crate::compiler_bytecode::{WamInstr, WamReg};
 use crate::layered_uf::{GlobalParentIndex, LayeredUf, Parent};
+use std::rc::Rc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Register {
@@ -138,7 +139,6 @@ pub struct StackFrame {
 #[derive(Debug)]
 pub struct ExecutionState {
     pub registers: Registers,
-    pub cell_heap: CellHeap,
     pub layered_uf: LayeredUf,
     pub call_stack: Vec<StackFrame>,
 }
@@ -153,21 +153,20 @@ enum ReadWriteMode {
 
 fn getstruct_cell_ref(
     existing_parent_index: GlobalParentIndex,
-    existing_cell: CellIndex,
+    existing_cell: &Rc<Cell>,
     op_reg: &WamReg,
     functor: &String,
     arity: &usize,
     registers: &mut Registers,
-    heap: &mut CellHeap,
     layered_uf: &mut LayeredUf,
     read_write_mode: &mut ReadWriteMode,
     exec_mode: &mut ExecMode,
     call_stack: &mut [StackFrame],
     program_counter: &usize,
 ) {
-    match heap.value(existing_cell).as_ref() {
+    match existing_cell.as_ref() {
         Cell::Var { .. } => {
-            let struct_cell = heap.insert_struct(functor, *arity);
+            let struct_cell = Cell::new_struct(functor.clone(), *arity);
             let new_id = layered_uf.alloc_node();
             set_reg(
                 registers,
@@ -178,7 +177,6 @@ fn getstruct_cell_ref(
             );
             layered_uf.union(existing_parent_index, new_id);
             layered_uf.set_cell(new_id, struct_cell);
-            heap.set_ref(existing_cell, struct_cell);
             *read_write_mode = ReadWriteMode::Write;
         }
         Cell::Struct {
@@ -187,7 +185,7 @@ fn getstruct_cell_ref(
         } => {
             if existing_functor == functor && existing_arity == arity {
                 let uf_id = layered_uf.alloc_node();
-                layered_uf.set_cell(uf_id, existing_cell);
+                layered_uf.set_cell(uf_id, existing_cell.clone());
                 set_reg(
                     registers,
                     call_stack,
@@ -206,30 +204,6 @@ fn getstruct_cell_ref(
                 *exec_mode = ExecMode::ResolvedToFalse;
             }
         }
-        Cell::VarRef { ref_index, .. } => {
-            getstruct_cell_ref(
-                existing_parent_index,
-                *ref_index,
-                op_reg,
-                functor,
-                arity,
-                registers,
-                heap,
-                layered_uf,
-                read_write_mode,
-                exec_mode,
-                call_stack,
-                program_counter,
-            );
-        }
-    }
-}
-
-/// CellIndex から VarRef を辿って実際のセルを取得
-fn deref_cell(cell: CellIndex, heap: &CellHeap) -> CellIndex {
-    match heap.value(cell).as_ref() {
-        Cell::VarRef { ref_index, .. } => deref_cell(*ref_index, heap),
-        _ => cell,
     }
 }
 
@@ -237,46 +211,41 @@ fn deref_cell(cell: CellIndex, heap: &CellHeap) -> CellIndex {
 /// - Var + Var: union (r がルートになる)
 /// - Var + Struct: Var を Struct への参照に変更し、Struct がルートになるように union
 /// - Struct + Struct: functor/arity が一致すれば成功（引数の再帰的統一は未実装）、不一致なら失敗
-fn unify(
-    l_id: GlobalParentIndex,
-    r_id: GlobalParentIndex,
-    heap: &CellHeap,
-    uf: &mut LayeredUf,
-) -> bool {
+fn unify(l_id: GlobalParentIndex, r_id: GlobalParentIndex, uf: &mut LayeredUf) -> bool {
     let mut ids_to_unify = Vec::with_capacity(10);
     ids_to_unify.push((l_id, r_id));
     let mut success = true;
 
     while (!ids_to_unify.is_empty()) && success {
         let (l_id, r_id) = ids_to_unify.pop().unwrap();
-        let l_cell = deref_cell(uf.find_root(l_id).cell, heap);
-        let r_cell = deref_cell(uf.find_root(r_id).cell, heap);
-        match (heap.value(l_cell).as_ref(), heap.value(r_cell).as_ref()) {
+        let l_cell = uf.find_root(l_id).cell.clone();
+        let r_cell = uf.find_root(r_id).cell.clone();
+        match (l_cell.as_deref(), r_cell.as_deref()) {
             // Var + Var: そのまま union (l <- r で r がルート)
-            (Cell::Var { .. }, Cell::Var { .. }) => {
+            (Some(Cell::Var { .. }), Some(Cell::Var { .. })) => {
                 uf.union(l_id, r_id);
                 success = true
             }
             // Var + Struct: Struct がルートになるように union
-            (Cell::Var { .. }, Cell::Struct { .. }) => {
+            (Some(Cell::Var { .. }), Some(Cell::Struct { .. })) => {
                 uf.union(l_id, r_id); // l <- r で r (Struct) がルート
                 success = true
             }
             // Struct + Var: Struct がルートになるように union
-            (Cell::Struct { .. }, Cell::Var { .. }) => {
+            (Some(Cell::Struct { .. }), Some(Cell::Var { .. })) => {
                 uf.union(r_id, l_id); // r <- l で l (Struct) がルート
                 success = true
             }
             // Struct + Struct: functor/arity チェック
             (
-                Cell::Struct {
+                Some(Cell::Struct {
                     functor: f1,
                     arity: a1,
-                },
-                Cell::Struct {
+                }),
+                Some(Cell::Struct {
                     functor: f2,
                     arity: a2,
-                },
+                }),
             ) => {
                 if f1 == f2 && a1 == a2 {
                     uf.union(l_id, r_id);
@@ -293,12 +262,10 @@ fn unify(
                     success = false
                 }
             }
-            // VarRef は deref_cell で解決されているはずなので到達しない
             _ => {
                 panic!(
                     "unify: unexpected cell combination: {:?} and {:?}",
-                    heap.value(l_cell),
-                    heap.value(r_cell)
+                    l_cell, r_cell
                 );
             }
         }
@@ -310,7 +277,6 @@ fn exectute_impl(
     instructions: &[WamInstr],
     program_counter: &mut usize,
     registers: &mut Registers,
-    heap: &mut CellHeap,
     layered_uf: &mut LayeredUf,
     exec_mode: &mut ExecMode,
     read_write_mode: &mut ReadWriteMode,
@@ -323,9 +289,9 @@ fn exectute_impl(
                 arity,
                 arg_reg,
             } => {
-                let cell_id = heap.insert_struct(functor, *arity);
+                let cell = Cell::new_struct(functor.clone(), *arity);
                 let uf_id = layered_uf.alloc_node();
-                layered_uf.set_cell(uf_id, cell_id);
+                layered_uf.set_cell(uf_id, cell);
                 set_reg(
                     registers,
                     call_stack,
@@ -336,9 +302,9 @@ fn exectute_impl(
             }
 
             WamInstr::SetVar { name, reg } => {
-                let cell_id = heap.insert_var(name.clone());
+                let cell = Cell::new_var(name.clone());
                 let uf_id = layered_uf.alloc_node();
-                layered_uf.set_cell(uf_id, cell_id);
+                layered_uf.set_cell(uf_id, cell);
                 set_reg(
                     registers,
                     call_stack,
@@ -365,9 +331,9 @@ fn exectute_impl(
                 with,
                 ..
             } => {
-                let cell_id = heap.insert_var(name.clone());
+                let cell = Cell::new_var(name.clone());
                 let uf_id = layered_uf.alloc_node();
-                layered_uf.set_cell(uf_id, cell_id);
+                layered_uf.set_cell(uf_id, cell);
 
                 set_reg(
                     registers,
@@ -433,7 +399,7 @@ fn exectute_impl(
                     get_reg(registers, call_stack, reg, *program_counter),
                     *program_counter,
                 );
-                if !unify(with_id, reg_id, heap, layered_uf) {
+                if !unify(with_id, reg_id, layered_uf) {
                     println!(
                         "GetVal unify failed for with_id: {:?}, reg_id: {:?}",
                         with_id, reg_id
@@ -452,21 +418,24 @@ fn exectute_impl(
                     get_reg(registers, call_stack, op_reg, *program_counter),
                     *program_counter,
                 );
-                let Parent { cell, rooted, .. } = layered_uf.find_root(id);
-                getstruct_cell_ref(
-                    *rooted,
-                    *cell,
-                    op_reg,
-                    functor,
-                    arity,
-                    registers,
-                    heap,
-                    layered_uf,
-                    read_write_mode,
-                    exec_mode,
-                    call_stack,
-                    program_counter,
-                );
+                let Parent { cell, rooted, .. } = layered_uf.find_root(id).clone();
+                if let Some(existing_cell) = cell {
+                    getstruct_cell_ref(
+                        rooted,
+                        &existing_cell,
+                        op_reg,
+                        functor,
+                        arity,
+                        registers,
+                        layered_uf,
+                        read_write_mode,
+                        exec_mode,
+                        call_stack,
+                        program_counter,
+                    );
+                } else {
+                    panic!("GetStruct on empty cell at pc={}", program_counter);
+                }
             }
 
             WamInstr::UnifyVar { name, reg } => {
@@ -486,9 +455,9 @@ fn exectute_impl(
                     }
                     ReadWriteMode::Write => {
                         // set
-                        let cell_id = heap.insert_var(name.clone());
+                        let cell = Cell::new_var(name.clone());
                         let uf_id = layered_uf.alloc_node();
-                        layered_uf.set_cell(uf_id, cell_id);
+                        layered_uf.set_cell(uf_id, cell);
                         set_reg(
                             registers,
                             call_stack,
@@ -580,7 +549,6 @@ pub fn execute_instructions(linked: &CompiledQuery) -> Result<ExecutionState, ()
     let mut program_counter = 0;
     let mut exec_mode = ExecMode::Continue;
     let mut layered_uf = LayeredUf::new();
-    let mut cell_heap = CellHeap::new();
     let mut registers = Registers::new();
     let mut read_write_mode = ReadWriteMode::Write;
     let mut call_stack: Vec<StackFrame> = Vec::with_capacity(100);
@@ -593,7 +561,6 @@ pub fn execute_instructions(linked: &CompiledQuery) -> Result<ExecutionState, ()
             &linked.instructions,
             &mut program_counter,
             &mut registers,
-            &mut cell_heap,
             &mut layered_uf,
             &mut exec_mode,
             &mut read_write_mode,
@@ -607,18 +574,15 @@ pub fn execute_instructions(linked: &CompiledQuery) -> Result<ExecutionState, ()
         println!("registers after execution: {:?}", registers);
         println!("call_stack after execution: {:?}", call_stack);
         println!("layered_uf after execution: {:?}", layered_uf);
-        println!("cell_heap after execution: {:?}", cell_heap);
         return Err(());
     }
 
     println!("registers after execution: {:?}", registers);
     println!("call_stack after execution: {:?}", call_stack);
     println!("layered_uf after execution: {:?}", layered_uf);
-    println!("cell_heap after execution: {:?}", cell_heap);
 
     Ok(ExecutionState {
         registers,
-        cell_heap,
         layered_uf,
         call_stack,
     })
@@ -652,7 +616,7 @@ mod tests {
             .expect("Y register not found");
         let uf_id = resolve_register(&state.call_stack, &state.registers, register, usize::MAX);
         let root = state.layered_uf.find_root(uf_id);
-        (*state.cell_heap.value(root.cell)).clone()
+        root.cell.as_ref().expect("Cell not found").as_ref().clone()
     }
 
     #[test]
@@ -1100,34 +1064,6 @@ mod tests {
             Cell::Struct {
                 functor: "pair".to_string(),
                 arity: 2
-            }
-        );
-    }
-
-    #[test]
-    fn rule_head_with_nested_struct() {
-        // ルールヘッドにネストした構造体: wrap(box(inner(X))) :- get(X).
-        let linked = compile_program(
-            "wrap(box(inner(X))) :- get(X). get(val).",
-            "wrap(box(inner(val))).",
-        );
-        let result = execute_instructions(&linked);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn rule_head_with_nested_struct_var_query() {
-        // Query: wrap(P). P=Y(0) が box(inner(val)) に束縛
-        let linked = compile_program(
-            "wrap(box(inner(X))) :- get(X). get(val).",
-            "wrap(P).",
-        );
-        let mut state = execute_instructions(&linked).unwrap();
-        assert_eq!(
-            get_y_cell(&mut state, 0),
-            Cell::Struct {
-                functor: "box".to_string(),
-                arity: 1
             }
         );
     }

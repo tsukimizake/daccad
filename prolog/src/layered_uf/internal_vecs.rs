@@ -1,6 +1,7 @@
 use std::ops::{Add, Deref, DerefMut, Index, IndexMut, Sub};
+use std::rc::Rc;
 
-use crate::cell_heap::CellIndex;
+use crate::cell_heap::Cell;
 
 // ==================== Index types ====================
 
@@ -79,9 +80,9 @@ pub struct Parent {
     /// rooted, local共にindexが小さい物へと参照する.結果として代表元は最もindexが小さいものとなる
     pub(crate) local: LocalParentIndex,
 
-    /// cellへの参照(id)を持つ. 代表元以外の場合は意味を持たない
+    /// cellへの参照を持つ. 代表元以外の場合は意味を持たない
     /// local rootの場合もそのlayerで書き込まれた場合はそこがそのlayerでのcellとなる
-    pub(crate) cell: CellIndex,
+    pub(crate) cell: Option<Rc<Cell>>,
 }
 
 impl Parent {
@@ -89,8 +90,12 @@ impl Parent {
         Self {
             rooted,
             local,
-            cell: CellIndex::EMPTY,
+            cell: None,
         }
+    }
+
+    pub(crate) fn has_cell(&self) -> bool {
+        self.cell.is_some()
     }
 }
 
