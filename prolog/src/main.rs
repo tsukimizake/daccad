@@ -2,6 +2,7 @@ use prolog::{
     compile_db::compile_db,
     compile_link::compile_link,
     compile_query::compile_query,
+    interpreter::execute_instructions,
     parse::{database, query},
 };
 
@@ -26,6 +27,6 @@ fn main() {
 
     println!("Linked instructions: {:#?}", linked.instructions);
     println!("Query terms: {:?}", query_terms);
-    let result = execute_instructions(linked, query_terms);
+    let result = execute_instructions(&linked);
     println!("Execution result: {:?}", result);
 }

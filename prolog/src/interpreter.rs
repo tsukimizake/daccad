@@ -371,12 +371,11 @@ fn exectute_impl(
                 let uf_id = layered_uf.alloc_node();
                 layered_uf.set_cell(uf_id, cell_id);
 
-                // おかしい arg_reg更新時にwithも変更されるようになってしまう
                 set_reg(
                     registers,
                     call_stack,
                     arg_reg,
-                    (*with).into(),
+                    Register::UfRef(uf_id),
                     *program_counter,
                 );
                 set_reg(
