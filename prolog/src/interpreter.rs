@@ -335,20 +335,9 @@ fn exectute_impl(
                 );
             }
 
-            WamInstr::SetVar { reg, .. } => match reg {
-                WamReg::X(index) => {
-                    set_reg(
-                        registers,
-                        call_stack,
-                        reg,
-                        Register::XRef(*index),
-                        *program_counter,
-                    );
-                }
-                WamReg::Y(_) => {
-                    panic!("SetVar arg should be X register at pc={}", program_counter);
-                }
-            },
+            WamInstr::SetVar { reg, .. } => {
+                set_reg(registers, call_stack, reg, (*reg).into(), *program_counter);
+            }
 
             WamInstr::SetVal { reg, .. } => {
                 let prev_id = resolve_register(
