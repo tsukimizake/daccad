@@ -335,8 +335,17 @@ fn exectute_impl(
                 );
             }
 
-            WamInstr::SetVar { reg, .. } => {
-                set_reg(registers, call_stack, reg, (*reg).into(), *program_counter);
+            WamInstr::SetVar { name, reg } => {
+                let cell_id = heap.insert_var(name.clone());
+                let uf_id = layered_uf.alloc_node();
+                layered_uf.set_cell(uf_id, cell_id);
+                set_reg(
+                    registers,
+                    call_stack,
+                    reg,
+                    Register::UfRef(uf_id),
+                    *program_counter,
+                );
             }
 
             WamInstr::SetVal { reg, .. } => {
@@ -567,7 +576,7 @@ fn exectute_impl(
     }
 }
 
-pub fn execute_instructions(query: &CompiledQuery) -> Result<ExecutionState, ()> {
+pub fn execute_instructions(linked: &CompiledQuery) -> Result<ExecutionState, ()> {
     let mut program_counter = 0;
     let mut exec_mode = ExecMode::Continue;
     let mut layered_uf = LayeredUf::new();
@@ -581,7 +590,7 @@ pub fn execute_instructions(query: &CompiledQuery) -> Result<ExecutionState, ()>
 
     while exec_mode == ExecMode::Continue {
         exectute_impl(
-            &query.instructions,
+            &linked.instructions,
             &mut program_counter,
             &mut registers,
             &mut cell_heap,
@@ -650,8 +659,8 @@ mod tests {
     fn simple_atom_match() {
         // DB: hello. Query: hello.
         // クエリに変数なし、成功のみ確認
-        let query = compile_program("hello.", "hello.");
-        let result = execute_instructions(&query);
+        let linked = compile_program("hello.", "hello.");
+        let result = execute_instructions(&linked);
         assert!(result.is_ok());
     }
 
@@ -659,8 +668,8 @@ mod tests {
     fn fail_unmatched() {
         // DB: hello. Query: bye.
         // 失敗することを確認
-        let query = compile_program("hello.", "bye.");
-        let result = execute_instructions(&query);
+        let linked = compile_program("hello.", "bye.");
+        let result = execute_instructions(&linked);
         assert!(result.is_err());
     }
 
@@ -668,8 +677,8 @@ mod tests {
     fn db_var_matches_constant_query() {
         // DB: honi(X). Query: honi(fuwa).
         // クエリに変数なし、成功のみ確認
-        let query = compile_program("honi(X).", "honi(fuwa).");
-        let result = execute_instructions(&query);
+        let linked = compile_program("honi(X).", "honi(fuwa).");
+        let result = execute_instructions(&linked);
         assert!(result.is_ok());
     }
 
@@ -677,8 +686,8 @@ mod tests {
     fn query_var_binds_to_constant_fact() {
         // DB: honi(fuwa). Query: honi(X).
         // X = Y(0) が "fuwa" に束縛される
-        let query = compile_program("honi(fuwa).", "honi(X).");
-        let mut state = execute_instructions(&query).unwrap();
+        let linked = compile_program("honi(fuwa).", "honi(X).");
+        let mut state = execute_instructions(&linked).unwrap();
         assert_eq!(
             get_y_cell(&mut state, 0),
             Cell::Struct {
@@ -692,8 +701,8 @@ mod tests {
     fn var_to_var_binding() {
         // DB: honi(X). Query: honi(Y).
         // Y = Y(0) が変数 X に束縛される
-        let query = compile_program("honi(X).", "honi(Y).");
-        let mut state = execute_instructions(&query).unwrap();
+        let linked = compile_program("honi(X).", "honi(Y).");
+        let mut state = execute_instructions(&linked).unwrap();
         assert_eq!(
             get_y_cell(&mut state, 0),
             Cell::Var {
@@ -706,8 +715,8 @@ mod tests {
     fn multiple_usages_of_same_variable() {
         // DB: likes(X, X). Query: likes(fuwa, Y).
         // Y = Y(0) が "fuwa" に束縛される
-        let query = compile_program("likes(X, X).", "likes(fuwa, Y).");
-        let mut state = execute_instructions(&query).unwrap();
+        let linked = compile_program("likes(X, X).", "likes(fuwa, Y).");
+        let mut state = execute_instructions(&linked).unwrap();
         assert_eq!(
             get_y_cell(&mut state, 0),
             Cell::Struct {
@@ -721,8 +730,8 @@ mod tests {
     fn deep_struct_on_db() {
         // DB: a(b(c)). Query: a(X).
         // X = Y(0) が b(c) に束縛される
-        let query = compile_program("a(b(c)).", "a(X).");
-        let mut state = execute_instructions(&query).unwrap();
+        let linked = compile_program("a(b(c)).", "a(X).");
+        let mut state = execute_instructions(&linked).unwrap();
         assert_eq!(
             get_y_cell(&mut state, 0),
             Cell::Struct {
@@ -736,8 +745,8 @@ mod tests {
     fn deep_struct_on_query() {
         // DB: a(X). Query: a(b(c)).
         // クエリに変数なし、成功のみ確認
-        let query = compile_program("a(X).", "a(b(c)).");
-        let result = execute_instructions(&query);
+        let linked = compile_program("a(X).", "a(b(c)).");
+        let result = execute_instructions(&linked);
         assert!(result.is_ok());
     }
 
@@ -746,32 +755,32 @@ mod tests {
     #[test]
     fn recursive_unify_nested_struct_match() {
         // 両方同じネスト構造 -> 成功
-        let query = compile_program("f(a(b)).", "f(a(b)).");
-        let result = execute_instructions(&query);
+        let linked = compile_program("f(a(b)).", "f(a(b)).");
+        let result = execute_instructions(&linked);
         assert!(result.is_ok());
     }
 
     #[test]
     fn recursive_unify_nested_struct_mismatch_inner() {
         // 内側の引数が異なる -> 失敗
-        let query = compile_program("f(a(b)).", "f(a(c)).");
-        let result = execute_instructions(&query);
+        let linked = compile_program("f(a(b)).", "f(a(c)).");
+        let result = execute_instructions(&linked);
         assert!(result.is_err());
     }
 
     #[test]
     fn recursive_unify_nested_struct_mismatch_functor() {
         // 内側のファンクタが異なる -> 失敗
-        let query = compile_program("f(a(b)).", "f(c(b)).");
-        let result = execute_instructions(&query);
+        let linked = compile_program("f(a(b)).", "f(c(b)).");
+        let result = execute_instructions(&linked);
         assert!(result.is_err());
     }
 
     #[test]
     fn recursive_unify_var_in_nested_struct() {
         // DBの変数がネスト構造内の値に束縛される
-        let query = compile_program("f(a(X)).", "f(a(b)).");
-        let result = execute_instructions(&query);
+        let linked = compile_program("f(a(X)).", "f(a(b)).");
+        let result = execute_instructions(&linked);
         assert!(result.is_ok());
     }
 
@@ -779,8 +788,8 @@ mod tests {
     fn recursive_unify_query_var_binds_in_nested() {
         // DB: f(a(b)). Query: f(a(X)).
         // X = Y(0) が "b" に束縛される
-        let query = compile_program("f(a(b)).", "f(a(X)).");
-        let mut state = execute_instructions(&query).unwrap();
+        let linked = compile_program("f(a(b)).", "f(a(X)).");
+        let mut state = execute_instructions(&linked).unwrap();
         assert_eq!(
             get_y_cell(&mut state, 0),
             Cell::Struct {
@@ -793,57 +802,56 @@ mod tests {
     #[test]
     fn recursive_unify_multiple_args() {
         // 複数引数でそれぞれネスト構造を持つ
-        let query = compile_program("f(a(b), c(d)).", "f(a(b), c(d)).");
-        let result = execute_instructions(&query);
+        let linked = compile_program("f(a(b), c(d)).", "f(a(b), c(d)).");
+        let result = execute_instructions(&linked);
         assert!(result.is_ok());
     }
 
     #[test]
     fn recursive_unify_multiple_args_one_mismatch() {
         // 複数引数の一つがミスマッチ
-        let query = compile_program("f(a(b), c(d)).", "f(a(b), c(e)).");
-        let result = execute_instructions(&query);
+        let linked = compile_program("f(a(b), c(d)).", "f(a(b), c(e)).");
+        let result = execute_instructions(&linked);
         assert!(result.is_err());
     }
 
     #[test]
     fn recursive_unify_three_levels_deep() {
         // 3段階のネスト
-        let query = compile_program("f(a(b(c))).", "f(a(b(c))).");
-        let result = execute_instructions(&query);
+        let linked = compile_program("f(a(b(c))).", "f(a(b(c))).");
+        let result = execute_instructions(&linked);
         assert!(result.is_ok());
     }
 
     #[test]
     fn recursive_unify_three_levels_deep_mismatch() {
         // 3段階のネストで最深部がミスマッチ
-        let query = compile_program("f(a(b(c))).", "f(a(b(d))).");
-        let result = execute_instructions(&query);
+        let linked = compile_program("f(a(b(c))).", "f(a(b(d))).");
+        let result = execute_instructions(&linked);
         assert!(result.is_err());
     }
 
     #[test]
     fn recursive_unify_var_at_deep_level() {
         // 深い位置の変数が束縛される
-        let query = compile_program("f(a(b(X))).", "f(a(b(c))).");
-        let result = execute_instructions(&query);
+        let linked = compile_program("f(a(b(X))).", "f(a(b(c))).");
+        let result = execute_instructions(&linked);
         assert!(result.is_ok());
     }
 
     #[test]
     fn simpler_rule() {
         // Query: p. (変数なし)
-        let query = compile_program("p :- q(X, Z), r(Z, Y). q(a, b). r(b, c).", "p.");
-        let result = execute_instructions(&query);
+        let linked = compile_program("p :- q(X, Z), r(Z, Y). q(a, b). r(b, c).", "p.");
+        let result = execute_instructions(&linked);
         assert!(result.is_ok());
     }
 
     #[test]
     fn sample_rule() {
         // Query: p(A, B). A=Y(0), B=Y(1)
-        let query = compile_program("p(X,Y) :- q(X, Z), r(Z, Y). q(a, b). r(b, c).", "p(A, B).");
-        let mut state = execute_instructions(&query).unwrap();
-        println!("state: {:?}", state);
+        let linked = compile_program("p(X,Y) :- q(X, Z), r(Z, Y). q(a, b). r(b, c).", "p(A, B).");
+        let mut state = execute_instructions(&linked).unwrap();
         assert_eq!(
             get_y_cell(&mut state, 0),
             Cell::Struct {
@@ -865,16 +873,16 @@ mod tests {
     #[test]
     fn rule_single_goal() {
         // Query: parent(tom). (変数なし)
-        let query = compile_program("parent(X) :- father(X). father(tom).", "parent(tom).");
-        let result = execute_instructions(&query);
+        let linked = compile_program("parent(X) :- father(X). father(tom).", "parent(tom).");
+        let result = execute_instructions(&linked);
         assert!(result.is_ok());
     }
 
     #[test]
     fn rule_single_goal_with_var_query() {
         // Query: parent(Y). Y=Y(0) が "tom" に束縛
-        let query = compile_program("parent(X) :- father(X). father(tom).", "parent(Y).");
-        let mut state = execute_instructions(&query).unwrap();
+        let linked = compile_program("parent(X) :- father(X). father(tom).", "parent(Y).");
+        let mut state = execute_instructions(&linked).unwrap();
         assert_eq!(
             get_y_cell(&mut state, 0),
             Cell::Struct {
@@ -887,22 +895,22 @@ mod tests {
     #[test]
     fn rule_multiple_goals() {
         // Query: grandparent(a, c). (変数なし)
-        let query = compile_program(
+        let linked = compile_program(
             "grandparent(X, Z) :- parent(X, Y), parent(Y, Z). parent(a, b). parent(b, c).",
             "grandparent(a, c).",
         );
-        let result = execute_instructions(&query);
+        let result = execute_instructions(&linked);
         assert!(result.is_ok());
     }
 
     #[test]
     fn rule_multiple_goals_with_var() {
         // Query: grandparent(a, W). W=Y(0) が "c" に束縛
-        let query = compile_program(
+        let linked = compile_program(
             "grandparent(X, Z) :- parent(X, Y), parent(Y, Z). parent(a, b). parent(b, c).",
             "grandparent(a, W).",
         );
-        let mut state = execute_instructions(&query).unwrap();
+        let mut state = execute_instructions(&linked).unwrap();
         assert_eq!(
             get_y_cell(&mut state, 0),
             Cell::Struct {
@@ -914,47 +922,47 @@ mod tests {
 
     #[test]
     fn rule_fails_first_subgoal() {
-        let query = compile_program("p(X) :- q(X), r(X). q(b). r(a).", "p(a).");
-        let result = execute_instructions(&query);
+        let linked = compile_program("p(X) :- q(X), r(X). q(b). r(a).", "p(a).");
+        let result = execute_instructions(&linked);
         assert!(result.is_err());
     }
 
     #[test]
     fn rule_fails_second_subgoal() {
-        let query = compile_program("p(X) :- q(X), r(X). q(a). r(b).", "p(a).");
-        let result = execute_instructions(&query);
+        let linked = compile_program("p(X) :- q(X), r(X). q(a). r(b).", "p(a).");
+        let result = execute_instructions(&linked);
         assert!(result.is_err());
     }
 
     #[test]
     fn rule_fails_no_matching_fact() {
-        let query = compile_program("p(X) :- q(X). q(a).", "p(b).");
-        let result = execute_instructions(&query);
+        let linked = compile_program("p(X) :- q(X). q(a).", "p(b).");
+        let result = execute_instructions(&linked);
         assert!(result.is_err());
     }
 
     #[test]
     fn rule_chain_two_levels() {
-        let query = compile_program("a(X) :- b(X). b(X) :- c(X). c(foo).", "a(foo).");
-        let result = execute_instructions(&query);
+        let linked = compile_program("a(X) :- b(X). b(X) :- c(X). c(foo).", "a(foo).");
+        let result = execute_instructions(&linked);
         assert!(result.is_ok());
     }
 
     #[test]
     fn rule_chain_three_levels() {
-        let query = compile_program(
+        let linked = compile_program(
             "a(X) :- b(X). b(X) :- c(X). c(X) :- d(X). d(bar).",
             "a(bar).",
         );
-        let result = execute_instructions(&query);
+        let result = execute_instructions(&linked);
         assert!(result.is_ok());
     }
 
     #[test]
     fn rule_chain_with_var_binding() {
         // Query: a(Y). Y=Y(0) が "baz" に束縛
-        let query = compile_program("a(X) :- b(X). b(X) :- c(X). c(baz).", "a(Y).");
-        let mut state = execute_instructions(&query).unwrap();
+        let linked = compile_program("a(X) :- b(X). b(X) :- c(X). c(baz).", "a(Y).");
+        let mut state = execute_instructions(&linked).unwrap();
         assert_eq!(
             get_y_cell(&mut state, 0),
             Cell::Struct {
@@ -966,19 +974,19 @@ mod tests {
 
     #[test]
     fn rule_with_nested_struct_in_fact() {
-        let query = compile_program(
+        let linked = compile_program(
             "outer(X) :- inner(X). inner(pair(a, b)).",
             "outer(pair(a, b)).",
         );
-        let result = execute_instructions(&query);
+        let result = execute_instructions(&linked);
         assert!(result.is_ok());
     }
 
     #[test]
     fn rule_with_nested_struct_var_binding() {
         // Query: outer(Y). Y=Y(0) が pair(a, b) に束縛
-        let query = compile_program("outer(X) :- inner(X). inner(pair(a, b)).", "outer(Y).");
-        let mut state = execute_instructions(&query).unwrap();
+        let linked = compile_program("outer(X) :- inner(X). inner(pair(a, b)).", "outer(Y).");
+        let mut state = execute_instructions(&linked).unwrap();
         assert_eq!(
             get_y_cell(&mut state, 0),
             Cell::Struct {
@@ -990,29 +998,29 @@ mod tests {
 
     #[test]
     fn rule_with_deeply_nested_struct() {
-        let query = compile_program(
+        let linked = compile_program(
             "wrap(X) :- data(X). data(node(leaf(a), leaf(b))).",
             "wrap(node(leaf(a), leaf(b))).",
         );
-        let result = execute_instructions(&query);
+        let result = execute_instructions(&linked);
         assert!(result.is_ok());
     }
 
     #[test]
     fn rule_shared_variable_in_body() {
-        let query = compile_program("same(X) :- eq(X, X). eq(a, a).", "same(a).");
-        let result = execute_instructions(&query);
+        let linked = compile_program("same(X) :- eq(X, X). eq(a, a).", "same(a).");
+        let result = execute_instructions(&linked);
         assert!(result.is_ok());
     }
 
     #[test]
     fn rule_shared_variable_propagation() {
         // Query: connect(a, Z). Z=Y(0) が "c" に束縛
-        let query = compile_program(
+        let linked = compile_program(
             "connect(X, Z) :- link(X, Y), link(Y, Z). link(a, b). link(b, c).",
             "connect(a, Z).",
         );
-        let mut state = execute_instructions(&query).unwrap();
+        let mut state = execute_instructions(&linked).unwrap();
         assert_eq!(
             get_y_cell(&mut state, 0),
             Cell::Struct {
@@ -1025,11 +1033,11 @@ mod tests {
     #[test]
     fn rule_three_args() {
         // Query: triple(A, B, C). A=Y(0), B=Y(1), C=Y(2)
-        let query = compile_program(
+        let linked = compile_program(
             "triple(X, Y, Z) :- first(X), second(Y), third(Z). first(a). second(b). third(c).",
             "triple(A, B, C).",
         );
-        let mut state = execute_instructions(&query).unwrap();
+        let mut state = execute_instructions(&linked).unwrap();
         assert_eq!(
             get_y_cell(&mut state, 0),
             Cell::Struct {
@@ -1057,32 +1065,32 @@ mod tests {
     #[test]
     #[ignore]
     fn rule_mixed_with_facts() {
-        let query = compile_program(
+        let linked = compile_program(
             "animal(dog). animal(cat). is_pet(X) :- animal(X).",
             "is_pet(dog).",
         );
-        let result = execute_instructions(&query);
+        let result = execute_instructions(&linked);
         assert!(result.is_ok());
     }
 
     #[test]
     fn rule_head_with_struct() {
-        let query = compile_program(
+        let linked = compile_program(
             "make_pair(pair(X, Y)) :- left(X), right(Y). left(a). right(b).",
             "make_pair(pair(a, b)).",
         );
-        let result = execute_instructions(&query);
+        let result = execute_instructions(&linked);
         assert!(result.is_ok());
     }
 
     #[test]
     fn rule_head_with_struct_var_query() {
         // Query: make_pair(P). P=Y(0) が pair(a, b) に束縛
-        let query = compile_program(
+        let linked = compile_program(
             "make_pair(pair(X, Y)) :- left(X), right(Y). left(a). right(b).",
             "make_pair(P).",
         );
-        let mut state = execute_instructions(&query).unwrap();
+        let mut state = execute_instructions(&linked).unwrap();
         assert_eq!(
             get_y_cell(&mut state, 0),
             Cell::Struct {
