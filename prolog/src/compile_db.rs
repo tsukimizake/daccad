@@ -126,6 +126,17 @@ fn compile_rule(
                             });
                         }
                     }
+                    Term::Struct { .. } => {
+                        compile_head_struct_arg(
+                            arg,
+                            reg,
+                            declared_vars,
+                            &cross_goal_vars,
+                            &mut perm_reg_counter,
+                            &mut temp_reg_counter,
+                            &mut res,
+                        );
+                    }
                     _ => todo!("{:?}", arg),
                 }
             }
@@ -146,6 +157,87 @@ fn compile_rule(
             res
         }
         _ => todo!("{:?}", head),
+    }
+}
+
+fn compile_head_struct_arg(
+    term: &Term,
+    reg: WamReg,
+    declared_vars: &mut HashMap<String, WamReg>,
+    cross_goal_vars: &std::collections::HashSet<String>,
+    perm_reg_counter: &mut usize,
+    temp_reg_counter: &mut usize,
+    res: &mut Vec<WamInstr>,
+) {
+    if let Term::Struct { functor, args, .. } = term {
+        res.push(WamInstr::GetStruct {
+            functor: functor.clone(),
+            arity: args.len(),
+            reg,
+        });
+
+        // ネストした構造体を先に処理するため、構造体引数のレジスタを予約
+        let mut nested_structs = Vec::new();
+        for inner_arg in args {
+            if matches!(inner_arg, Term::Struct { .. }) {
+                let nested_reg = WamReg::X(*temp_reg_counter);
+                *temp_reg_counter += 1;
+                nested_structs.push((inner_arg, nested_reg));
+            }
+        }
+
+        // UnifyVar/UnifyVal を発行
+        let mut nested_idx = 0;
+        for inner_arg in args {
+            match inner_arg {
+                Term::Var { name, .. } => {
+                    if name != "_" && declared_vars.contains_key(name) {
+                        res.push(WamInstr::UnifyVal {
+                            name: name.to_string(),
+                            reg: declared_vars[name],
+                        });
+                    } else {
+                        let with = if cross_goal_vars.contains(name) {
+                            let w = WamReg::Y(*perm_reg_counter);
+                            *perm_reg_counter += 1;
+                            w
+                        } else {
+                            let w = WamReg::X(*temp_reg_counter);
+                            *temp_reg_counter += 1;
+                            w
+                        };
+                        if name != "_" {
+                            declared_vars.insert(name.to_string(), with);
+                        }
+                        res.push(WamInstr::UnifyVar {
+                            name: name.to_string(),
+                            reg: with,
+                        });
+                    }
+                }
+                Term::Struct { .. } => {
+                    let (_, nested_reg) = nested_structs[nested_idx];
+                    nested_idx += 1;
+                    res.push(WamInstr::UnifyVar {
+                        name: inner_arg.get_name().to_string(),
+                        reg: nested_reg,
+                    });
+                }
+                _ => todo!("{:?}", inner_arg),
+            }
+        }
+
+        for (nested_term, nested_reg) in nested_structs {
+            compile_head_struct_arg(
+                nested_term,
+                nested_reg,
+                declared_vars,
+                cross_goal_vars,
+                perm_reg_counter,
+                temp_reg_counter,
+                res,
+            );
+        }
     }
 }
 
@@ -906,4 +998,3 @@ mod tests {
         );
     }
 }
-

@@ -1103,4 +1103,32 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn rule_head_with_nested_struct() {
+        // ルールヘッドにネストした構造体: wrap(box(inner(X))) :- get(X).
+        let linked = compile_program(
+            "wrap(box(inner(X))) :- get(X). get(val).",
+            "wrap(box(inner(val))).",
+        );
+        let result = execute_instructions(&linked);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn rule_head_with_nested_struct_var_query() {
+        // Query: wrap(P). P=Y(0) が box(inner(val)) に束縛
+        let linked = compile_program(
+            "wrap(box(inner(X))) :- get(X). get(val).",
+            "wrap(P).",
+        );
+        let mut state = execute_instructions(&linked).unwrap();
+        assert_eq!(
+            get_y_cell(&mut state, 0),
+            Cell::Struct {
+                functor: "box".to_string(),
+                arity: 1
+            }
+        );
+    }
 }
