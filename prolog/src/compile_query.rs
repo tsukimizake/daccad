@@ -1,22 +1,58 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 use crate::compiler_bytecode::{WamInstr, WamReg};
 use crate::parse::{Term, TermId};
-use crate::register_managers::{RegisterManager, alloc_registers};
 
 /// コンパイル済みクエリ
 #[derive(Debug)]
 pub struct CompiledQuery {
     pub instructions: Vec<WamInstr>,
-    pub term_to_reg: HashMap<TermId, WamReg>,
+    /// クエリ変数名 → Y レジスタ（実行後の解決に使用）
+    pub term_to_reg: HashMap<String, WamReg>,
+}
+
+/// クエリ内のすべての変数名を収集する
+fn collect_query_vars(terms: &[Term]) -> Vec<String> {
+    let mut vars = Vec::new();
+    let mut seen = HashSet::new();
+    for term in terms {
+        collect_vars_recursive(term, &mut vars, &mut seen);
+    }
+    vars
+}
+
+fn collect_vars_recursive(term: &Term, vars: &mut Vec<String>, seen: &mut HashSet<String>) {
+    match term {
+        Term::Var { name, .. } => {
+            if !seen.contains(name) {
+                seen.insert(name.clone());
+                vars.push(name.clone());
+            }
+        }
+        Term::Struct { args, .. } => {
+            for arg in args {
+                collect_vars_recursive(arg, vars, seen);
+            }
+        }
+        Term::List { items, tail, .. } => {
+            for item in items {
+                collect_vars_recursive(item, vars, seen);
+            }
+            if let Some(t) = tail {
+                collect_vars_recursive(t, vars, seen);
+            }
+        }
+        Term::Number { .. } => {}
+    }
 }
 
 pub fn compile_query(query_terms: Vec<Term>) -> CompiledQuery {
-    // すべてのゴールに対して累積的にレジスタを割り当て
-    let mut reg_map = HashMap::new();
-    let mut reg_manager = RegisterManager::new();
-    for term in &query_terms {
-        alloc_registers(term, &mut reg_map, &mut reg_manager);
+    // クエリ内の変数を収集し、Y レジスタを割り当て
+    let query_vars = collect_query_vars(&query_terms);
+    let mut term_to_reg: HashMap<String, WamReg> = HashMap::new();
+    for (i, var_name) in query_vars.iter().enumerate() {
+        term_to_reg.insert(var_name.clone(), WamReg::Y(i));
     }
 
     // 各ゴールのarityの最大値を求める（other registerの開始位置）
@@ -33,17 +69,24 @@ pub fn compile_query(query_terms: Vec<Term>) -> CompiledQuery {
     // declared_vars: 変数名 → other register（初回出現時に割り当て）
     let mut declared_vars: HashMap<String, WamReg> = HashMap::new();
     let mut other_reg_counter = max_arity; // other registerのカウンタ
+
+    // クエリ用スタックフレームを確保
     let mut result = Vec::new();
+    result.push(WamInstr::Allocate {
+        size: query_vars.len(),
+    });
+
     for term in &query_terms {
         result.extend(compile_goal(
             term,
             &mut declared_vars,
             &mut other_reg_counter,
+            &term_to_reg,
         ));
     }
     CompiledQuery {
         instructions: result,
-        term_to_reg: reg_map,
+        term_to_reg,
     }
 }
 
@@ -52,6 +95,7 @@ fn compile_goal(
     term: &Term,
     declared_vars: &mut HashMap<String, WamReg>,
     other_reg_counter: &mut usize,
+    query_var_to_y: &HashMap<String, WamReg>,
 ) -> Vec<WamInstr> {
     match term {
         Term::Struct { functor, args, .. } => {
@@ -65,6 +109,7 @@ fn compile_goal(
                     arg_reg,
                     declared_vars,
                     other_reg_counter,
+                    query_var_to_y,
                 ));
             }
 
@@ -88,6 +133,7 @@ fn compile_top_arg(
     arg_reg: WamReg, // 引数レジスタ（X(0), X(1), ...）
     declared_vars: &mut HashMap<String, WamReg>,
     other_reg_counter: &mut usize,
+    query_var_to_y: &HashMap<String, WamReg>,
 ) -> Vec<WamInstr> {
     match arg {
         Term::Var { name, .. } => {
@@ -101,20 +147,29 @@ fn compile_top_arg(
                 }]
             } else {
                 // 初出 → PutVar
-                // arg_reg: 引数位置, with: 新しいother register
-                let with = WamReg::X(*other_reg_counter);
-                *other_reg_counter += 1;
-                declared_vars.insert(name.clone(), with);
+                // with には Y レジスタを使用（クエリ変数を保存するため）
+                let y_reg = query_var_to_y
+                    .get(name)
+                    .copied()
+                    .expect("query variable should have Y register");
+                declared_vars.insert(name.clone(), y_reg);
                 vec![WamInstr::PutVar {
                     name: name.clone(),
                     arg_reg,
-                    with,
+                    with: y_reg,
                 }]
             }
         }
         Term::Struct { .. } => {
             let mut struct_regs = HashMap::new();
-            compile_struct_arg(arg, arg_reg, declared_vars, &mut struct_regs, other_reg_counter)
+            compile_struct_arg(
+                arg,
+                arg_reg,
+                declared_vars,
+                &mut struct_regs,
+                other_reg_counter,
+                query_var_to_y,
+            )
         }
         _ => todo!("{:?}", arg),
     }
@@ -130,6 +185,7 @@ fn compile_struct_arg(
     // ネストした構造体のレジスタを管理するマップ
     struct_regs: &mut HashMap<TermId, WamReg>,
     other_reg_counter: &mut usize,
+    query_var_to_y: &HashMap<String, WamReg>,
 ) -> Vec<WamInstr> {
     match arg {
         Term::Struct { functor, args, .. } => {
@@ -148,6 +204,7 @@ fn compile_struct_arg(
                         declared_vars,
                         struct_regs,
                         other_reg_counter,
+                        query_var_to_y,
                     ));
                 }
             }
@@ -170,13 +227,15 @@ fn compile_struct_arg(
                                 reg: existing_reg,
                             });
                         } else {
-                            // 初出 → SetVar（新しいother registerを割り当て）
-                            let reg = WamReg::X(*other_reg_counter);
-                            *other_reg_counter += 1;
-                            declared_vars.insert(name.clone(), reg);
+                            // 初出 → SetVar（Y レジスタを使用）
+                            let y_reg = query_var_to_y
+                                .get(name)
+                                .copied()
+                                .expect("query variable should have Y register");
+                            declared_vars.insert(name.clone(), y_reg);
                             result.push(WamInstr::SetVar {
                                 name: name.clone(),
-                                reg,
+                                reg: y_reg,
                             });
                         }
                     }
@@ -219,28 +278,31 @@ mod tests {
 
     #[test]
     fn top_atom() {
-        // arity=0の場合はCallTempのみ
+        // arity=0の場合はAllocate(0) + CallTempのみ
         test_compile_query(
             "parent.",
-            vec![WamInstr::CallTemp {
-                predicate: "parent".to_string(),
-                arity: 0,
-            }],
+            vec![
+                WamInstr::Allocate { size: 0 },
+                WamInstr::CallTemp {
+                    predicate: "parent".to_string(),
+                    arity: 0,
+                },
+            ],
         );
     }
 
     #[test]
     fn book_example() {
         // p(Z, h(Z,W), f(W))
-        // トップレベルpにはレジスタなし
-        // 引数: Z=X(0), h=X(1), f=X(2), Z(in h)=X(3), W(in h)=X(4), W(in f)=X(5)
+        // クエリ変数: Z=Y(0), W=Y(1)
         test_compile_query(
             "p(Z, h(Z,W), f(W)).",
             vec![
+                WamInstr::Allocate { size: 2 }, // Z, W の2変数
                 WamInstr::PutVar {
                     name: "Z".to_string(),
                     arg_reg: WamReg::X(0),
-                    with: WamReg::X(3),
+                    with: WamReg::Y(0),
                 },
                 WamInstr::PutStruct {
                     functor: "h".to_string(),
@@ -249,11 +311,11 @@ mod tests {
                 },
                 WamInstr::SetVal {
                     name: "Z".to_string(),
-                    reg: WamReg::X(3),
+                    reg: WamReg::Y(0),
                 },
                 WamInstr::SetVar {
                     name: "W".to_string(),
-                    reg: WamReg::X(4),
+                    reg: WamReg::Y(1),
                 },
                 WamInstr::PutStruct {
                     functor: "f".to_string(),
@@ -262,7 +324,7 @@ mod tests {
                 },
                 WamInstr::SetVal {
                     name: "W".to_string(),
-                    reg: WamReg::X(4),
+                    reg: WamReg::Y(1),
                 },
                 WamInstr::CallTemp {
                     predicate: "p".to_string(),
@@ -275,10 +337,11 @@ mod tests {
     #[test]
     fn same_functor_other_arg() {
         // p(a(X), a(Y))
-        // 引数: a=X(0), a=X(1), X=X(2), Y=X(3)
+        // クエリ変数: X=Y(0), Y=Y(1)
         test_compile_query(
             "p(a(X), a(Y)).",
             vec![
+                WamInstr::Allocate { size: 2 }, // X, Y の2変数
                 WamInstr::PutStruct {
                     functor: "a".to_string(),
                     arity: 1,
@@ -286,7 +349,7 @@ mod tests {
                 },
                 WamInstr::SetVar {
                     name: "X".to_string(),
-                    reg: WamReg::X(2),
+                    reg: WamReg::Y(0),
                 },
                 WamInstr::PutStruct {
                     functor: "a".to_string(),
@@ -295,7 +358,7 @@ mod tests {
                 },
                 WamInstr::SetVar {
                     name: "Y".to_string(),
-                    reg: WamReg::X(3),
+                    reg: WamReg::Y(1),
                 },
                 WamInstr::CallTemp {
                     predicate: "p".to_string(),
@@ -308,16 +371,15 @@ mod tests {
     #[test]
     fn two_goals() {
         // p(X), q(Y) - カンマ区切りの複数ゴール
-        // max_arity = 1, other registerはX(1)から開始
-        // X: 第0引数, with=X(1)
-        // Y: 第0引数（q内）, with=X(2)
+        // クエリ変数: X=Y(0), Y=Y(1)
         test_compile_query(
             "p(X), q(Y).",
             vec![
+                WamInstr::Allocate { size: 2 }, // X, Y の2変数
                 WamInstr::PutVar {
                     name: "X".to_string(),
                     arg_reg: WamReg::X(0),
-                    with: WamReg::X(1),
+                    with: WamReg::Y(0),
                 },
                 WamInstr::CallTemp {
                     predicate: "p".to_string(),
@@ -326,7 +388,7 @@ mod tests {
                 WamInstr::PutVar {
                     name: "Y".to_string(),
                     arg_reg: WamReg::X(0), // q(Y)の第0引数
-                    with: WamReg::X(2),
+                    with: WamReg::Y(1),
                 },
                 WamInstr::CallTemp {
                     predicate: "q".to_string(),

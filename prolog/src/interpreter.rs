@@ -581,10 +581,8 @@ pub fn execute_instructions(query: CompiledQuery, orig_query: Vec<Term>) -> Resu
     let mut read_write_mode = ReadWriteMode::Write;
     let mut call_stack: Vec<StackFrame> = Vec::with_capacity(100);
 
-    call_stack.push(StackFrame {
-        return_address: 0,
-        regs: Vec::with_capacity(32),
-    });
+    // クエリの最初の Allocate 命令でスタックフレームが作成されるので、
+    // ここでは初期フレームを作成しない
 
     while exec_mode == ExecMode::Continue {
         exectute_impl(

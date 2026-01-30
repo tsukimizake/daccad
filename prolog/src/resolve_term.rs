@@ -2,21 +2,21 @@ use crate::cell_heap::{Cell, CellHeap, CellIndex};
 use crate::compiler_bytecode::WamReg;
 use crate::interpreter::{Registers, StackFrame, get_reg, resolve_register};
 use crate::layered_uf::{GlobalParentIndex, LayeredUf};
-use crate::parse::{Term, TermId};
+use crate::parse::Term;
 use std::collections::HashMap;
 
 /// Termを走査して変数を解決済みの値で置き換える
 pub fn resolve_term(
     term: &Term,
-    term_to_reg: &HashMap<TermId, WamReg>,
+    term_to_reg: &HashMap<String, WamReg>,
     registers: &mut Registers,
     heap: &CellHeap,
     uf: &mut LayeredUf,
     call_stack: &Vec<StackFrame>,
 ) -> Term {
     match term {
-        Term::Var { id, name, .. } => {
-            if let Some(reg) = term_to_reg.get(id) {
+        Term::Var { name, .. } => {
+            if let Some(reg) = term_to_reg.get(name) {
                 let uf_id =
                     resolve_register(call_stack, registers, get_reg(registers, call_stack, reg, usize::MAX), usize::MAX);
                 let root = uf.find_root(uf_id);
