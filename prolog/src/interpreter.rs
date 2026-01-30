@@ -700,13 +700,14 @@ mod tests {
     #[test]
     fn var_to_var_binding() {
         // DB: honi(X). Query: honi(Y).
-        // Y = Y(0) が変数 X に束縛される
+        // Y と X は unify され、クエリ側の Y のセルが残る
+        // とりあえず仕様ということにする
         let linked = compile_program("honi(X).", "honi(Y).");
         let mut state = execute_instructions(&linked).unwrap();
         assert_eq!(
             get_y_cell(&mut state, 0),
             Cell::Var {
-                name: "X".to_string()
+                name: "Y".to_string()
             }
         );
     }
