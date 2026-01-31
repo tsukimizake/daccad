@@ -1,6 +1,38 @@
 use std::collections::HashMap;
+use std::fmt;
 
 use crate::parse::{Clause, Term, TermInner, list, struc, var};
+
+/// 単一化エラー
+#[derive(Debug, Clone)]
+pub struct UnifyError {
+    pub message: String,
+    pub term1: Term,
+    pub term2: Term,
+}
+
+impl fmt::Display for UnifyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for UnifyError {}
+
+/// 書き換えステップのエラー
+#[derive(Debug, Clone)]
+pub struct RewriteError {
+    pub message: String,
+    pub goal: Term,
+}
+
+impl fmt::Display for RewriteError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {:?}", self.message, self.goal)
+    }
+}
+
+impl std::error::Error for RewriteError {}
 
 /// 変数名から項への代入
 pub type Substitution = HashMap<String, Term>;
@@ -71,7 +103,7 @@ fn deref_var<'a>(term: &'a Term, subst: &'a Substitution) -> &'a Term {
 }
 
 /// 2つの項を単一化し、成功すれば代入を返す
-pub fn unify(term1: &Term, term2: &Term) -> Option<Substitution> {
+pub fn unify(term1: &Term, term2: &Term) -> Result<Substitution, UnifyError> {
     let mut subst = Substitution::new();
     let mut stack = vec![(term1.clone(), term2.clone())];
 
@@ -85,13 +117,21 @@ pub fn unify(term1: &Term, term2: &Term) -> Option<Substitution> {
             // 変数と何か（anonymous変数 "_" は束縛しない）
             (TermInner::Var { name }, _) if name != "_" => {
                 if occurs_check(name, t2) {
-                    return None;
+                    return Err(UnifyError {
+                        message: format!("occurs check failed: {} occurs in {:?}", name, t2),
+                        term1: t1.clone(),
+                        term2: t2.clone(),
+                    });
                 }
                 subst.insert(name.clone(), t2.clone());
             }
             (_, TermInner::Var { name }) if name != "_" => {
                 if occurs_check(name, t1) {
-                    return None;
+                    return Err(UnifyError {
+                        message: format!("occurs check failed: {} occurs in {:?}", name, t1),
+                        term1: t1.clone(),
+                        term2: t2.clone(),
+                    });
                 }
                 subst.insert(name.clone(), t1.clone());
             }
@@ -101,7 +141,11 @@ pub fn unify(term1: &Term, term2: &Term) -> Option<Substitution> {
             // 数値
             (TermInner::Number { value: v1 }, TermInner::Number { value: v2 }) => {
                 if v1 != v2 {
-                    return None;
+                    return Err(UnifyError {
+                        message: format!("number mismatch: {} != {}", v1, v2),
+                        term1: t1.clone(),
+                        term2: t2.clone(),
+                    });
                 }
             }
             // 構造体
@@ -115,8 +159,25 @@ pub fn unify(term1: &Term, term2: &Term) -> Option<Substitution> {
                     args: args2,
                 },
             ) => {
-                if f1 != f2 || args1.len() != args2.len() {
-                    return None;
+                if f1 != f2 {
+                    return Err(UnifyError {
+                        message: format!("functor mismatch: {} != {}", f1, f2),
+                        term1: t1.clone(),
+                        term2: t2.clone(),
+                    });
+                }
+                if args1.len() != args2.len() {
+                    return Err(UnifyError {
+                        message: format!(
+                            "arity mismatch: {}/{} != {}/{}",
+                            f1,
+                            args1.len(),
+                            f2,
+                            args2.len()
+                        ),
+                        term1: t1.clone(),
+                        term2: t2.clone(),
+                    });
                 }
                 for (a1, a2) in args1.iter().zip(args2.iter()) {
                     stack.push((a1.clone(), a2.clone()));
@@ -155,7 +216,15 @@ pub fn unify(term1: &Term, term2: &Term) -> Option<Substitution> {
                         stack.push((new_list, t2.clone()));
                     }
                     (std::cmp::Ordering::Greater, _, None) => {
-                        return None;
+                        return Err(UnifyError {
+                            message: format!(
+                                "list length mismatch: {} items vs {} items (no tail)",
+                                items1.len(),
+                                items2.len()
+                            ),
+                            term1: t1.clone(),
+                            term2: t2.clone(),
+                        });
                     }
                     (std::cmp::Ordering::Less, Some(t1), _) => {
                         let remaining: Vec<Term> = items2[min_len..].to_vec();
@@ -163,15 +232,29 @@ pub fn unify(term1: &Term, term2: &Term) -> Option<Substitution> {
                         stack.push((t1.clone(), new_list));
                     }
                     (std::cmp::Ordering::Less, None, _) => {
-                        return None;
+                        return Err(UnifyError {
+                            message: format!(
+                                "list length mismatch: {} items (no tail) vs {} items",
+                                items1.len(),
+                                items2.len()
+                            ),
+                            term1: t1.clone(),
+                            term2: t2.clone(),
+                        });
                     }
                 }
             }
-            _ => return None,
+            _ => {
+                return Err(UnifyError {
+                    message: format!("cannot unify {:?} with {:?}", t1, t2),
+                    term1: t1.clone(),
+                    term2: t2.clone(),
+                });
+            }
         }
     }
 
-    Some(subst)
+    Ok(subst)
 }
 
 /// 節の変数をリネームして衝突を避ける
@@ -216,13 +299,6 @@ pub struct TraceStep {
     pub new_goals: Vec<Term>,
 }
 
-/// インタプリタの実行結果
-#[derive(Debug)]
-pub enum ExecutionResult {
-    Success(Substitution),
-    Failure,
-}
-
 /// Term rewrite方式のインタプリタ
 pub struct Interpreter {
     db: Vec<Clause>,
@@ -237,58 +313,63 @@ impl Interpreter {
         }
     }
 
-    fn rewrite_step(&mut self, goal: &Term) -> Option<(Clause, Substitution, Vec<Term>)> {
+    fn rewrite_step(&mut self, goal: &Term) -> Result<(Clause, Substitution, Vec<Term>), RewriteError> {
         for clause in &self.db {
             self.clause_counter += 1;
             let renamed = rename_clause_vars(clause, &self.clause_counter.to_string());
 
             let (head, body) = match &renamed {
-                Clause::Fact(term) => (term, vec![]),
-                Clause::Rule { head, body } => (head, body.clone()),
+                Clause::Fact(term) => (term, &vec![]),
+                Clause::Rule { head, body } => (head, body),
             };
 
-            if let Some(subst) = unify(goal, head) {
+            if let Ok(subst) = unify(goal, head) {
                 let new_goals: Vec<Term> =
                     body.iter().map(|t| apply_substitution(t, &subst)).collect();
-                return Some((renamed, subst, new_goals));
+                return Ok((renamed, subst, new_goals));
             }
         }
-        None
+        Err(RewriteError {
+            message: "no clause matches goal".to_string(),
+            goal: goal.clone(),
+        })
     }
 
-    pub fn execute_with_trace(&mut self, query: Vec<Term>) -> (ExecutionResult, Vec<TraceStep>) {
+    pub fn execute_with_trace(&mut self, query: Vec<Term>) -> Result<(Substitution, Vec<Term>, Vec<TraceStep>), RewriteError> {
         let mut goals = query;
         let mut global_subst = Substitution::new();
         let mut trace = Vec::new();
+        let mut resolved_goals = Vec::new();
 
         while let Some(goal) = goals.first().cloned() {
             goals.remove(0);
 
-            if let Some((matched_clause, subst, new_goals)) = self.rewrite_step(&goal) {
-                global_subst = extend_substitution(&global_subst, &subst);
+            let (matched_clause, subst, new_goals) = self.rewrite_step(&goal)?;
+            global_subst = extend_substitution(&global_subst, &subst);
 
-                trace.push(TraceStep {
-                    selected_goal: goal,
-                    matched_clause: matched_clause.clone(),
-                    substitution: subst.clone(),
-                    new_goals: new_goals.clone(),
-                });
+            let resolved = apply_substitution(&goal, &global_subst);
+            resolved_goals.push(resolved);
 
-                goals = new_goals
-                    .into_iter()
-                    .chain(goals)
-                    .map(|g| apply_substitution(&g, &subst))
-                    .collect();
-            } else {
-                return (ExecutionResult::Failure, trace);
-            }
+            trace.push(TraceStep {
+                selected_goal: goal,
+                matched_clause: matched_clause.clone(),
+                substitution: subst.clone(),
+                new_goals: new_goals.clone(),
+            });
+
+            goals = new_goals
+                .into_iter()
+                .chain(goals)
+                .map(|g| apply_substitution(&g, &subst))
+                .collect();
         }
 
-        (ExecutionResult::Success(global_subst), trace)
+        Ok((global_subst, resolved_goals, trace))
     }
 
-    pub fn execute(&mut self, query: Vec<Term>) -> ExecutionResult {
-        self.execute_with_trace(query).0
+    pub fn execute(&mut self, query: Vec<Term>) -> Result<(Substitution, Vec<Term>), RewriteError> {
+        let (subst, resolved, _) = self.execute_with_trace(query)?;
+        Ok((subst, resolved))
     }
 }
 
@@ -301,30 +382,30 @@ mod tests {
         let db = database(db_src).expect("failed to parse db");
         let q = query(query_src).expect("failed to parse query").1;
         let mut interp = Interpreter::new(db);
-        match interp.execute(q) {
-            ExecutionResult::Success(subst) => subst,
-            ExecutionResult::Failure => panic!("Expected success, got failure"),
-        }
+        interp.execute(q).expect("Expected success").0
     }
 
     fn run_success_with_trace(db_src: &str, query_src: &str) -> (Substitution, Vec<TraceStep>) {
         let db = database(db_src).expect("failed to parse db");
         let q = query(query_src).expect("failed to parse query").1;
         let mut interp = Interpreter::new(db);
-        match interp.execute_with_trace(q) {
-            (ExecutionResult::Success(subst), trace) => (subst, trace),
-            (ExecutionResult::Failure, _) => panic!("Expected success, got failure"),
-        }
+        let (subst, _, trace) = interp.execute_with_trace(q).expect("Expected success");
+        (subst, trace)
+    }
+
+    fn run_success_with_rewritten(db_src: &str, query_src: &str) -> (Substitution, Vec<Term>) {
+        let db = database(db_src).expect("failed to parse db");
+        let q = query(query_src).expect("failed to parse query").1;
+        let mut interp = Interpreter::new(db);
+        let (subst, rewritten) = interp.execute(q).expect("Expected success");
+        (subst, rewritten)
     }
 
     fn run_failure(db_src: &str, query_src: &str) {
         let db = database(db_src).expect("failed to parse db");
         let q = query(query_src).expect("failed to parse query").1;
         let mut interp = Interpreter::new(db);
-        match interp.execute(q) {
-            ExecutionResult::Success(_) => panic!("Expected failure, got success"),
-            ExecutionResult::Failure => {}
-        }
+        assert!(interp.execute(q).is_err(), "Expected failure, got success");
     }
 
     fn get_atom(subst: &Substitution, var_name: &str) -> String {
@@ -367,7 +448,7 @@ mod tests {
     fn test_unify_fail() {
         let t1 = struc("f".to_string(), vec![]);
         let t2 = struc("g".to_string(), vec![]);
-        assert!(unify(&t1, &t2).is_none());
+        assert!(unify(&t1, &t2).is_err());
     }
 
     // ===== basic fact tests =====
@@ -412,7 +493,10 @@ mod tests {
     fn deep_struct_on_db() {
         let subst = run_success("a(b(c)).", "a(X).");
         let x_term = get_term(&subst, "X");
-        assert_eq!(x_term, struc("b".to_string(), vec![struc("c".to_string(), vec![])]));
+        assert_eq!(
+            x_term,
+            struc("b".to_string(), vec![struc("c".to_string(), vec![])])
+        );
     }
 
     #[test]
@@ -474,8 +558,32 @@ mod tests {
     // ===== rule tests =====
 
     #[test]
-    fn simpler_rule() {
-        run_success("p :- q(X, Z), r(Z, Y). q(a, b). r(b, c).", "p.");
+    fn resolved_goals_returned() {
+        let (_, resolved) =
+            run_success_with_rewritten("p :- q(X, Z), r(Z, Y). q(a, b). r(b, c).", "p.");
+        // p, q(a, b), r(b, c) の3つが解決される
+        assert_eq!(resolved.len(), 3);
+        assert_eq!(resolved[0], struc("p".to_string(), vec![]));
+        assert_eq!(
+            resolved[1],
+            struc(
+                "q".to_string(),
+                vec![
+                    struc("a".to_string(), vec![]),
+                    struc("b".to_string(), vec![]),
+                ]
+            )
+        );
+        assert_eq!(
+            resolved[2],
+            struc(
+                "r".to_string(),
+                vec![
+                    struc("b".to_string(), vec![]),
+                    struc("c".to_string(), vec![]),
+                ]
+            )
+        );
     }
 
     #[test]
@@ -612,7 +720,13 @@ mod tests {
         let y_term = get_term(&subst, "Y");
         assert_eq!(
             y_term,
-            struc("pair".to_string(), vec![struc("a".to_string(), vec![]), struc("b".to_string(), vec![])])
+            struc(
+                "pair".to_string(),
+                vec![
+                    struc("a".to_string(), vec![]),
+                    struc("b".to_string(), vec![])
+                ]
+            )
         );
     }
 
@@ -661,7 +775,13 @@ mod tests {
         let p_term = get_term(&subst, "P");
         assert_eq!(
             p_term,
-            struc("pair".to_string(), vec![struc("a".to_string(), vec![]), struc("b".to_string(), vec![])])
+            struc(
+                "pair".to_string(),
+                vec![
+                    struc("a".to_string(), vec![]),
+                    struc("b".to_string(), vec![])
+                ]
+            )
         );
     }
 
