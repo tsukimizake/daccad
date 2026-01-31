@@ -19,6 +19,14 @@ pub struct Bound {
     pub inclusive: bool,
 }
 
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum ArithOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+}
+
 #[derive(Clone, PartialEq)]
 pub enum TermInner {
     Var {
@@ -32,6 +40,12 @@ pub enum TermInner {
     },
     Number {
         value: i64,
+    },
+    /// 算術式: left op right
+    ArithExpr {
+        op: ArithOp,
+        left: Term,
+        right: Term,
     },
     Struct {
         functor: String,
@@ -64,6 +78,15 @@ impl fmt::Debug for TermInner {
                 Ok(())
             }
             TermInner::Number { value } => write!(f, "{}", value),
+            TermInner::ArithExpr { op, left, right } => {
+                let op_str = match op {
+                    ArithOp::Add => "+",
+                    ArithOp::Sub => "-",
+                    ArithOp::Mul => "*",
+                    ArithOp::Div => "/",
+                };
+                write!(f, "({:?} {} {:?})", left, op_str, right)
+            }
             TermInner::Struct { functor, args } => {
                 write!(f, "{}", functor)?;
                 if !args.is_empty() {
@@ -135,6 +158,10 @@ pub fn list(items: Vec<Term>, tail: Option<Term>) -> Term {
 
 pub fn range_var(name: String, min: Option<Bound>, max: Option<Bound>) -> Term {
     Rc::new(TermInner::RangeVar { name, min, max })
+}
+
+pub fn arith_expr(op: ArithOp, left: Term, right: Term) -> Term {
+    Rc::new(TermInner::ArithExpr { op, left, right })
 }
 
 #[allow(unused)]
@@ -361,7 +388,7 @@ fn atom_term(input: &str) -> PResult<'_, Term> {
     .parse(input)
 }
 
-fn simple_term(input: &str) -> PResult<'_, Term> {
+fn primary_term(input: &str) -> PResult<'_, Term> {
     // range_var_term は number_term より先に試行（0 < X のような形式を正しくパースするため）
     alt((
         list_term,
@@ -371,6 +398,46 @@ fn simple_term(input: &str) -> PResult<'_, Term> {
         atom_term,
     ))
     .parse(input)
+}
+
+fn mul_op(input: &str) -> PResult<'_, ArithOp> {
+    ws(alt((
+        map(char('*'), |_| ArithOp::Mul),
+        map(char('/'), |_| ArithOp::Div),
+    )))
+    .parse(input)
+}
+
+fn add_op(input: &str) -> PResult<'_, ArithOp> {
+    ws(alt((
+        map(char('+'), |_| ArithOp::Add),
+        map(char('-'), |_| ArithOp::Sub),
+    )))
+    .parse(input)
+}
+
+fn mul_expr(input: &str) -> PResult<'_, Term> {
+    let (input, first) = primary_term(input)?;
+    let (input, rest) = many0(pair(mul_op, primary_term)).parse(input)?;
+
+    let result = rest
+        .into_iter()
+        .fold(first, |left, (op, right)| arith_expr(op, left, right));
+    Ok((input, result))
+}
+
+fn add_expr(input: &str) -> PResult<'_, Term> {
+    let (input, first) = mul_expr(input)?;
+    let (input, rest) = many0(pair(add_op, mul_expr)).parse(input)?;
+
+    let result = rest
+        .into_iter()
+        .fold(first, |left, (op, right)| arith_expr(op, left, right));
+    Ok((input, result))
+}
+
+fn simple_term(input: &str) -> PResult<'_, Term> {
+    add_expr(input)
 }
 
 pub(super) fn term(input: &str) -> PResult<'_, Term> {

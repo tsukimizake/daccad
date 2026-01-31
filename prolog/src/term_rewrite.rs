@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::parse::{Bound, Clause, Term, TermInner, list, range_var, struc, var};
+use crate::parse::{
+    ArithOp, Bound, Clause, Term, TermInner, arith_expr, list, number, range_var, struc, var,
+};
 
 /// 単一化エラー
 #[derive(Debug, Clone)]
@@ -37,6 +39,24 @@ impl std::error::Error for RewriteError {}
 /// 変数名から項への代入
 pub type Substitution = HashMap<String, Term>;
 
+/// 算術式を評価する。評価できない場合（未束縛変数を含む場合）はNoneを返す
+fn eval_arith(term: &Term) -> Option<i64> {
+    match term.as_ref() {
+        TermInner::Number { value } => Some(*value),
+        TermInner::ArithExpr { op, left, right } => {
+            let l = eval_arith(left)?;
+            let r = eval_arith(right)?;
+            Some(match op {
+                ArithOp::Add => l + r,
+                ArithOp::Sub => l - r,
+                ArithOp::Mul => l * r,
+                ArithOp::Div => l / r,
+            })
+        }
+        _ => None,
+    }
+}
+
 /// 代入を項に適用する
 pub fn apply_substitution(term: &Term, subst: &Substitution) -> Term {
     match term.as_ref() {
@@ -52,6 +72,17 @@ pub fn apply_substitution(term: &Term, subst: &Substitution) -> Term {
                 apply_substitution(value, subst)
             } else {
                 term.clone()
+            }
+        }
+        TermInner::ArithExpr { op, left, right } => {
+            let new_left = apply_substitution(left, subst);
+            let new_right = apply_substitution(right, subst);
+            let new_expr = arith_expr(*op, new_left, new_right);
+            // 評価可能なら数値に変換
+            if let Some(val) = eval_arith(&new_expr) {
+                number(val)
+            } else {
+                new_expr
             }
         }
         TermInner::Struct { functor, args } => {
@@ -91,6 +122,9 @@ fn occurs_check(var_name: &str, term: &Term) -> bool {
         TermInner::List { items, tail } => {
             items.iter().any(|item| occurs_check(var_name, item))
                 || tail.as_ref().map_or(false, |t| occurs_check(var_name, t))
+        }
+        TermInner::ArithExpr { left, right, .. } => {
+            occurs_check(var_name, left) || occurs_check(var_name, right)
         }
         TermInner::Number { .. } => false,
     }
@@ -176,14 +210,7 @@ fn value_in_range(value: i64, min: Option<Bound>, max: Option<Bound>) -> bool {
 /// 変数を代入で解決する（連鎖をたどる）
 fn deref_var<'a>(term: &'a Term, subst: &'a Substitution) -> &'a Term {
     match term.as_ref() {
-        TermInner::Var { name } if name != "_" => {
-            if let Some(bound) = subst.get(name) {
-                deref_var(bound, subst)
-            } else {
-                term
-            }
-        }
-        TermInner::RangeVar { name, .. } if name != "_" => {
+        TermInner::Var { name } | TermInner::RangeVar { name, .. } if name != "_" => {
             if let Some(bound) = subst.get(name) {
                 deref_var(bound, subst)
             } else {
@@ -198,10 +225,47 @@ fn deref_var<'a>(term: &'a Term, subst: &'a Substitution) -> &'a Term {
 pub fn unify(term1: &Term, term2: &Term) -> Result<Substitution, UnifyError> {
     let mut subst = Substitution::new();
     let mut stack = vec![(term1.clone(), term2.clone())];
+    // 未評価の算術式制約を保持（変数が束縛されたら再評価）
+    let mut deferred: Vec<(Term, Term)> = Vec::new();
 
     while let Some((t1, t2)) = stack.pop() {
+        // 変数を解決
         let t1 = deref_var(&t1, &subst);
         let t2 = deref_var(&t2, &subst);
+
+        // 算術式の場合のみ代入を適用して評価（変数置換が必要なため）
+        let t1_owned;
+        let t1 = match t1.as_ref() {
+            TermInner::ArithExpr { .. } => {
+                t1_owned = apply_substitution(t1, &subst);
+                &t1_owned
+            }
+            _ => t1,
+        };
+        let t2_owned;
+        let t2 = match t2.as_ref() {
+            TermInner::ArithExpr { .. } => {
+                t2_owned = apply_substitution(t2, &subst);
+                &t2_owned
+            }
+            _ => t2,
+        };
+
+        // 算術式がまだ評価できない場合は遅延
+        let has_unbound_var = |term: &Term| -> bool {
+            match term.as_ref() {
+                TermInner::ArithExpr { .. } => {
+                    // 数値に評価できなければ未束縛変数がある
+                    eval_arith(term).is_none()
+                }
+                _ => false,
+            }
+        };
+
+        if has_unbound_var(t1) || has_unbound_var(t2) {
+            deferred.push((t1.clone(), t2.clone()));
+            continue;
+        }
 
         match (t1.as_ref(), t2.as_ref()) {
             // 同じ変数
@@ -261,7 +325,7 @@ pub fn unify(term1: &Term, term2: &Term) -> Result<Substitution, UnifyError> {
             }
             // RangeVarと他 (Varと同様に扱う)
             (TermInner::RangeVar { name, .. }, _) if name != "_" => {
-                if occurs_check(name, t2) {
+                if occurs_check(name, &t2) {
                     return Err(UnifyError {
                         message: format!("occurs check failed: {} occurs in {:?}", name, t2),
                         term1: t1.clone(),
@@ -275,7 +339,7 @@ pub fn unify(term1: &Term, term2: &Term) -> Result<Substitution, UnifyError> {
             }
             // 変数と何か（anonymous変数 "_" は束縛しない）
             (TermInner::Var { name }, _) if name != "_" => {
-                if occurs_check(name, t2) {
+                if occurs_check(name, &t2) {
                     return Err(UnifyError {
                         message: format!("occurs check failed: {} occurs in {:?}", name, t2),
                         term1: t1.clone(),
@@ -349,7 +413,8 @@ pub fn unify(term1: &Term, term2: &Term) -> Result<Substitution, UnifyError> {
                 },
             ) => {
                 let min_len = items1.len().min(items2.len());
-                for i in 0..min_len {
+                // 要素を逆順でpushしてLIFOでも左から右の順序で処理されるようにする
+                for i in (0..min_len).rev() {
                     stack.push((items1[i].clone(), items2[i].clone()));
                 }
 
@@ -406,6 +471,50 @@ pub fn unify(term1: &Term, term2: &Term) -> Result<Substitution, UnifyError> {
                 });
             }
         }
+
+        // 変数が束縛されたので、遅延された制約を再評価
+        if !deferred.is_empty() {
+            let old_deferred = std::mem::take(&mut deferred);
+            for constraint in old_deferred {
+                stack.push(constraint);
+            }
+        }
+    }
+
+    // 最後に残った遅延制約をチェック（すべての変数が束縛されているはず）
+    for (t1, t2) in deferred {
+        let t1 = apply_substitution(&t1, &subst);
+        let t2 = apply_substitution(&t2, &subst);
+        // 評価できなければエラー
+        if eval_arith(&t1).is_none() && matches!(t1.as_ref(), TermInner::ArithExpr { .. }) {
+            return Err(UnifyError {
+                message: format!("cannot evaluate arithmetic expression: {:?}", t1),
+                term1: t1,
+                term2: t2,
+            });
+        }
+        if eval_arith(&t2).is_none() && matches!(t2.as_ref(), TermInner::ArithExpr { .. }) {
+            return Err(UnifyError {
+                message: format!("cannot evaluate arithmetic expression: {:?}", t2),
+                term1: t1,
+                term2: t2,
+            });
+        }
+        // 両方評価できたら一致チェック
+        let v1 = eval_arith(&t1);
+        let v2 = eval_arith(&t2);
+        match (t1.as_ref(), t2.as_ref(), v1, v2) {
+            (TermInner::Number { value: n1 }, TermInner::Number { value: n2 }, _, _)
+                if n1 != n2 =>
+            {
+                return Err(UnifyError {
+                    message: format!("number mismatch: {} != {}", n1, n2),
+                    term1: t1,
+                    term2: t2,
+                });
+            }
+            _ => {}
+        }
     }
 
     Ok(subst)
@@ -447,6 +556,11 @@ fn rename_term_vars(term: &Term, suffix: &str) -> Term {
             let new_tail = tail.as_ref().map(|t| rename_term_vars(t, suffix));
             list(new_items, new_tail)
         }
+        TermInner::ArithExpr { op, left, right } => arith_expr(
+            *op,
+            rename_term_vars(left, suffix),
+            rename_term_vars(right, suffix),
+        ),
         TermInner::Number { .. } => term.clone(),
     }
 }
@@ -671,11 +785,8 @@ mod tests {
                 inclusive: false,
             }),
         );
-        // 0 is excluded (0 < X)
         assert!(unify(&rv, &number(0)).is_err());
-        // 10 is excluded (X < 10)
         assert!(unify(&rv, &number(10)).is_err());
-        // 1 and 9 are included
         assert!(unify(&rv, &number(1)).is_ok());
         assert!(unify(&rv, &number(9)).is_ok());
     }
@@ -694,7 +805,6 @@ mod tests {
                 inclusive: true,
             }),
         );
-        // 0 and 10 are included
         assert!(unify(&rv, &number(0)).is_ok());
         assert!(unify(&rv, &number(10)).is_ok());
     }
@@ -702,7 +812,6 @@ mod tests {
     #[test]
     fn test_rangevar_intersection() {
         use crate::parse::{Bound, range_var};
-        // 0 < X < 10
         let rv1 = range_var(
             "X".to_string(),
             Some(Bound {
@@ -714,7 +823,6 @@ mod tests {
                 inclusive: false,
             }),
         );
-        // 5 < Y < 15
         let rv2 = range_var(
             "Y".to_string(),
             Some(Bound {
@@ -727,7 +835,6 @@ mod tests {
             }),
         );
         let result = unify(&rv1, &rv2).unwrap();
-        // intersection: 5 < Z < 10
         let x_term = result.get("X").unwrap();
         match x_term.as_ref() {
             TermInner::RangeVar { min, max, .. } => {
@@ -753,7 +860,6 @@ mod tests {
     #[test]
     fn test_rangevar_intersection_empty() {
         use crate::parse::{Bound, range_var};
-        // 0 < X < 5
         let rv1 = range_var(
             "X".to_string(),
             Some(Bound {
@@ -765,7 +871,6 @@ mod tests {
                 inclusive: false,
             }),
         );
-        // 10 < Y < 15
         let rv2 = range_var(
             "Y".to_string(),
             Some(Bound {
@@ -783,7 +888,6 @@ mod tests {
     #[test]
     fn test_rangevar_intersection_inclusive_exclusive() {
         use crate::parse::{Bound, range_var};
-        // 0 <= X <= 5
         let rv1 = range_var(
             "X".to_string(),
             Some(Bound {
@@ -795,7 +899,6 @@ mod tests {
                 inclusive: true,
             }),
         );
-        // 5 < Y < 10
         let rv2 = range_var(
             "Y".to_string(),
             Some(Bound {
@@ -807,8 +910,130 @@ mod tests {
                 inclusive: false,
             }),
         );
-        // intersection: 5 < Z <= 5 which is empty
         assert!(unify(&rv1, &rv2).is_err());
+    }
+
+    // ===== arithmetic tests =====
+
+    #[test]
+    fn test_arith_simple_add() {
+        use crate::parse::number;
+        let expr = crate::parse::arith_expr(crate::parse::ArithOp::Add, number(3), number(5));
+        let n = number(8);
+        assert!(unify(&expr, &n).is_ok());
+    }
+
+    #[test]
+    fn test_arith_simple_sub() {
+        use crate::parse::number;
+        let expr = crate::parse::arith_expr(crate::parse::ArithOp::Sub, number(10), number(3));
+        let n = number(7);
+        assert!(unify(&expr, &n).is_ok());
+    }
+
+    #[test]
+    fn test_arith_simple_mul() {
+        use crate::parse::number;
+        let expr = crate::parse::arith_expr(crate::parse::ArithOp::Mul, number(4), number(5));
+        let n = number(20);
+        assert!(unify(&expr, &n).is_ok());
+    }
+
+    #[test]
+    fn test_arith_simple_div() {
+        use crate::parse::number;
+        let expr = crate::parse::arith_expr(crate::parse::ArithOp::Div, number(10), number(3));
+        let n = number(3); // truncated
+        assert!(unify(&expr, &n).is_ok());
+    }
+
+    #[test]
+    fn test_arith_in_rule() {
+        let subst = run_success("cube(3, 7, 3).", "cube(3, 10-3, 3).");
+        assert!(
+            subst.is_empty()
+                || subst
+                    .values()
+                    .all(|v| matches!(v.as_ref(), TermInner::Number { .. }))
+        );
+    }
+
+    #[test]
+    fn test_arith_with_var() {
+        let subst = run_success("f(5, 5).", "f(X, 10 - X).");
+        assert_eq!(
+            apply_substitution(&var("X".to_string()), &subst),
+            crate::parse::number(5)
+        );
+    }
+
+    #[test]
+    fn test_arith_expr_before_var() {
+        // 制約伝播により、算術式が左にあっても動作する
+        let subst = run_success("f(10, 5).", "f(X * 2, X).");
+        assert_eq!(
+            apply_substitution(&var("X".to_string()), &subst),
+            crate::parse::number(5)
+        );
+    }
+
+    #[test]
+    fn test_arith_multiple_vars_order() {
+        let subst = run_success("f(3, 1, 2).", "f(X + Y, X, Y).");
+        assert_eq!(
+            apply_substitution(&var("X".to_string()), &subst),
+            crate::parse::number(1)
+        );
+        assert_eq!(
+            apply_substitution(&var("Y".to_string()), &subst),
+            crate::parse::number(2)
+        );
+    }
+
+    #[test]
+    fn test_arith_precedence() {
+        let db = database("result(14).").unwrap();
+        let q = query("result(2 + 3 * 4).").unwrap().1;
+        let mut interp = Interpreter::new(db);
+        assert!(interp.execute(q).is_ok());
+    }
+
+    #[test]
+    fn test_arith_compound_expr() {
+        let subst = run_success("f(10, 2, 3).", "f((X + Y) * 2, X, Y).");
+        assert_eq!(
+            apply_substitution(&var("X".to_string()), &subst),
+            crate::parse::number(2)
+        );
+        assert_eq!(
+            apply_substitution(&var("Y".to_string()), &subst),
+            crate::parse::number(3)
+        );
+    }
+
+    #[test]
+    fn test_arith_nested_expr() {
+        let subst = run_success("f(25, 3, 4).", "f(X * X + Y * Y, X, Y).");
+        assert_eq!(
+            apply_substitution(&var("X".to_string()), &subst),
+            crate::parse::number(3)
+        );
+        assert_eq!(
+            apply_substitution(&var("Y".to_string()), &subst),
+            crate::parse::number(4)
+        );
+    }
+
+    #[test]
+    fn test_arith_both_sides_expr() {
+        let subst = run_success("f(5).", "f(X).");
+        let expr = apply_substitution(&crate::parse::query("dummy(X + 1).").unwrap().1[0], &subst);
+        match expr.as_ref() {
+            crate::parse::TermInner::Struct { args, .. } => {
+                assert_eq!(args[0], crate::parse::number(6));
+            }
+            _ => panic!("expected struct"),
+        }
     }
 
     // ===== basic fact tests =====
@@ -921,7 +1146,6 @@ mod tests {
     fn resolved_goals_returned() {
         let (_, resolved) =
             run_success_with_rewritten("p :- q(X, Z), r(Z, Y). q(a, b). r(b, c).", "p.");
-        // p, q(a, b), r(b, c) の3つが解決される
         assert_eq!(resolved.len(), 3);
         assert_eq!(resolved[0], struc("p".to_string(), vec![]));
         assert_eq!(
@@ -1185,4 +1409,3 @@ mod tests {
         );
     }
 }
-
