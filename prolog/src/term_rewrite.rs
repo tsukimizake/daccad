@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::parse::{Clause, Term, TermInner, list, struc, var};
+use crate::parse::{Bound, Clause, Term, TermInner, list, range_var, struc, var};
 
 /// 単一化エラー
 #[derive(Debug, Clone)]
@@ -47,6 +47,13 @@ pub fn apply_substitution(term: &Term, subst: &Substitution) -> Term {
                 term.clone()
             }
         }
+        TermInner::RangeVar { name, .. } => {
+            if let Some(value) = subst.get(name) {
+                apply_substitution(value, subst)
+            } else {
+                term.clone()
+            }
+        }
         TermInner::Struct { functor, args } => {
             let new_args = args
                 .iter()
@@ -79,6 +86,7 @@ fn extend_substitution(subst1: &Substitution, subst2: &Substitution) -> Substitu
 fn occurs_check(var_name: &str, term: &Term) -> bool {
     match term.as_ref() {
         TermInner::Var { name } => name == var_name,
+        TermInner::RangeVar { name, .. } => name == var_name,
         TermInner::Struct { args, .. } => args.iter().any(|arg| occurs_check(var_name, arg)),
         TermInner::List { items, tail } => {
             items.iter().any(|item| occurs_check(var_name, item))
@@ -88,10 +96,94 @@ fn occurs_check(var_name: &str, term: &Term) -> bool {
     }
 }
 
+/// 2つの下限境界から、より厳しい方を選択
+fn intersect_min(a: Option<Bound>, b: Option<Bound>) -> Option<Bound> {
+    match (a, b) {
+        (None, None) => None,
+        (Some(x), None) | (None, Some(x)) => Some(x),
+        (Some(a), Some(b)) => {
+            if a.value > b.value {
+                Some(a)
+            } else if b.value > a.value {
+                Some(b)
+            } else {
+                // 同じ値の場合、exclusiveの方が厳しい
+                Some(Bound {
+                    value: a.value,
+                    inclusive: a.inclusive && b.inclusive,
+                })
+            }
+        }
+    }
+}
+
+/// 2つの上限境界から、より厳しい方を選択
+fn intersect_max(a: Option<Bound>, b: Option<Bound>) -> Option<Bound> {
+    match (a, b) {
+        (None, None) => None,
+        (Some(x), None) | (None, Some(x)) => Some(x),
+        (Some(a), Some(b)) => {
+            if a.value < b.value {
+                Some(a)
+            } else if b.value < a.value {
+                Some(b)
+            } else {
+                // 同じ値の場合、exclusiveの方が厳しい
+                Some(Bound {
+                    value: a.value,
+                    inclusive: a.inclusive && b.inclusive,
+                })
+            }
+        }
+    }
+}
+
+/// 範囲が空でないかチェック（少なくとも1つの整数値が含まれるか）
+fn range_is_valid(min: Option<Bound>, max: Option<Bound>) -> bool {
+    match (min, max) {
+        (Some(min), Some(max)) => {
+            let effective_min = if min.inclusive {
+                min.value
+            } else {
+                min.value + 1
+            };
+            let effective_max = if max.inclusive {
+                max.value
+            } else {
+                max.value - 1
+            };
+            effective_min <= effective_max
+        }
+        _ => true,
+    }
+}
+
+/// 値が範囲内にあるかチェック
+fn value_in_range(value: i64, min: Option<Bound>, max: Option<Bound>) -> bool {
+    let min_ok = match min {
+        None => true,
+        Some(b) if b.inclusive => value >= b.value,
+        Some(b) => value > b.value,
+    };
+    let max_ok = match max {
+        None => true,
+        Some(b) if b.inclusive => value <= b.value,
+        Some(b) => value < b.value,
+    };
+    min_ok && max_ok
+}
+
 /// 変数を代入で解決する（連鎖をたどる）
 fn deref_var<'a>(term: &'a Term, subst: &'a Substitution) -> &'a Term {
     match term.as_ref() {
         TermInner::Var { name } if name != "_" => {
+            if let Some(bound) = subst.get(name) {
+                deref_var(bound, subst)
+            } else {
+                term
+            }
+        }
+        TermInner::RangeVar { name, .. } if name != "_" => {
             if let Some(bound) = subst.get(name) {
                 deref_var(bound, subst)
             } else {
@@ -114,6 +206,73 @@ pub fn unify(term1: &Term, term2: &Term) -> Result<Substitution, UnifyError> {
         match (t1.as_ref(), t2.as_ref()) {
             // 同じ変数
             (TermInner::Var { name: n1 }, TermInner::Var { name: n2 }) if n1 == n2 => {}
+            // RangeVar同士: 範囲の交差を計算
+            (
+                TermInner::RangeVar {
+                    name: n1,
+                    min: min1,
+                    max: max1,
+                },
+                TermInner::RangeVar {
+                    name: n2,
+                    min: min2,
+                    max: max2,
+                },
+            ) => {
+                let new_min = intersect_min(*min1, *min2);
+                let new_max = intersect_max(*max1, *max2);
+
+                if !range_is_valid(new_min, new_max) {
+                    return Err(UnifyError {
+                        message: format!("range intersection is empty: {:?} ∩ {:?}", t1, t2),
+                        term1: t1.clone(),
+                        term2: t2.clone(),
+                    });
+                }
+
+                let n1 = n1.clone();
+                let n2 = n2.clone();
+                let intersected = range_var(n1.clone(), new_min, new_max);
+                if n1 != "_" {
+                    subst.insert(n1.clone(), intersected.clone());
+                }
+                if n2 != "_" && n2 != n1 {
+                    subst.insert(n2, intersected);
+                }
+            }
+            // RangeVarとNumber: 範囲内かチェック
+            (TermInner::RangeVar { name, min, max }, TermInner::Number { value }) => {
+                if !value_in_range(*value, *min, *max) {
+                    return Err(UnifyError {
+                        message: format!("value {} is out of range {:?}", value, t1),
+                        term1: t1.clone(),
+                        term2: t2.clone(),
+                    });
+                }
+                let name = name.clone();
+                let t2 = t2.clone();
+                if name != "_" {
+                    subst.insert(name, t2);
+                }
+            }
+            // swap して再処理
+            (TermInner::Number { .. }, TermInner::RangeVar { .. }) => {
+                stack.push((t2.clone(), t1.clone()));
+            }
+            // RangeVarと他 (Varと同様に扱う)
+            (TermInner::RangeVar { name, .. }, _) if name != "_" => {
+                if occurs_check(name, t2) {
+                    return Err(UnifyError {
+                        message: format!("occurs check failed: {} occurs in {:?}", name, t2),
+                        term1: t1.clone(),
+                        term2: t2.clone(),
+                    });
+                }
+                subst.insert(name.clone(), t2.clone());
+            }
+            (_, TermInner::RangeVar { name, .. }) if name != "_" => {
+                stack.push((t2.clone(), t1.clone()));
+            }
             // 変数と何か（anonymous変数 "_" は束縛しない）
             (TermInner::Var { name }, _) if name != "_" => {
                 if occurs_check(name, t2) {
@@ -126,18 +285,13 @@ pub fn unify(term1: &Term, term2: &Term) -> Result<Substitution, UnifyError> {
                 subst.insert(name.clone(), t2.clone());
             }
             (_, TermInner::Var { name }) if name != "_" => {
-                if occurs_check(name, t1) {
-                    return Err(UnifyError {
-                        message: format!("occurs check failed: {} occurs in {:?}", name, t1),
-                        term1: t1.clone(),
-                        term2: t2.clone(),
-                    });
-                }
-                subst.insert(name.clone(), t1.clone());
+                stack.push((t2.clone(), t1.clone()));
             }
             // anonymous変数はどんな項とも単一化成功（束縛なし）
-            (TermInner::Var { name }, _) if name == "_" => {}
-            (_, TermInner::Var { name }) if name == "_" => {}
+            (TermInner::Var { name }, _) | (TermInner::RangeVar { name, .. }, _) if name == "_" => {
+            }
+            (_, TermInner::Var { name }) | (_, TermInner::RangeVar { name, .. }) if name == "_" => {
+            }
             // 数値
             (TermInner::Number { value: v1 }, TermInner::Number { value: v2 }) => {
                 if v1 != v2 {
@@ -277,6 +431,13 @@ fn rename_term_vars(term: &Term, suffix: &str) -> Term {
                 var(format!("{}_{}", name, suffix))
             }
         }
+        TermInner::RangeVar { name, min, max } => {
+            if name == "_" {
+                range_var(name.clone(), *min, *max)
+            } else {
+                range_var(format!("{}_{}", name, suffix), *min, *max)
+            }
+        }
         TermInner::Struct { functor, args } => {
             let new_args = args.iter().map(|a| rename_term_vars(a, suffix)).collect();
             struc(functor.clone(), new_args)
@@ -313,7 +474,10 @@ impl Interpreter {
         }
     }
 
-    fn rewrite_step(&mut self, goal: &Term) -> Result<(Clause, Substitution, Vec<Term>), RewriteError> {
+    fn rewrite_step(
+        &mut self,
+        goal: &Term,
+    ) -> Result<(Clause, Substitution, Vec<Term>), RewriteError> {
         for clause in &self.db {
             self.clause_counter += 1;
             let renamed = rename_clause_vars(clause, &self.clause_counter.to_string());
@@ -335,7 +499,10 @@ impl Interpreter {
         })
     }
 
-    pub fn execute_with_trace(&mut self, query: Vec<Term>) -> Result<(Substitution, Vec<Term>, Vec<TraceStep>), RewriteError> {
+    pub fn execute_with_trace(
+        &mut self,
+        query: Vec<Term>,
+    ) -> Result<(Substitution, Vec<Term>, Vec<TraceStep>), RewriteError> {
         let mut goals = query;
         let mut global_subst = Substitution::new();
         let mut trace = Vec::new();
@@ -449,6 +616,199 @@ mod tests {
         let t1 = struc("f".to_string(), vec![]);
         let t2 = struc("g".to_string(), vec![]);
         assert!(unify(&t1, &t2).is_err());
+    }
+
+    // ===== RangeVar unify tests =====
+
+    #[test]
+    fn test_rangevar_number_in_range() {
+        use crate::parse::{Bound, number, range_var};
+        let rv = range_var(
+            "X".to_string(),
+            Some(Bound {
+                value: 0,
+                inclusive: false,
+            }),
+            Some(Bound {
+                value: 10,
+                inclusive: false,
+            }),
+        );
+        let n = number(5);
+        let result = unify(&rv, &n).unwrap();
+        assert_eq!(result.get("X").unwrap(), &n);
+    }
+
+    #[test]
+    fn test_rangevar_number_out_of_range() {
+        use crate::parse::{Bound, number, range_var};
+        let rv = range_var(
+            "X".to_string(),
+            Some(Bound {
+                value: 0,
+                inclusive: false,
+            }),
+            Some(Bound {
+                value: 10,
+                inclusive: false,
+            }),
+        );
+        let n = number(15);
+        assert!(unify(&rv, &n).is_err());
+    }
+
+    #[test]
+    fn test_rangevar_number_boundary_exclusive() {
+        use crate::parse::{Bound, number, range_var};
+        let rv = range_var(
+            "X".to_string(),
+            Some(Bound {
+                value: 0,
+                inclusive: false,
+            }),
+            Some(Bound {
+                value: 10,
+                inclusive: false,
+            }),
+        );
+        // 0 is excluded (0 < X)
+        assert!(unify(&rv, &number(0)).is_err());
+        // 10 is excluded (X < 10)
+        assert!(unify(&rv, &number(10)).is_err());
+        // 1 and 9 are included
+        assert!(unify(&rv, &number(1)).is_ok());
+        assert!(unify(&rv, &number(9)).is_ok());
+    }
+
+    #[test]
+    fn test_rangevar_number_boundary_inclusive() {
+        use crate::parse::{Bound, number, range_var};
+        let rv = range_var(
+            "X".to_string(),
+            Some(Bound {
+                value: 0,
+                inclusive: true,
+            }),
+            Some(Bound {
+                value: 10,
+                inclusive: true,
+            }),
+        );
+        // 0 and 10 are included
+        assert!(unify(&rv, &number(0)).is_ok());
+        assert!(unify(&rv, &number(10)).is_ok());
+    }
+
+    #[test]
+    fn test_rangevar_intersection() {
+        use crate::parse::{Bound, range_var};
+        // 0 < X < 10
+        let rv1 = range_var(
+            "X".to_string(),
+            Some(Bound {
+                value: 0,
+                inclusive: false,
+            }),
+            Some(Bound {
+                value: 10,
+                inclusive: false,
+            }),
+        );
+        // 5 < Y < 15
+        let rv2 = range_var(
+            "Y".to_string(),
+            Some(Bound {
+                value: 5,
+                inclusive: false,
+            }),
+            Some(Bound {
+                value: 15,
+                inclusive: false,
+            }),
+        );
+        let result = unify(&rv1, &rv2).unwrap();
+        // intersection: 5 < Z < 10
+        let x_term = result.get("X").unwrap();
+        match x_term.as_ref() {
+            TermInner::RangeVar { min, max, .. } => {
+                assert_eq!(
+                    *min,
+                    Some(Bound {
+                        value: 5,
+                        inclusive: false
+                    })
+                );
+                assert_eq!(
+                    *max,
+                    Some(Bound {
+                        value: 10,
+                        inclusive: false
+                    })
+                );
+            }
+            _ => panic!("Expected RangeVar"),
+        }
+    }
+
+    #[test]
+    fn test_rangevar_intersection_empty() {
+        use crate::parse::{Bound, range_var};
+        // 0 < X < 5
+        let rv1 = range_var(
+            "X".to_string(),
+            Some(Bound {
+                value: 0,
+                inclusive: false,
+            }),
+            Some(Bound {
+                value: 5,
+                inclusive: false,
+            }),
+        );
+        // 10 < Y < 15
+        let rv2 = range_var(
+            "Y".to_string(),
+            Some(Bound {
+                value: 10,
+                inclusive: false,
+            }),
+            Some(Bound {
+                value: 15,
+                inclusive: false,
+            }),
+        );
+        assert!(unify(&rv1, &rv2).is_err());
+    }
+
+    #[test]
+    fn test_rangevar_intersection_inclusive_exclusive() {
+        use crate::parse::{Bound, range_var};
+        // 0 <= X <= 5
+        let rv1 = range_var(
+            "X".to_string(),
+            Some(Bound {
+                value: 0,
+                inclusive: true,
+            }),
+            Some(Bound {
+                value: 5,
+                inclusive: true,
+            }),
+        );
+        // 5 < Y < 10
+        let rv2 = range_var(
+            "Y".to_string(),
+            Some(Bound {
+                value: 5,
+                inclusive: false,
+            }),
+            Some(Bound {
+                value: 10,
+                inclusive: false,
+            }),
+        );
+        // intersection: 5 < Z <= 5 which is empty
+        assert!(unify(&rv1, &rv2).is_err());
     }
 
     // ===== basic fact tests =====
@@ -825,3 +1185,4 @@ mod tests {
         );
     }
 }
+
