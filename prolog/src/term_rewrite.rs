@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
+use crate::constraint::{SolveResult, solve_arithmetic};
 use crate::parse::{
     ArithOp, Bound, Clause, Term, TermInner, arith_expr, list, number, range_var, struc, var,
 };
@@ -481,39 +482,59 @@ pub fn unify(term1: &Term, term2: &Term) -> Result<Substitution, UnifyError> {
         }
     }
 
-    // 最後に残った遅延制約をチェック（すべての変数が束縛されているはず）
+    // 最後に残った遅延制約を制約ソルバーで処理
     for (t1, t2) in deferred {
-        let t1 = apply_substitution(&t1, &subst);
-        let t2 = apply_substitution(&t2, &subst);
-        // 評価できなければエラー
-        if eval_arith(&t1).is_none() && matches!(t1.as_ref(), TermInner::ArithExpr { .. }) {
-            return Err(UnifyError {
-                message: format!("cannot evaluate arithmetic expression: {:?}", t1),
-                term1: t1,
-                term2: t2,
-            });
-        }
-        if eval_arith(&t2).is_none() && matches!(t2.as_ref(), TermInner::ArithExpr { .. }) {
-            return Err(UnifyError {
-                message: format!("cannot evaluate arithmetic expression: {:?}", t2),
-                term1: t1,
-                term2: t2,
-            });
-        }
-        // 両方評価できたら一致チェック
-        let v1 = eval_arith(&t1);
-        let v2 = eval_arith(&t2);
-        match (t1.as_ref(), t2.as_ref(), v1, v2) {
-            (TermInner::Number { value: n1 }, TermInner::Number { value: n2 }, _, _)
-                if n1 != n2 =>
-            {
+        match solve_arithmetic(&t1, &t2, &subst) {
+            SolveResult::Solved(bindings) => {
+                // 解けた変数を代入に追加
+                for (var_name, value) in bindings {
+                    subst.insert(var_name, number(value));
+                }
+            }
+            SolveResult::Contradiction => {
+                let t1 = apply_substitution(&t1, &subst);
+                let t2 = apply_substitution(&t2, &subst);
                 return Err(UnifyError {
-                    message: format!("number mismatch: {} != {}", n1, n2),
+                    message: format!("arithmetic constraint contradiction: {:?} = {:?}", t1, t2),
                     term1: t1,
                     term2: t2,
                 });
             }
-            _ => {}
+            SolveResult::Unsolvable => {
+                // 従来の評価・検証フローへフォールバック
+                let t1 = apply_substitution(&t1, &subst);
+                let t2 = apply_substitution(&t2, &subst);
+                // 評価できなければエラー
+                if eval_arith(&t1).is_none() && matches!(t1.as_ref(), TermInner::ArithExpr { .. }) {
+                    return Err(UnifyError {
+                        message: format!("cannot evaluate arithmetic expression: {:?}", t1),
+                        term1: t1,
+                        term2: t2,
+                    });
+                }
+                if eval_arith(&t2).is_none() && matches!(t2.as_ref(), TermInner::ArithExpr { .. }) {
+                    return Err(UnifyError {
+                        message: format!("cannot evaluate arithmetic expression: {:?}", t2),
+                        term1: t1,
+                        term2: t2,
+                    });
+                }
+                // 両方評価できたら一致チェック
+                let v1 = eval_arith(&t1);
+                let v2 = eval_arith(&t2);
+                match (t1.as_ref(), t2.as_ref(), v1, v2) {
+                    (TermInner::Number { value: n1 }, TermInner::Number { value: n2 }, _, _)
+                        if n1 != n2 =>
+                    {
+                        return Err(UnifyError {
+                            message: format!("number mismatch: {} != {}", n1, n2),
+                            term1: t1,
+                            term2: t2,
+                        });
+                    }
+                    _ => {}
+                }
+            }
         }
     }
 
@@ -1409,3 +1430,4 @@ mod tests {
         );
     }
 }
+
