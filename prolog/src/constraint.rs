@@ -14,13 +14,12 @@ pub struct SolverState {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-struct ArithVar(String);
+pub struct ArithVar(String);
 
 // ArithExprより制約強く
 #[derive(Debug, Clone, PartialEq)]
 pub enum ArithConstraint {
     Eq(ArithVar, ArithVar),
-    Exact(ArithVar, i64),
     Plus(ArithVar, ArithVar, i64),   // X = Y + c
     Mul(ArithVar, ArithVar, i64),    // X = Y * c
     Div(ArithVar, ArithVar, i64),    // X = Y / c
@@ -30,6 +29,7 @@ pub enum ArithConstraint {
 
 impl SolverState {
     pub fn new(expr_eqs: Vec<ArithEq>) -> Self {
+        println!("eqs: {:?}", expr_eqs);
         let constraints = expr_eqs.into_iter().map(|_eq| todo!()).collect();
         Self {
             constraints,
@@ -37,7 +37,14 @@ impl SolverState {
         }
     }
 
-    /// 確定値を追加
+    fn extract_constraints(eq: ArithEq) -> Vec<ArithConstraint> {
+        match eq {
+            ArithEq { left, right } => {
+                todo!()
+            }
+        }
+    }
+
     pub fn put_exact(&mut self, var: String, value: i64) {
         if let Some(&existing) = self.exacts.get(&var) {
             if existing != value {
@@ -58,22 +65,18 @@ impl SolverState {
         None
     }
 
-    /// エラーがあるか確認
     pub fn has_error(&self) -> bool {
         self.error.is_some()
     }
 
-    /// エラーメッセージを取得
     pub fn get_error(&self) -> Option<&str> {
         self.error.as_deref()
     }
 
-    /// 確定値のマップを取得
     pub fn exacts(&self) -> &HashMap<String, i64> {
         &self.exacts
     }
 
-    /// 未解決の制約を取得
     pub fn remaining_constraints(&self) -> &[ArithConstraint] {
         &self.constraints
     }
