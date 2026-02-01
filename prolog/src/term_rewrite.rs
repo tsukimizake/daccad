@@ -105,15 +105,6 @@ pub fn apply_substitution(term: &Term, subst: &Substitution) -> Term {
     }
 }
 
-/// 2つの代入をマージする（subst2をsubst1に追加）
-fn extend_substitution(subst1: &Substitution, subst2: &Substitution) -> Substitution {
-    let mut result = subst1.clone();
-    for (k, v) in subst2 {
-        result.entry(k.clone()).or_insert_with(|| v.clone());
-    }
-    result
-}
-
 /// occurs check: 変数varが項term内に出現するか
 fn occurs_check(var_name: &str, term: &Term) -> bool {
     match term.as_ref() {
@@ -637,9 +628,8 @@ impl Interpreter {
     pub fn execute_with_trace(
         &mut self,
         query: Vec<Term>,
-    ) -> Result<(Substitution, Vec<Term>, Vec<TraceStep>), RewriteError> {
+    ) -> Result<(Vec<Term>, Vec<TraceStep>), RewriteError> {
         let mut goals = query;
-        let mut global_subst = Substitution::new();
         let mut trace = Vec::new();
         let mut resolved_goals = Vec::new();
 
@@ -647,9 +637,8 @@ impl Interpreter {
             goals.remove(0);
 
             let (matched_clause, subst, new_goals) = self.rewrite_step(&goal)?;
-            global_subst = extend_substitution(&global_subst, &subst);
 
-            let resolved = apply_substitution(&goal, &global_subst);
+            let resolved = apply_substitution(&goal, &subst);
             resolved_goals.push(resolved);
 
             trace.push(TraceStep {
@@ -659,19 +648,26 @@ impl Interpreter {
                 new_goals: new_goals.clone(),
             });
 
+            // goalsに代入を適用して更新
             goals = new_goals
                 .into_iter()
                 .chain(goals)
                 .map(|g| apply_substitution(&g, &subst))
                 .collect();
+
+            // resolved_goalsにも代入を適用（後続のステップで変数が具体化されるため）
+            resolved_goals = resolved_goals
+                .into_iter()
+                .map(|g| apply_substitution(&g, &subst))
+                .collect();
         }
 
-        Ok((global_subst, resolved_goals, trace))
+        Ok((resolved_goals, trace))
     }
 
-    pub fn execute(&mut self, query: Vec<Term>) -> Result<(Substitution, Vec<Term>), RewriteError> {
-        let (subst, resolved, _) = self.execute_with_trace(query)?;
-        Ok((subst, resolved))
+    pub fn execute(&mut self, query: Vec<Term>) -> Result<Vec<Term>, RewriteError> {
+        let (resolved, _) = self.execute_with_trace(query)?;
+        Ok(resolved)
     }
 }
 
@@ -680,27 +676,18 @@ mod tests {
     use super::*;
     use crate::parse::{database, query};
 
-    fn run_success(db_src: &str, query_src: &str) -> Substitution {
+    fn run_success(db_src: &str, query_src: &str) -> Vec<Term> {
         let db = database(db_src).expect("failed to parse db");
         let q = query(query_src).expect("failed to parse query").1;
         let mut interp = Interpreter::new(db);
-        interp.execute(q).expect("Expected success").0
+        interp.execute(q).expect("Expected success")
     }
 
-    fn run_success_with_trace(db_src: &str, query_src: &str) -> (Substitution, Vec<TraceStep>) {
+    fn run_success_with_trace(db_src: &str, query_src: &str) -> (Vec<Term>, Vec<TraceStep>) {
         let db = database(db_src).expect("failed to parse db");
         let q = query(query_src).expect("failed to parse query").1;
         let mut interp = Interpreter::new(db);
-        let (subst, _, trace) = interp.execute_with_trace(q).expect("Expected success");
-        (subst, trace)
-    }
-
-    fn run_success_with_rewritten(db_src: &str, query_src: &str) -> (Substitution, Vec<Term>) {
-        let db = database(db_src).expect("failed to parse db");
-        let q = query(query_src).expect("failed to parse query").1;
-        let mut interp = Interpreter::new(db);
-        let (subst, rewritten) = interp.execute(q).expect("Expected success");
-        (subst, rewritten)
+        interp.execute_with_trace(q).expect("Expected success")
     }
 
     fn run_failure(db_src: &str, query_src: &str) {
@@ -710,22 +697,9 @@ mod tests {
         assert!(interp.execute(q).is_err(), "Expected failure, got success");
     }
 
-    fn get_atom(subst: &Substitution, var_name: &str) -> String {
-        let term = subst
-            .get(var_name)
-            .unwrap_or_else(|| panic!("Variable {} not found", var_name));
-        let term = apply_substitution(term, subst);
-        match term.as_ref() {
-            TermInner::Struct { functor, args } if args.is_empty() => functor.clone(),
-            _ => panic!("Expected atom, got {:?}", term),
-        }
-    }
-
-    fn get_term(subst: &Substitution, var_name: &str) -> Term {
-        let term = subst
-            .get(var_name)
-            .unwrap_or_else(|| panic!("Variable {} not found", var_name));
-        apply_substitution(term, subst)
+    /// resolved_goalsを文字列のVecに変換
+    fn resolved_strs(resolved: &[Term]) -> Vec<String> {
+        resolved.iter().map(|t| format!("{:?}", t)).collect()
     }
 
     // ===== unify tests =====
@@ -970,91 +944,50 @@ mod tests {
 
     #[test]
     fn test_arith_in_rule() {
-        let subst = run_success("cube(3, 7, 3).", "cube(3, 10-3, 3).");
-        assert!(
-            subst.is_empty()
-                || subst
-                    .values()
-                    .all(|v| matches!(v.as_ref(), TermInner::Number { .. }))
-        );
+        let resolved = run_success("cube(3, 7, 3).", "cube(3, 10-3, 3).");
+        assert_eq!(resolved_strs(&resolved), vec!["cube(3, 7, 3)"]);
     }
 
     #[test]
     fn test_arith_with_var() {
-        let subst = run_success("f(5, 5).", "f(X, 10 - X).");
-        assert_eq!(
-            apply_substitution(&var("X".to_string()), &subst),
-            crate::parse::number(5)
-        );
+        let resolved = run_success("f(5, 5).", "f(X, 10 - X).");
+        assert_eq!(resolved_strs(&resolved), vec!["f(5, 5)"]);
     }
 
     #[test]
     fn test_arith_expr_before_var() {
-        // 制約伝播により、算術式が左にあっても動作する
-        let subst = run_success("f(10, 5).", "f(X * 2, X).");
-        assert_eq!(
-            apply_substitution(&var("X".to_string()), &subst),
-            crate::parse::number(5)
-        );
+        let resolved = run_success("f(10, 5).", "f(X * 2, X).");
+        assert_eq!(resolved_strs(&resolved), vec!["f(10, 5)"]);
     }
 
     #[test]
     fn test_arith_multiple_vars_order() {
-        let subst = run_success("f(3, 1, 2).", "f(X + Y, X, Y).");
-        assert_eq!(
-            apply_substitution(&var("X".to_string()), &subst),
-            crate::parse::number(1)
-        );
-        assert_eq!(
-            apply_substitution(&var("Y".to_string()), &subst),
-            crate::parse::number(2)
-        );
+        let resolved = run_success("f(3, 1, 2).", "f(X + Y, X, Y).");
+        assert_eq!(resolved_strs(&resolved), vec!["f(3, 1, 2)"]);
     }
 
     #[test]
     fn test_arith_precedence() {
-        let db = database("result(14).").unwrap();
-        let q = query("result(2 + 3 * 4).").unwrap().1;
-        let mut interp = Interpreter::new(db);
-        assert!(interp.execute(q).is_ok());
+        let resolved = run_success("result(14).", "result(2 + 3 * 4).");
+        assert_eq!(resolved_strs(&resolved), vec!["result(14)"]);
     }
 
     #[test]
     fn test_arith_compound_expr() {
-        let subst = run_success("f(10, 2, 3).", "f((X + Y) * 2, X, Y).");
-        assert_eq!(
-            apply_substitution(&var("X".to_string()), &subst),
-            crate::parse::number(2)
-        );
-        assert_eq!(
-            apply_substitution(&var("Y".to_string()), &subst),
-            crate::parse::number(3)
-        );
+        let resolved = run_success("f(10, 2, 3).", "f((X + Y) * 2, X, Y).");
+        assert_eq!(resolved_strs(&resolved), vec!["f(10, 2, 3)"]);
     }
 
     #[test]
     fn test_arith_nested_expr() {
-        let subst = run_success("f(25, 3, 4).", "f(X * X + Y * Y, X, Y).");
-        assert_eq!(
-            apply_substitution(&var("X".to_string()), &subst),
-            crate::parse::number(3)
-        );
-        assert_eq!(
-            apply_substitution(&var("Y".to_string()), &subst),
-            crate::parse::number(4)
-        );
+        let resolved = run_success("f(25, 3, 4).", "f(X * X + Y * Y, X, Y).");
+        assert_eq!(resolved_strs(&resolved), vec!["f(25, 3, 4)"]);
     }
 
     #[test]
     fn test_arith_both_sides_expr() {
-        let subst = run_success("f(5).", "f(X).");
-        let expr = apply_substitution(&crate::parse::query("dummy(X + 1).").unwrap().1[0], &subst);
-        match expr.as_ref() {
-            crate::parse::TermInner::Struct { args, .. } => {
-                assert_eq!(args[0], crate::parse::number(6));
-            }
-            _ => panic!("expected struct"),
-        }
+        let resolved = run_success("f(5).", "f(X).");
+        assert_eq!(resolved_strs(&resolved), vec!["f(5)"]);
     }
 
     // ===== basic fact tests =====
@@ -1076,43 +1009,42 @@ mod tests {
 
     #[test]
     fn query_var_binds_to_constant_fact() {
-        let subst = run_success("honi(fuwa).", "honi(X).");
-        assert_eq!(get_atom(&subst, "X"), "fuwa");
+        let resolved = run_success("honi(fuwa).", "honi(X).");
+        assert_eq!(resolved_strs(&resolved), vec!["honi(fuwa)"]);
     }
 
     #[test]
     fn var_to_var_binding() {
-        let subst = run_success("honi(X).", "honi(Y).");
-        let y_term = get_term(&subst, "Y");
-        assert!(matches!(y_term.as_ref(), TermInner::Var { .. }));
+        // DBの変数とクエリの変数がマッチ -> resolved goalでは変数のまま
+        let resolved = run_success("honi(X).", "honi(Y).");
+        // Y_1のような変数名になる
+        assert!(resolved_strs(&resolved)[0].starts_with("honi("));
     }
 
     #[test]
     fn multiple_usages_of_same_variable() {
-        let subst = run_success("likes(X, X).", "likes(fuwa, Y).");
-        assert_eq!(get_atom(&subst, "Y"), "fuwa");
+        let resolved = run_success("likes(X, X).", "likes(fuwa, Y).");
+        assert_eq!(resolved_strs(&resolved), vec!["likes(fuwa, fuwa)"]);
     }
 
     // ===== nested struct tests =====
 
     #[test]
     fn deep_struct_on_db() {
-        let subst = run_success("a(b(c)).", "a(X).");
-        let x_term = get_term(&subst, "X");
-        assert_eq!(
-            x_term,
-            struc("b".to_string(), vec![struc("c".to_string(), vec![])])
-        );
+        let resolved = run_success("a(b(c)).", "a(X).");
+        assert_eq!(resolved_strs(&resolved), vec!["a(b(c))"]);
     }
 
     #[test]
     fn deep_struct_on_query() {
-        run_success("a(X).", "a(b(c)).");
+        let resolved = run_success("a(X).", "a(b(c)).");
+        assert_eq!(resolved_strs(&resolved), vec!["a(b(c))"]);
     }
 
     #[test]
     fn recursive_unify_nested_struct_match() {
-        run_success("f(a(b)).", "f(a(b)).");
+        let resolved = run_success("f(a(b)).", "f(a(b)).");
+        assert_eq!(resolved_strs(&resolved), vec!["f(a(b))"]);
     }
 
     #[test]
@@ -1127,18 +1059,20 @@ mod tests {
 
     #[test]
     fn recursive_unify_var_in_nested_struct() {
-        run_success("f(a(X)).", "f(a(b)).");
+        let resolved = run_success("f(a(X)).", "f(a(b)).");
+        assert_eq!(resolved_strs(&resolved), vec!["f(a(b))"]);
     }
 
     #[test]
     fn recursive_unify_query_var_binds_in_nested() {
-        let subst = run_success("f(a(b)).", "f(a(X)).");
-        assert_eq!(get_atom(&subst, "X"), "b");
+        let resolved = run_success("f(a(b)).", "f(a(X)).");
+        assert_eq!(resolved_strs(&resolved), vec!["f(a(b))"]);
     }
 
     #[test]
     fn recursive_unify_multiple_args() {
-        run_success("f(a(b), c(d)).", "f(a(b), c(d)).");
+        let resolved = run_success("f(a(b), c(d)).", "f(a(b), c(d)).");
+        assert_eq!(resolved_strs(&resolved), vec!["f(a(b), c(d))"]);
     }
 
     #[test]
@@ -1148,7 +1082,8 @@ mod tests {
 
     #[test]
     fn recursive_unify_three_levels_deep() {
-        run_success("f(a(b(c))).", "f(a(b(c))).");
+        let resolved = run_success("f(a(b(c))).", "f(a(b(c))).");
+        assert_eq!(resolved_strs(&resolved), vec!["f(a(b(c)))"]);
     }
 
     #[test]
@@ -1158,55 +1093,37 @@ mod tests {
 
     #[test]
     fn recursive_unify_var_at_deep_level() {
-        run_success("f(a(b(X))).", "f(a(b(c))).");
+        let resolved = run_success("f(a(b(X))).", "f(a(b(c))).");
+        assert_eq!(resolved_strs(&resolved), vec!["f(a(b(c)))"]);
     }
 
     // ===== rule tests =====
 
     #[test]
     fn resolved_goals_returned() {
-        let (_, resolved) =
-            run_success_with_rewritten("p :- q(X, Z), r(Z, Y). q(a, b). r(b, c).", "p.");
-        assert_eq!(resolved.len(), 3);
-        assert_eq!(resolved[0], struc("p".to_string(), vec![]));
-        assert_eq!(
-            resolved[1],
-            struc(
-                "q".to_string(),
-                vec![
-                    struc("a".to_string(), vec![]),
-                    struc("b".to_string(), vec![]),
-                ]
-            )
-        );
-        assert_eq!(
-            resolved[2],
-            struc(
-                "r".to_string(),
-                vec![
-                    struc("b".to_string(), vec![]),
-                    struc("c".to_string(), vec![]),
-                ]
-            )
-        );
+        let resolved = run_success("p :- q(X, Z), r(Z, Y). q(a, b). r(b, c).", "p.");
+        assert_eq!(resolved_strs(&resolved), vec!["p", "q(a, b)", "r(b, c)"]);
     }
 
     #[test]
     fn sample_rule() {
-        let subst = run_success("p(X,Y) :- q(X, Z), r(Z, Y). q(a, b). r(b, c).", "p(A, B).");
-        assert_eq!(get_atom(&subst, "A"), "a");
-        assert_eq!(get_atom(&subst, "B"), "c");
+        let resolved = run_success("p(X,Y) :- q(X, Z), r(Z, Y). q(a, b). r(b, c).", "p(A, B).");
+        assert_eq!(
+            resolved_strs(&resolved),
+            vec!["p(a, c)", "q(a, b)", "r(b, c)"]
+        );
     }
 
     #[test]
     fn rule_single_goal() {
-        run_success("parent(X) :- father(X). father(tom).", "parent(tom).");
+        let resolved = run_success("parent(X) :- father(X). father(tom).", "parent(tom).");
+        assert_eq!(resolved_strs(&resolved), vec!["parent(tom)", "father(tom)"]);
     }
 
     #[test]
     fn rule_single_goal_with_var_query() {
-        let subst = run_success("parent(X) :- father(X). father(tom).", "parent(Y).");
-        assert_eq!(get_atom(&subst, "Y"), "tom");
+        let resolved = run_success("parent(X) :- father(X). father(tom).", "parent(Y).");
+        assert_eq!(resolved_strs(&resolved), vec!["parent(tom)", "father(tom)"]);
     }
 
     #[test]
@@ -1216,20 +1133,29 @@ mod tests {
             parent(bob, carol).
             grandparent(X, Y) :- parent(X, Z), parent(Z, Y).
         "#;
-        let subst = run_success(db, "grandparent(alice, Who).");
-        assert_eq!(get_atom(&subst, "Who"), "carol");
+        let resolved = run_success(db, "grandparent(alice, Who).");
+        assert_eq!(
+            resolved_strs(&resolved),
+            vec![
+                "grandparent(alice, carol)",
+                "parent(alice, bob)",
+                "parent(bob, carol)"
+            ]
+        );
     }
 
     // ===== list tests =====
 
     #[test]
     fn list_empty_match() {
-        run_success("f([]).", "f([]).");
+        let resolved = run_success("f([]).", "f([]).");
+        assert_eq!(resolved_strs(&resolved), vec!["f([])"]);
     }
 
     #[test]
     fn list_simple_match() {
-        run_success("f([a, b, c]).", "f([a, b, c]).");
+        let resolved = run_success("f([a, b, c]).", "f([a, b, c]).");
+        assert_eq!(resolved_strs(&resolved), vec!["f([a, b, c])"]);
     }
 
     #[test]
@@ -1239,21 +1165,20 @@ mod tests {
 
     #[test]
     fn list_var_binding() {
-        let subst = run_success("f([a, b, c]).", "f(X).");
-        let x_term = get_term(&subst, "X");
-        assert!(matches!(x_term.as_ref(), TermInner::List { .. }));
+        let resolved = run_success("f([a, b, c]).", "f(X).");
+        assert_eq!(resolved_strs(&resolved), vec!["f([a, b, c])"]);
     }
 
     #[test]
     fn list_head_tail_pattern() {
-        let subst = run_success("f([a, b, c]).", "f([H|T]).");
-        assert_eq!(get_atom(&subst, "H"), "a");
+        let resolved = run_success("f([a, b, c]).", "f([H|T]).");
+        assert_eq!(resolved_strs(&resolved), vec!["f([a | [b, c]])"]);
     }
 
     #[test]
     fn member_first() {
-        let db = "member(X, [X|_]).";
-        run_success(db, "member(a, [a, b, c]).");
+        let resolved = run_success("member(X, [X|_]).", "member(a, [a, b, c]).");
+        assert_eq!(resolved_strs(&resolved), vec!["member(a, [a, b, c])"]);
     }
 
     // ===== trace tests =====
@@ -1261,14 +1186,13 @@ mod tests {
     #[test]
     fn trace_records_rewrite() {
         let db = "q(a, b). p(X, Y) :- q(X, Y).";
-        let (subst, trace) = run_success_with_trace(db, "p(W, V).");
+        let (resolved, trace) = run_success_with_trace(db, "p(W, V).");
 
         assert_eq!(trace.len(), 2);
         assert!(matches!(&trace[0].matched_clause, Clause::Rule { .. }));
         assert!(matches!(&trace[1].matched_clause, Clause::Fact(_)));
 
-        assert_eq!(get_atom(&subst, "W"), "a");
-        assert_eq!(get_atom(&subst, "V"), "b");
+        assert_eq!(resolved_strs(&resolved), vec!["p(a, b)", "q(a, b)"]);
     }
 
     // ===== rule failure tests =====
@@ -1292,101 +1216,109 @@ mod tests {
 
     #[test]
     fn rule_chain_two_levels() {
-        run_success("a(X) :- b(X). b(X) :- c(X). c(foo).", "a(foo).");
+        let resolved = run_success("a(X) :- b(X). b(X) :- c(X). c(foo).", "a(foo).");
+        assert_eq!(resolved_strs(&resolved), vec!["a(foo)", "b(foo)", "c(foo)"]);
     }
 
     #[test]
     fn rule_chain_three_levels() {
-        run_success(
+        let resolved = run_success(
             "a(X) :- b(X). b(X) :- c(X). c(X) :- d(X). d(bar).",
             "a(bar).",
+        );
+        assert_eq!(
+            resolved_strs(&resolved),
+            vec!["a(bar)", "b(bar)", "c(bar)", "d(bar)"]
         );
     }
 
     #[test]
     fn rule_chain_with_var_binding() {
-        let subst = run_success("a(X) :- b(X). b(X) :- c(X). c(baz).", "a(Y).");
-        assert_eq!(get_atom(&subst, "Y"), "baz");
+        let resolved = run_success("a(X) :- b(X). b(X) :- c(X). c(baz).", "a(Y).");
+        assert_eq!(resolved_strs(&resolved), vec!["a(baz)", "b(baz)", "c(baz)"]);
     }
 
     // ===== rule with nested struct tests =====
 
     #[test]
     fn rule_with_nested_struct_in_fact() {
-        run_success(
+        let resolved = run_success(
             "outer(X) :- inner(X). inner(pair(a, b)).",
             "outer(pair(a, b)).",
+        );
+        assert_eq!(
+            resolved_strs(&resolved),
+            vec!["outer(pair(a, b))", "inner(pair(a, b))"]
         );
     }
 
     #[test]
     fn rule_with_nested_struct_var_binding() {
-        let subst = run_success("outer(X) :- inner(X). inner(pair(a, b)).", "outer(Y).");
-        let y_term = get_term(&subst, "Y");
+        let resolved = run_success("outer(X) :- inner(X). inner(pair(a, b)).", "outer(Y).");
         assert_eq!(
-            y_term,
-            struc(
-                "pair".to_string(),
-                vec![
-                    struc("a".to_string(), vec![]),
-                    struc("b".to_string(), vec![])
-                ]
-            )
+            resolved_strs(&resolved),
+            vec!["outer(pair(a, b))", "inner(pair(a, b))"]
         );
     }
 
     #[test]
     fn rule_with_deeply_nested_struct() {
-        run_success(
+        let resolved = run_success(
             "wrap(X) :- data(X). data(node(leaf(a), leaf(b))).",
             "wrap(node(leaf(a), leaf(b))).",
+        );
+        assert_eq!(
+            resolved_strs(&resolved),
+            vec![
+                "wrap(node(leaf(a), leaf(b)))",
+                "data(node(leaf(a), leaf(b)))"
+            ]
         );
     }
 
     #[test]
     fn rule_shared_variable_in_body() {
-        run_success("same(X) :- eq(X, X). eq(a, a).", "same(a).");
+        let resolved = run_success("same(X) :- eq(X, X). eq(a, a).", "same(a).");
+        assert_eq!(resolved_strs(&resolved), vec!["same(a)", "eq(a, a)"]);
     }
 
     // ===== rule with multiple args =====
 
     #[test]
     fn rule_three_args() {
-        let subst = run_success(
+        let resolved = run_success(
             "triple(X, Y, Z) :- first(X), second(Y), third(Z). first(a). second(b). third(c).",
             "triple(A, B, C).",
         );
-        assert_eq!(get_atom(&subst, "A"), "a");
-        assert_eq!(get_atom(&subst, "B"), "b");
-        assert_eq!(get_atom(&subst, "C"), "c");
+        assert_eq!(
+            resolved_strs(&resolved),
+            vec!["triple(a, b, c)", "first(a)", "second(b)", "third(c)"]
+        );
     }
 
     // ===== rule head with struct =====
 
     #[test]
     fn rule_head_with_struct() {
-        run_success(
+        let resolved = run_success(
             "make_pair(pair(X, Y)) :- left(X), right(Y). left(a). right(b).",
             "make_pair(pair(a, b)).",
+        );
+        assert_eq!(
+            resolved_strs(&resolved),
+            vec!["make_pair(pair(a, b))", "left(a)", "right(b)"]
         );
     }
 
     #[test]
     fn rule_head_with_struct_var_query() {
-        let subst = run_success(
+        let resolved = run_success(
             "make_pair(pair(X, Y)) :- left(X), right(Y). left(a). right(b).",
             "make_pair(P).",
         );
-        let p_term = get_term(&subst, "P");
         assert_eq!(
-            p_term,
-            struc(
-                "pair".to_string(),
-                vec![
-                    struc("a".to_string(), vec![]),
-                    struc("b".to_string(), vec![])
-                ]
-            )
+            resolved_strs(&resolved),
+            vec!["make_pair(pair(a, b))", "left(a)", "right(b)"]
         );
     }
 
@@ -1395,30 +1327,40 @@ mod tests {
     #[test]
     #[ignore]
     fn rule_multiple_goals() {
-        run_success(
+        let resolved = run_success(
             "grandparent(X, Z) :- parent(X, Y), parent(Y, Z). parent(a, b). parent(b, c).",
             "grandparent(a, c).",
+        );
+        assert_eq!(
+            resolved_strs(&resolved),
+            vec!["grandparent(a, c)", "parent(a, b)", "parent(b, c)"]
         );
     }
 
     #[test]
     #[ignore]
     fn rule_multiple_goals_with_var() {
-        let subst = run_success(
+        let resolved = run_success(
             "grandparent(X, Z) :- parent(X, Y), parent(Y, Z). parent(a, b). parent(b, c).",
             "grandparent(a, W).",
         );
-        assert_eq!(get_atom(&subst, "W"), "c");
+        assert_eq!(
+            resolved_strs(&resolved),
+            vec!["grandparent(a, c)", "parent(a, b)", "parent(b, c)"]
+        );
     }
 
     #[test]
     #[ignore]
     fn rule_shared_variable_propagation() {
-        let subst = run_success(
+        let resolved = run_success(
             "connect(X, Z) :- link(X, Y), link(Y, Z). link(a, b). link(b, c).",
             "connect(a, Z).",
         );
-        assert_eq!(get_atom(&subst, "Z"), "c");
+        assert_eq!(
+            resolved_strs(&resolved),
+            vec!["connect(a, c)", "link(a, b)", "link(b, c)"]
+        );
     }
 
     #[test]
