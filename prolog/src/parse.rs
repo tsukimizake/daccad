@@ -8,10 +8,6 @@ use nom::{
     sequence::{delimited, pair, preceded, separated_pair, terminated},
 };
 use std::fmt;
-use std::rc::Rc;
-
-/// Rcでラップされた項
-pub type Term = Rc<TermInner>;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Bound {
@@ -28,7 +24,7 @@ pub enum ArithOp {
 }
 
 #[derive(Clone, PartialEq)]
-pub enum TermInner {
+pub enum Term {
     Var {
         name: String,
     },
@@ -44,8 +40,8 @@ pub enum TermInner {
     /// 算術式: left op right
     ArithExpr {
         op: ArithOp,
-        left: Term,
-        right: Term,
+        left: Box<Term>,
+        right: Box<Term>,
     },
     Struct {
         functor: String,
@@ -53,7 +49,7 @@ pub enum TermInner {
     },
     List {
         items: Vec<Term>,
-        tail: Option<Term>,
+        tail: Option<Box<Term>>,
     },
 }
 
@@ -63,11 +59,11 @@ pub enum Clause {
     Rule { head: Term, body: Vec<Term> },
 }
 
-impl fmt::Debug for TermInner {
+impl fmt::Debug for Term {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TermInner::Var { name } => write!(f, "{}", name),
-            TermInner::RangeVar { name, min, max } => {
+            Term::Var { name } => write!(f, "{}", name),
+            Term::RangeVar { name, min, max } => {
                 if let Some(b) = min {
                     write!(f, "{} {} ", b.value, if b.inclusive { "<=" } else { "<" })?;
                 }
@@ -77,8 +73,8 @@ impl fmt::Debug for TermInner {
                 }
                 Ok(())
             }
-            TermInner::Number { value } => write!(f, "{}", value),
-            TermInner::ArithExpr { op, left, right } => {
+            Term::Number { value } => write!(f, "{}", value),
+            Term::ArithExpr { op, left, right } => {
                 let op_str = match op {
                     ArithOp::Add => "+",
                     ArithOp::Sub => "-",
@@ -87,7 +83,7 @@ impl fmt::Debug for TermInner {
                 };
                 write!(f, "({:?} {} {:?})", left, op_str, right)
             }
-            TermInner::Struct { functor, args } => {
+            Term::Struct { functor, args } => {
                 write!(f, "{}", functor)?;
                 if !args.is_empty() {
                     write!(f, "(")?;
@@ -101,7 +97,7 @@ impl fmt::Debug for TermInner {
                 }
                 Ok(())
             }
-            TermInner::List { items, tail } => {
+            Term::List { items, tail } => {
                 write!(f, "[")?;
                 for (idx, item) in items.iter().enumerate() {
                     if idx > 0 {
@@ -141,27 +137,34 @@ impl fmt::Debug for Clause {
 
 /// Termコンストラクタ
 pub fn var(name: String) -> Term {
-    Rc::new(TermInner::Var { name })
+    Term::Var { name }
 }
 
 pub fn number(value: i64) -> Term {
-    Rc::new(TermInner::Number { value })
+    Term::Number { value }
 }
 
 pub fn struc(functor: String, args: Vec<Term>) -> Term {
-    Rc::new(TermInner::Struct { functor, args })
+    Term::Struct { functor, args }
 }
 
 pub fn list(items: Vec<Term>, tail: Option<Term>) -> Term {
-    Rc::new(TermInner::List { items, tail })
+    Term::List {
+        items,
+        tail: tail.map(Box::new),
+    }
 }
 
 pub fn range_var(name: String, min: Option<Bound>, max: Option<Bound>) -> Term {
-    Rc::new(TermInner::RangeVar { name, min, max })
+    Term::RangeVar { name, min, max }
 }
 
 pub fn arith_expr(op: ArithOp, left: Term, right: Term) -> Term {
-    Rc::new(TermInner::ArithExpr { op, left, right })
+    Term::ArithExpr {
+        op,
+        left: Box::new(left),
+        right: Box::new(right),
+    }
 }
 
 #[allow(unused)]
@@ -556,8 +559,8 @@ mod tests {
         let (_, clause) = clause_parser(src).unwrap();
 
         match clause {
-            Clause::Fact(term) => match term.as_ref() {
-                TermInner::Struct { functor, args } => {
+            Clause::Fact(term) => match &term {
+                Term::Struct { functor, args } => {
                     assert_eq!(functor, "parent");
                     assert_eq!(args.len(), 2);
                 }
@@ -573,8 +576,8 @@ mod tests {
         let (_, clause) = clause_parser(src).unwrap();
 
         match clause {
-            Clause::Fact(term) => match term.as_ref() {
-                TermInner::Struct { functor, args } => {
+            Clause::Fact(term) => match &term {
+                Term::Struct { functor, args } => {
                     assert_eq!(functor, "hello");
                     assert_eq!(args.len(), 0);
                 }
@@ -590,12 +593,12 @@ mod tests {
         let (_, clause) = clause_parser(src).unwrap();
 
         match clause {
-            Clause::Fact(term) => match term.as_ref() {
-                TermInner::Struct { functor, args } => {
+            Clause::Fact(term) => match &term {
+                Term::Struct { functor, args } => {
                     assert_eq!(functor, "hoge");
                     assert_eq!(args.len(), 1);
-                    match args[0].as_ref() {
-                        TermInner::RangeVar { name, min, max } => {
+                    match &args[0] {
+                        Term::RangeVar { name, min, max } => {
                             assert_eq!(name, "X");
                             assert_eq!(
                                 *min,
@@ -627,9 +630,9 @@ mod tests {
         let (_, clause) = clause_parser(src).unwrap();
 
         match clause {
-            Clause::Fact(term) => match term.as_ref() {
-                TermInner::Struct { args, .. } => match args[0].as_ref() {
-                    TermInner::RangeVar { name, min, max } => {
+            Clause::Fact(term) => match &term {
+                Term::Struct { args, .. } => match &args[0] {
+                    Term::RangeVar { name, min, max } => {
                         assert_eq!(name, "X");
                         assert_eq!(
                             *min,
@@ -660,9 +663,9 @@ mod tests {
         let (_, clause) = clause_parser(src).unwrap();
 
         match clause {
-            Clause::Fact(term) => match term.as_ref() {
-                TermInner::Struct { args, .. } => match args[0].as_ref() {
-                    TermInner::RangeVar { name, min, max } => {
+            Clause::Fact(term) => match &term {
+                Term::Struct { args, .. } => match &args[0] {
+                    Term::RangeVar { name, min, max } => {
                         assert_eq!(name, "X");
                         assert_eq!(
                             *min,
@@ -687,9 +690,9 @@ mod tests {
         let (_, clause) = clause_parser(src).unwrap();
 
         match clause {
-            Clause::Fact(term) => match term.as_ref() {
-                TermInner::Struct { args, .. } => match args[0].as_ref() {
-                    TermInner::RangeVar { name, min, max } => {
+            Clause::Fact(term) => match &term {
+                Term::Struct { args, .. } => match &args[0] {
+                    Term::RangeVar { name, min, max } => {
                         assert_eq!(name, "X");
                         assert_eq!(*min, None);
                         assert_eq!(
@@ -715,10 +718,10 @@ mod tests {
 
         match clause {
             Clause::Rule { head, body } => {
-                match head.as_ref() {
-                    TermInner::Struct { functor, args } => {
+                match &head {
+                    Term::Struct { functor, args } => {
                         assert_eq!(functor, "hoge");
-                        assert!(matches!(args[0].as_ref(), TermInner::RangeVar { .. }));
+                        assert!(matches!(&args[0], Term::RangeVar { .. }));
                     }
                     _ => panic!("Expected Struct"),
                 }

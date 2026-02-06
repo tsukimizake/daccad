@@ -3,7 +3,7 @@ use std::fmt;
 
 use crate::constraint::{SolveResult, solve_arithmetic};
 use crate::parse::{
-    ArithOp, Bound, Clause, Term, TermInner, arith_expr, list, number, range_var, struc, var,
+    ArithOp, Bound, Clause, Term, arith_expr, list, number, range_var, struc, var,
 };
 
 /// 単一化エラー
@@ -42,9 +42,9 @@ pub type Substitution = HashMap<String, Term>;
 
 /// 算術式を評価する。評価できない場合（未束縛変数を含む場合）はNoneを返す
 fn eval_arith(term: &Term) -> Option<i64> {
-    match term.as_ref() {
-        TermInner::Number { value } => Some(*value),
-        TermInner::ArithExpr { op, left, right } => {
+    match term {
+        Term::Number { value } => Some(*value),
+        Term::ArithExpr { op, left, right } => {
             let l = eval_arith(left)?;
             let r = eval_arith(right)?;
             Some(match op {
@@ -60,22 +60,22 @@ fn eval_arith(term: &Term) -> Option<i64> {
 
 /// 代入を項に適用する
 pub fn apply_substitution(term: &Term, subst: &Substitution) -> Term {
-    match term.as_ref() {
-        TermInner::Var { name } => {
+    match term {
+        Term::Var { name } => {
             if let Some(value) = subst.get(name) {
                 apply_substitution(value, subst)
             } else {
                 term.clone()
             }
         }
-        TermInner::RangeVar { name, .. } => {
+        Term::RangeVar { name, .. } => {
             if let Some(value) = subst.get(name) {
                 apply_substitution(value, subst)
             } else {
                 term.clone()
             }
         }
-        TermInner::ArithExpr { op, left, right } => {
+        Term::ArithExpr { op, left, right } => {
             let new_left = apply_substitution(left, subst);
             let new_right = apply_substitution(right, subst);
             let new_expr = arith_expr(*op, new_left, new_right);
@@ -86,39 +86,39 @@ pub fn apply_substitution(term: &Term, subst: &Substitution) -> Term {
                 new_expr
             }
         }
-        TermInner::Struct { functor, args } => {
+        Term::Struct { functor, args } => {
             let new_args = args
                 .iter()
                 .map(|arg| apply_substitution(arg, subst))
                 .collect();
             struc(functor.clone(), new_args)
         }
-        TermInner::List { items, tail } => {
+        Term::List { items, tail } => {
             let new_items = items
                 .iter()
                 .map(|item| apply_substitution(item, subst))
                 .collect();
-            let new_tail = tail.as_ref().map(|t| apply_substitution(t, subst));
+            let new_tail = tail.as_ref().map(|t| apply_substitution(t.as_ref(), subst));
             list(new_items, new_tail)
         }
-        TermInner::Number { .. } => term.clone(),
+        Term::Number { .. } => term.clone(),
     }
 }
 
 /// occurs check: 変数varが項term内に出現するか
 fn occurs_check(var_name: &str, term: &Term) -> bool {
-    match term.as_ref() {
-        TermInner::Var { name } => name == var_name,
-        TermInner::RangeVar { name, .. } => name == var_name,
-        TermInner::Struct { args, .. } => args.iter().any(|arg| occurs_check(var_name, arg)),
-        TermInner::List { items, tail } => {
+    match term {
+        Term::Var { name } => name == var_name,
+        Term::RangeVar { name, .. } => name == var_name,
+        Term::Struct { args, .. } => args.iter().any(|arg| occurs_check(var_name, arg)),
+        Term::List { items, tail } => {
             items.iter().any(|item| occurs_check(var_name, item))
                 || tail.as_ref().map_or(false, |t| occurs_check(var_name, t))
         }
-        TermInner::ArithExpr { left, right, .. } => {
+        Term::ArithExpr { left, right, .. } => {
             occurs_check(var_name, left) || occurs_check(var_name, right)
         }
-        TermInner::Number { .. } => false,
+        Term::Number { .. } => false,
     }
 }
 
@@ -201,8 +201,8 @@ fn value_in_range(value: i64, min: Option<Bound>, max: Option<Bound>) -> bool {
 
 /// 変数を代入で解決する（連鎖をたどる）
 fn deref_var<'a>(term: &'a Term, subst: &'a Substitution) -> &'a Term {
-    match term.as_ref() {
-        TermInner::Var { name } | TermInner::RangeVar { name, .. } if name != "_" => {
+    match term {
+        Term::Var { name } | Term::RangeVar { name, .. } if name != "_" => {
             if let Some(bound) = subst.get(name) {
                 deref_var(bound, subst)
             } else {
@@ -227,16 +227,16 @@ pub fn unify(term1: &Term, term2: &Term) -> Result<Substitution, UnifyError> {
 
         // 算術式の場合のみ代入を適用して評価（変数置換が必要なため）
         let t1_owned;
-        let t1 = match t1.as_ref() {
-            TermInner::ArithExpr { .. } => {
+        let t1 = match t1 {
+            Term::ArithExpr { .. } => {
                 t1_owned = apply_substitution(t1, &subst);
                 &t1_owned
             }
             _ => t1,
         };
         let t2_owned;
-        let t2 = match t2.as_ref() {
-            TermInner::ArithExpr { .. } => {
+        let t2 = match t2 {
+            Term::ArithExpr { .. } => {
                 t2_owned = apply_substitution(t2, &subst);
                 &t2_owned
             }
@@ -245,8 +245,8 @@ pub fn unify(term1: &Term, term2: &Term) -> Result<Substitution, UnifyError> {
 
         // 算術式がまだ評価できない場合は遅延
         let has_unbound_var = |term: &Term| -> bool {
-            match term.as_ref() {
-                TermInner::ArithExpr { .. } => {
+            match term {
+                Term::ArithExpr { .. } => {
                     // 数値に評価できなければ未束縛変数がある
                     eval_arith(term).is_none()
                 }
@@ -259,17 +259,17 @@ pub fn unify(term1: &Term, term2: &Term) -> Result<Substitution, UnifyError> {
             continue;
         }
 
-        match (t1.as_ref(), t2.as_ref()) {
+        match (t1, t2) {
             // 同じ変数
-            (TermInner::Var { name: n1 }, TermInner::Var { name: n2 }) if n1 == n2 => {}
+            (Term::Var { name: n1 }, Term::Var { name: n2 }) if n1 == n2 => {}
             // RangeVar同士: 範囲の交差を計算
             (
-                TermInner::RangeVar {
+                Term::RangeVar {
                     name: n1,
                     min: min1,
                     max: max1,
                 },
-                TermInner::RangeVar {
+                Term::RangeVar {
                     name: n2,
                     min: min2,
                     max: max2,
@@ -297,7 +297,7 @@ pub fn unify(term1: &Term, term2: &Term) -> Result<Substitution, UnifyError> {
                 }
             }
             // RangeVarとNumber: 範囲内かチェック
-            (TermInner::RangeVar { name, min, max }, TermInner::Number { value }) => {
+            (Term::RangeVar { name, min, max }, Term::Number { value }) => {
                 if !value_in_range(*value, *min, *max) {
                     return Err(UnifyError {
                         message: format!("value {} is out of range {:?}", value, t1),
@@ -312,12 +312,12 @@ pub fn unify(term1: &Term, term2: &Term) -> Result<Substitution, UnifyError> {
                 }
             }
             // swap して再処理
-            (TermInner::Number { .. }, TermInner::RangeVar { .. }) => {
+            (Term::Number { .. }, Term::RangeVar { .. }) => {
                 stack.push((t2.clone(), t1.clone()));
             }
             // RangeVarと他 (Varと同様に扱う)
-            (TermInner::RangeVar { name, .. }, _) if name != "_" => {
-                if occurs_check(name, &t2) {
+            (Term::RangeVar { name, .. }, _) if name != "_" => {
+                if occurs_check(name, t2) {
                     return Err(UnifyError {
                         message: format!("occurs check failed: {} occurs in {:?}", name, t2),
                         term1: t1.clone(),
@@ -326,12 +326,12 @@ pub fn unify(term1: &Term, term2: &Term) -> Result<Substitution, UnifyError> {
                 }
                 subst.insert(name.clone(), t2.clone());
             }
-            (_, TermInner::RangeVar { name, .. }) if name != "_" => {
+            (_, Term::RangeVar { name, .. }) if name != "_" => {
                 stack.push((t2.clone(), t1.clone()));
             }
             // 変数と何か（anonymous変数 "_" は束縛しない）
-            (TermInner::Var { name }, _) if name != "_" => {
-                if occurs_check(name, &t2) {
+            (Term::Var { name }, _) if name != "_" => {
+                if occurs_check(name, t2) {
                     return Err(UnifyError {
                         message: format!("occurs check failed: {} occurs in {:?}", name, t2),
                         term1: t1.clone(),
@@ -340,16 +340,16 @@ pub fn unify(term1: &Term, term2: &Term) -> Result<Substitution, UnifyError> {
                 }
                 subst.insert(name.clone(), t2.clone());
             }
-            (_, TermInner::Var { name }) if name != "_" => {
+            (_, Term::Var { name }) if name != "_" => {
                 stack.push((t2.clone(), t1.clone()));
             }
             // anonymous変数はどんな項とも単一化成功（束縛なし）
-            (TermInner::Var { name }, _) | (TermInner::RangeVar { name, .. }, _) if name == "_" => {
+            (Term::Var { name }, _) | (Term::RangeVar { name, .. }, _) if name == "_" => {
             }
-            (_, TermInner::Var { name }) | (_, TermInner::RangeVar { name, .. }) if name == "_" => {
+            (_, Term::Var { name }) | (_, Term::RangeVar { name, .. }) if name == "_" => {
             }
             // 数値
-            (TermInner::Number { value: v1 }, TermInner::Number { value: v2 }) => {
+            (Term::Number { value: v1 }, Term::Number { value: v2 }) => {
                 if v1 != v2 {
                     return Err(UnifyError {
                         message: format!("number mismatch: {} != {}", v1, v2),
@@ -360,11 +360,11 @@ pub fn unify(term1: &Term, term2: &Term) -> Result<Substitution, UnifyError> {
             }
             // 構造体
             (
-                TermInner::Struct {
+                Term::Struct {
                     functor: f1,
                     args: args1,
                 },
-                TermInner::Struct {
+                Term::Struct {
                     functor: f2,
                     args: args2,
                 },
@@ -395,11 +395,11 @@ pub fn unify(term1: &Term, term2: &Term) -> Result<Substitution, UnifyError> {
             }
             // リスト
             (
-                TermInner::List {
+                Term::List {
                     items: items1,
                     tail: tail1,
                 },
-                TermInner::List {
+                Term::List {
                     items: items2,
                     tail: tail2,
                 },
@@ -412,19 +412,19 @@ pub fn unify(term1: &Term, term2: &Term) -> Result<Substitution, UnifyError> {
 
                 match (items1.len().cmp(&items2.len()), tail1, tail2) {
                     (std::cmp::Ordering::Equal, Some(t1), Some(t2)) => {
-                        stack.push((t1.clone(), t2.clone()));
+                        stack.push((t1.as_ref().clone(), t2.as_ref().clone()));
                     }
                     (std::cmp::Ordering::Equal, None, None) => {}
                     (std::cmp::Ordering::Equal, Some(t1), None) => {
-                        stack.push((t1.clone(), list(vec![], None)));
+                        stack.push((t1.as_ref().clone(), list(vec![], None)));
                     }
                     (std::cmp::Ordering::Equal, None, Some(t2)) => {
-                        stack.push((list(vec![], None), t2.clone()));
+                        stack.push((list(vec![], None), t2.as_ref().clone()));
                     }
                     (std::cmp::Ordering::Greater, _, Some(t2)) => {
                         let remaining: Vec<Term> = items1[min_len..].to_vec();
-                        let new_list = list(remaining, tail1.clone());
-                        stack.push((new_list, t2.clone()));
+                        let new_list = list(remaining, tail1.as_ref().map(|t| t.as_ref().clone()));
+                        stack.push((new_list, t2.as_ref().clone()));
                     }
                     (std::cmp::Ordering::Greater, _, None) => {
                         return Err(UnifyError {
@@ -439,8 +439,8 @@ pub fn unify(term1: &Term, term2: &Term) -> Result<Substitution, UnifyError> {
                     }
                     (std::cmp::Ordering::Less, Some(t1), _) => {
                         let remaining: Vec<Term> = items2[min_len..].to_vec();
-                        let new_list = list(remaining, tail2.clone());
-                        stack.push((t1.clone(), new_list));
+                        let new_list = list(remaining, tail2.as_ref().map(|t| t.as_ref().clone()));
+                        stack.push((t1.as_ref().clone(), new_list));
                     }
                     (std::cmp::Ordering::Less, None, _) => {
                         return Err(UnifyError {
@@ -496,14 +496,14 @@ pub fn unify(term1: &Term, term2: &Term) -> Result<Substitution, UnifyError> {
                 let t1 = apply_substitution(&t1, &subst);
                 let t2 = apply_substitution(&t2, &subst);
                 // 評価できなければエラー
-                if eval_arith(&t1).is_none() && matches!(t1.as_ref(), TermInner::ArithExpr { .. }) {
+                if eval_arith(&t1).is_none() && matches!(&t1, Term::ArithExpr { .. }) {
                     return Err(UnifyError {
                         message: format!("cannot evaluate arithmetic expression: {:?}", t1),
                         term1: t1,
                         term2: t2,
                     });
                 }
-                if eval_arith(&t2).is_none() && matches!(t2.as_ref(), TermInner::ArithExpr { .. }) {
+                if eval_arith(&t2).is_none() && matches!(&t2, Term::ArithExpr { .. }) {
                     return Err(UnifyError {
                         message: format!("cannot evaluate arithmetic expression: {:?}", t2),
                         term1: t1,
@@ -513,8 +513,8 @@ pub fn unify(term1: &Term, term2: &Term) -> Result<Substitution, UnifyError> {
                 // 両方評価できたら一致チェック
                 let v1 = eval_arith(&t1);
                 let v2 = eval_arith(&t2);
-                match (t1.as_ref(), t2.as_ref(), v1, v2) {
-                    (TermInner::Number { value: n1 }, TermInner::Number { value: n2 }, _, _)
+                match (&t1, &t2, v1, v2) {
+                    (Term::Number { value: n1 }, Term::Number { value: n2 }, _, _)
                         if n1 != n2 =>
                     {
                         return Err(UnifyError {
@@ -544,36 +544,36 @@ fn rename_clause_vars(clause: &Clause, suffix: &str) -> Clause {
 }
 
 fn rename_term_vars(term: &Term, suffix: &str) -> Term {
-    match term.as_ref() {
-        TermInner::Var { name } => {
+    match term {
+        Term::Var { name } => {
             if name == "_" {
                 var(name.clone())
             } else {
                 var(format!("{}_{}", name, suffix))
             }
         }
-        TermInner::RangeVar { name, min, max } => {
+        Term::RangeVar { name, min, max } => {
             if name == "_" {
                 range_var(name.clone(), *min, *max)
             } else {
                 range_var(format!("{}_{}", name, suffix), *min, *max)
             }
         }
-        TermInner::Struct { functor, args } => {
+        Term::Struct { functor, args } => {
             let new_args = args.iter().map(|a| rename_term_vars(a, suffix)).collect();
             struc(functor.clone(), new_args)
         }
-        TermInner::List { items, tail } => {
+        Term::List { items, tail } => {
             let new_items = items.iter().map(|i| rename_term_vars(i, suffix)).collect();
-            let new_tail = tail.as_ref().map(|t| rename_term_vars(t, suffix));
+            let new_tail = tail.as_ref().map(|t| rename_term_vars(t.as_ref(), suffix));
             list(new_items, new_tail)
         }
-        TermInner::ArithExpr { op, left, right } => arith_expr(
+        Term::ArithExpr { op, left, right } => arith_expr(
             *op,
             rename_term_vars(left, suffix),
             rename_term_vars(right, suffix),
         ),
-        TermInner::Number { .. } => term.clone(),
+        Term::Number { .. } => term.clone(),
     }
 }
 
@@ -831,8 +831,8 @@ mod tests {
         );
         let result = unify(&rv1, &rv2).unwrap();
         let x_term = result.get("X").unwrap();
-        match x_term.as_ref() {
-            TermInner::RangeVar { min, max, .. } => {
+        match x_term {
+            Term::RangeVar { min, max, .. } => {
                 assert_eq!(
                     *min,
                     Some(Bound {

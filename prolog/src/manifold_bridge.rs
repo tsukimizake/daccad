@@ -3,7 +3,7 @@
 //! Term（書き換え後の項）を ManifoldExpr 中間表現に変換し、
 //! それを manifold-rs の Manifold オブジェクトに評価する。
 
-use crate::parse::{Term, TermInner};
+use crate::parse::Term;
 use manifold_rs::{Manifold, Mesh};
 use std::fmt;
 
@@ -83,9 +83,9 @@ impl<'a> Args<'a> {
     }
 
     fn f64(&self, i: usize) -> Result<f64, ConversionError> {
-        match self.args[i].as_ref() {
-            TermInner::Number { value } => Ok(*value as f64),
-            TermInner::Var { name } | TermInner::RangeVar { name, .. } => {
+        match &self.args[i] {
+            Term::Number { value } => Ok(*value as f64),
+            Term::Var { name } | Term::RangeVar { name, .. } => {
                 Err(ConversionError::UnboundVariable(name.clone()))
             }
             _ => Err(ConversionError::TypeMismatch {
@@ -97,14 +97,14 @@ impl<'a> Args<'a> {
     }
 
     fn u32(&self, i: usize) -> Result<u32, ConversionError> {
-        match self.args[i].as_ref() {
-            TermInner::Number { value } if *value >= 0 => Ok(*value as u32),
-            TermInner::Number { .. } => Err(ConversionError::TypeMismatch {
+        match &self.args[i] {
+            Term::Number { value } if *value >= 0 => Ok(*value as u32),
+            Term::Number { .. } => Err(ConversionError::TypeMismatch {
                 functor: self.functor.to_string(),
                 arg_index: i,
                 expected: "non-negative integer",
             }),
-            TermInner::Var { name } | TermInner::RangeVar { name, .. } => {
+            Term::Var { name } | Term::RangeVar { name, .. } => {
                 Err(ConversionError::UnboundVariable(name.clone()))
             }
             _ => Err(ConversionError::TypeMismatch {
@@ -177,10 +177,10 @@ pub enum ManifoldExpr {
 impl ManifoldExpr {
     /// Prolog Term から ManifoldExpr へ変換
     pub fn from_term(term: &Term) -> Result<Self, ConversionError> {
-        match term.as_ref() {
-            TermInner::Struct { functor, args } => Self::from_struct(functor, args),
-            TermInner::Var { name } => Err(ConversionError::UnboundVariable(name.clone())),
-            TermInner::RangeVar { name, .. } => Err(ConversionError::UnboundVariable(name.clone())),
+        match term {
+            Term::Struct { functor, args } => Self::from_struct(functor, args),
+            Term::Var { name } => Err(ConversionError::UnboundVariable(name.clone())),
+            Term::RangeVar { name, .. } => Err(ConversionError::UnboundVariable(name.clone())),
             _ => Err(ConversionError::UnknownPrimitive(format!("{:?}", term))),
         }
     }

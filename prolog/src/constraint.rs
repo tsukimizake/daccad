@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::parse::{ArithOp, Bound, Term, TermInner};
+use crate::parse::{ArithOp, Bound, Term};
 use crate::term_rewrite::Substitution;
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -237,15 +237,15 @@ impl ArithExpr {
     /// Term から ArithExpr への変換を試みる
     /// Struct や List など算術式でないものは Err を返す
     pub fn try_from_term(term: &Term) -> Result<Self, ConversionError> {
-        match term.as_ref() {
-            TermInner::Var { name } => Ok(ArithExpr::Var(name.clone())),
-            TermInner::RangeVar { name, min, max } => Ok(ArithExpr::RangeVar {
+        match term {
+            Term::Var { name } => Ok(ArithExpr::Var(name.clone())),
+            Term::RangeVar { name, min, max } => Ok(ArithExpr::RangeVar {
                 name: name.clone(),
                 min: *min,
                 max: *max,
             }),
-            TermInner::Number { value } => Ok(ArithExpr::Num(*value)),
-            TermInner::ArithExpr { op, left, right } => {
+            Term::Number { value } => Ok(ArithExpr::Num(*value)),
+            Term::ArithExpr { op, left, right } => {
                 let left = ArithExpr::try_from_term(left)?;
                 let right = ArithExpr::try_from_term(right)?;
                 Ok(ArithExpr::BinOp {
@@ -254,13 +254,13 @@ impl ArithExpr {
                     right: Box::new(right),
                 })
             }
-            TermInner::Struct { functor, .. } => Err(ConversionError {
+            Term::Struct { functor, .. } => Err(ConversionError {
                 message: format!(
                     "cannot convert struct '{}' to arithmetic expression",
                     functor
                 ),
             }),
-            TermInner::List { .. } => Err(ConversionError {
+            Term::List { .. } => Err(ConversionError {
                 message: "cannot convert list to arithmetic expression".to_string(),
             }),
         }
