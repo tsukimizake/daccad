@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use crate::parse::{ArithOp, Bound, Term};
-use crate::term_rewrite::Substitution;
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SolverState {
@@ -329,49 +328,9 @@ pub enum SolveResult {
 // メインの solve 関数
 // ============================================================
 
-pub fn solve_arithmetic(left: &Term, right: &Term, subst: &Substitution) -> SolveResult {
-    // Term から ArithExpr への変換
-    let left_expr = match ArithExpr::try_from_term(left) {
-        Ok(expr) => expr,
-        Err(_) => return SolveResult::Unsolvable,
-    };
-    let right_expr = match ArithExpr::try_from_term(right) {
-        Ok(expr) => expr,
-        Err(_) => return SolveResult::Unsolvable,
-    };
-
-    // SolverStateを作成
-    let mut state = SolverState::new(vec![ArithEq::new(left_expr, right_expr)]);
-
-    // Substitutionから初期値を設定
-    for (name, term) in subst {
-        if let Ok(ArithExpr::Num(value)) = ArithExpr::try_from_term(term) {
-            state.put_exact(name.clone(), value);
-        }
-    }
-
-    // 保存用に初期exacts
-    let initial_vars: std::collections::HashSet<_> = state.exacts().keys().cloned().collect();
-
-    state.repeat_until_fixpoint();
-
-    if state.has_error() {
-        return SolveResult::Contradiction;
-    }
-
-    if !state.remaining_constraints().is_empty() {
-        return SolveResult::Unsolvable;
-    }
-
-    // 新しく解けた変数のみを返す
-    let new_bindings: HashMap<String, i64> = state
-        .exacts()
-        .iter()
-        .filter(|(name, _)| !initial_vars.contains(*name))
-        .map(|(k, v)| (k.clone(), *v))
-        .collect();
-
-    SolveResult::Solved(new_bindings)
+pub fn solve_arithmetic(_left: &Term, _right: &Term) -> SolveResult {
+    // TODO: 算術制約ソルバーの実装
+    SolveResult::Unsolvable
 }
 
 // ============================================================

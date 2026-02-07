@@ -1,10 +1,7 @@
-use std::collections::HashMap;
 use std::fmt;
 
 use crate::constraint::{SolveResult, solve_arithmetic};
-use crate::parse::{
-    ArithOp, Bound, Clause, Term, arith_expr, list, number, range_var, struc, var,
-};
+use crate::parse::{ArithOp, Bound, Clause, Term, arith_expr, list, number, range_var, struc, var};
 
 /// 単一化エラー
 #[derive(Debug, Clone)]
@@ -37,8 +34,50 @@ impl fmt::Display for RewriteError {
 
 impl std::error::Error for RewriteError {}
 
-/// 変数名から項への代入
-pub type Substitution = HashMap<String, Term>;
+/// 単一変数の置換をインプレースで適用
+fn substitute_in_place(term: &mut Term, var_name: &str, replacement: &Term) {
+    match term {
+        Term::Var { name } if name == var_name => {
+            *term = replacement.clone();
+        }
+        Term::RangeVar { name, .. } if name == var_name => {
+            *term = replacement.clone();
+        }
+        Term::Struct { args, .. } => {
+            for arg in args.iter_mut() {
+                substitute_in_place(arg, var_name, replacement);
+            }
+        }
+        Term::List { items, tail } => {
+            for item in items.iter_mut() {
+                substitute_in_place(item, var_name, replacement);
+            }
+            if let Some(t) = tail {
+                substitute_in_place(t.as_mut(), var_name, replacement);
+            }
+        }
+        Term::ArithExpr { left, right, .. } => {
+            substitute_in_place(left.as_mut(), var_name, replacement);
+            substitute_in_place(right.as_mut(), var_name, replacement);
+        }
+        _ => {}
+    }
+}
+
+/// unify 内のスタックに対して変数置換を適用
+fn substitute_in_stack(stack: &mut Vec<(Term, Term)>, var_name: &str, replacement: &Term) {
+    for (t1, t2) in stack.iter_mut() {
+        substitute_in_place(t1, var_name, replacement);
+        substitute_in_place(t2, var_name, replacement);
+    }
+}
+
+/// goals に対して変数置換を適用
+fn substitute_in_goals(goals: &mut Vec<Term>, var_name: &str, replacement: &Term) {
+    for goal in goals.iter_mut() {
+        substitute_in_place(goal, var_name, replacement);
+    }
+}
 
 /// 算術式を評価する。評価できない場合（未束縛変数を含む場合）はNoneを返す
 fn eval_arith(term: &Term) -> Option<i64> {
@@ -58,50 +97,32 @@ fn eval_arith(term: &Term) -> Option<i64> {
     }
 }
 
-/// 代入を項に適用する
-pub fn apply_substitution(term: &Term, subst: &Substitution) -> Term {
-    match term {
-        Term::Var { name } => {
-            if let Some(value) = subst.get(name) {
-                apply_substitution(value, subst)
-            } else {
-                term.clone()
+/// 算術式をインプレースで評価し、可能なら数値に置き換える
+fn eval_arith_in_place(term: &mut Term) {
+    if let Some(val) = eval_arith(term) {
+        *term = number(val);
+    } else {
+        // 再帰的に子要素も評価
+        match term {
+            Term::ArithExpr { left, right, .. } => {
+                eval_arith_in_place(left.as_mut());
+                eval_arith_in_place(right.as_mut());
             }
-        }
-        Term::RangeVar { name, .. } => {
-            if let Some(value) = subst.get(name) {
-                apply_substitution(value, subst)
-            } else {
-                term.clone()
+            Term::Struct { args, .. } => {
+                for arg in args.iter_mut() {
+                    eval_arith_in_place(arg);
+                }
             }
-        }
-        Term::ArithExpr { op, left, right } => {
-            let new_left = apply_substitution(left, subst);
-            let new_right = apply_substitution(right, subst);
-            let new_expr = arith_expr(*op, new_left, new_right);
-            // 評価可能なら数値に変換
-            if let Some(val) = eval_arith(&new_expr) {
-                number(val)
-            } else {
-                new_expr
+            Term::List { items, tail } => {
+                for item in items.iter_mut() {
+                    eval_arith_in_place(item);
+                }
+                if let Some(t) = tail {
+                    eval_arith_in_place(t.as_mut());
+                }
             }
+            _ => {}
         }
-        Term::Struct { functor, args } => {
-            let new_args = args
-                .iter()
-                .map(|arg| apply_substitution(arg, subst))
-                .collect();
-            struc(functor.clone(), new_args)
-        }
-        Term::List { items, tail } => {
-            let new_items = items
-                .iter()
-                .map(|item| apply_substitution(item, subst))
-                .collect();
-            let new_tail = tail.as_ref().map(|t| apply_substitution(t.as_ref(), subst));
-            list(new_items, new_tail)
-        }
-        Term::Number { .. } => term.clone(),
     }
 }
 
@@ -199,67 +220,40 @@ fn value_in_range(value: i64, min: Option<Bound>, max: Option<Bound>) -> bool {
     min_ok && max_ok
 }
 
-/// 変数を代入で解決する（連鎖をたどる）
-fn deref_var<'a>(term: &'a Term, subst: &'a Substitution) -> &'a Term {
-    match term {
-        Term::Var { name } | Term::RangeVar { name, .. } if name != "_" => {
-            if let Some(bound) = subst.get(name) {
-                deref_var(bound, subst)
-            } else {
-                term
-            }
-        }
-        _ => term,
+/// deferred リスト内の全Termに対して変数を置換する
+fn substitute_in_deferred(deferred: &mut Vec<(Term, Term)>, var_name: &str, replacement: &Term) {
+    for (t1, t2) in deferred.iter_mut() {
+        substitute_in_place(t1, var_name, replacement);
+        substitute_in_place(t2, var_name, replacement);
     }
 }
 
-/// 2つの項を単一化し、成功すれば代入を返す
-pub fn unify(term1: &Term, term2: &Term) -> Result<Substitution, UnifyError> {
-    let mut subst = Substitution::new();
-    let mut stack = vec![(term1.clone(), term2.clone())];
+/// 2つの項を単一化し、成功すれば goals をインプレースで書き換える
+pub fn unify(term1: Term, term2: Term, goals: &mut Vec<Term>) -> Result<(), UnifyError> {
+    let mut stack = vec![(term1, term2)];
     // 未評価の算術式制約を保持（変数が束縛されたら再評価）
     let mut deferred: Vec<(Term, Term)> = Vec::new();
 
-    while let Some((t1, t2)) = stack.pop() {
-        // 変数を解決
-        let t1 = deref_var(&t1, &subst);
-        let t2 = deref_var(&t2, &subst);
-
-        // 算術式の場合のみ代入を適用して評価（変数置換が必要なため）
-        let t1_owned;
-        let t1 = match t1 {
-            Term::ArithExpr { .. } => {
-                t1_owned = apply_substitution(t1, &subst);
-                &t1_owned
-            }
-            _ => t1,
-        };
-        let t2_owned;
-        let t2 = match t2 {
-            Term::ArithExpr { .. } => {
-                t2_owned = apply_substitution(t2, &subst);
-                &t2_owned
-            }
-            _ => t2,
-        };
+    while let Some((mut t1, mut t2)) = stack.pop() {
+        // 算術式を評価可能なら数値に変換
+        if let Some(val) = eval_arith(&t1) {
+            t1 = number(val);
+        }
+        if let Some(val) = eval_arith(&t2) {
+            t2 = number(val);
+        }
 
         // 算術式がまだ評価できない場合は遅延
         let has_unbound_var = |term: &Term| -> bool {
-            match term {
-                Term::ArithExpr { .. } => {
-                    // 数値に評価できなければ未束縛変数がある
-                    eval_arith(term).is_none()
-                }
-                _ => false,
-            }
+            matches!(term, Term::ArithExpr { .. })
         };
 
-        if has_unbound_var(t1) || has_unbound_var(t2) {
-            deferred.push((t1.clone(), t2.clone()));
+        if has_unbound_var(&t1) || has_unbound_var(&t2) {
+            deferred.push((t1, t2));
             continue;
         }
 
-        match (t1, t2) {
+        match (&t1, &t2) {
             // 同じ変数
             (Term::Var { name: n1 }, Term::Var { name: n2 }) if n1 == n2 => {}
             // RangeVar同士: 範囲の交差を計算
@@ -281,19 +275,21 @@ pub fn unify(term1: &Term, term2: &Term) -> Result<Substitution, UnifyError> {
                 if !range_is_valid(new_min, new_max) {
                     return Err(UnifyError {
                         message: format!("range intersection is empty: {:?} ∩ {:?}", t1, t2),
-                        term1: t1.clone(),
-                        term2: t2.clone(),
+                        term1: t1,
+                        term2: t2,
                     });
                 }
 
-                let n1 = n1.clone();
-                let n2 = n2.clone();
                 let intersected = range_var(n1.clone(), new_min, new_max);
                 if n1 != "_" {
-                    subst.insert(n1.clone(), intersected.clone());
+                    substitute_in_stack(&mut stack, n1, &intersected);
+                    substitute_in_goals(goals, n1, &intersected);
+                    substitute_in_deferred(&mut deferred, n1, &intersected);
                 }
                 if n2 != "_" && n2 != n1 {
-                    subst.insert(n2, intersected);
+                    substitute_in_stack(&mut stack, n2, &intersected);
+                    substitute_in_goals(goals, n2, &intersected);
+                    substitute_in_deferred(&mut deferred, n2, &intersected);
                 }
             }
             // RangeVarとNumber: 範囲内かチェック
@@ -301,60 +297,62 @@ pub fn unify(term1: &Term, term2: &Term) -> Result<Substitution, UnifyError> {
                 if !value_in_range(*value, *min, *max) {
                     return Err(UnifyError {
                         message: format!("value {} is out of range {:?}", value, t1),
-                        term1: t1.clone(),
-                        term2: t2.clone(),
+                        term1: t1,
+                        term2: t2,
                     });
                 }
-                let name = name.clone();
-                let t2 = t2.clone();
                 if name != "_" {
-                    subst.insert(name, t2);
+                    substitute_in_stack(&mut stack, name, &t2);
+                    substitute_in_goals(goals, name, &t2);
+                    substitute_in_deferred(&mut deferred, name, &t2);
                 }
             }
             // swap して再処理
             (Term::Number { .. }, Term::RangeVar { .. }) => {
-                stack.push((t2.clone(), t1.clone()));
+                stack.push((t2, t1));
             }
             // RangeVarと他 (Varと同様に扱う)
             (Term::RangeVar { name, .. }, _) if name != "_" => {
-                if occurs_check(name, t2) {
+                if occurs_check(name, &t2) {
                     return Err(UnifyError {
                         message: format!("occurs check failed: {} occurs in {:?}", name, t2),
-                        term1: t1.clone(),
-                        term2: t2.clone(),
+                        term1: t1,
+                        term2: t2,
                     });
                 }
-                subst.insert(name.clone(), t2.clone());
+                substitute_in_stack(&mut stack, name, &t2);
+                substitute_in_goals(goals, name, &t2);
+                substitute_in_deferred(&mut deferred, name, &t2);
             }
             (_, Term::RangeVar { name, .. }) if name != "_" => {
-                stack.push((t2.clone(), t1.clone()));
+                stack.push((t2, t1));
             }
             // 変数と何か（anonymous変数 "_" は束縛しない）
             (Term::Var { name }, _) if name != "_" => {
-                if occurs_check(name, t2) {
+                if occurs_check(name, &t2) {
                     return Err(UnifyError {
                         message: format!("occurs check failed: {} occurs in {:?}", name, t2),
-                        term1: t1.clone(),
-                        term2: t2.clone(),
+                        term1: t1,
+                        term2: t2,
                     });
                 }
-                subst.insert(name.clone(), t2.clone());
+                substitute_in_stack(&mut stack, name, &t2);
+                substitute_in_goals(goals, name, &t2);
+                substitute_in_deferred(&mut deferred, name, &t2);
             }
             (_, Term::Var { name }) if name != "_" => {
-                stack.push((t2.clone(), t1.clone()));
+                stack.push((t2, t1));
             }
             // anonymous変数はどんな項とも単一化成功（束縛なし）
-            (Term::Var { name }, _) | (Term::RangeVar { name, .. }, _) if name == "_" => {
-            }
-            (_, Term::Var { name }) | (_, Term::RangeVar { name, .. }) if name == "_" => {
-            }
+            (Term::Var { name }, _) | (Term::RangeVar { name, .. }, _) if name == "_" => {}
+            (_, Term::Var { name }) | (_, Term::RangeVar { name, .. }) if name == "_" => {}
             // 数値
             (Term::Number { value: v1 }, Term::Number { value: v2 }) => {
                 if v1 != v2 {
                     return Err(UnifyError {
                         message: format!("number mismatch: {} != {}", v1, v2),
-                        term1: t1.clone(),
-                        term2: t2.clone(),
+                        term1: t1,
+                        term2: t2,
                     });
                 }
             }
@@ -372,8 +370,8 @@ pub fn unify(term1: &Term, term2: &Term) -> Result<Substitution, UnifyError> {
                 if f1 != f2 {
                     return Err(UnifyError {
                         message: format!("functor mismatch: {} != {}", f1, f2),
-                        term1: t1.clone(),
-                        term2: t2.clone(),
+                        term1: t1,
+                        term2: t2,
                     });
                 }
                 if args1.len() != args2.len() {
@@ -385,8 +383,8 @@ pub fn unify(term1: &Term, term2: &Term) -> Result<Substitution, UnifyError> {
                             f2,
                             args2.len()
                         ),
-                        term1: t1.clone(),
-                        term2: t2.clone(),
+                        term1: t1,
+                        term2: t2,
                     });
                 }
                 for (a1, a2) in args1.iter().zip(args2.iter()) {
@@ -421,10 +419,10 @@ pub fn unify(term1: &Term, term2: &Term) -> Result<Substitution, UnifyError> {
                     (std::cmp::Ordering::Equal, None, Some(t2)) => {
                         stack.push((list(vec![], None), t2.as_ref().clone()));
                     }
-                    (std::cmp::Ordering::Greater, _, Some(t2)) => {
+                    (std::cmp::Ordering::Greater, _, Some(t2_tail)) => {
                         let remaining: Vec<Term> = items1[min_len..].to_vec();
                         let new_list = list(remaining, tail1.as_ref().map(|t| t.as_ref().clone()));
-                        stack.push((new_list, t2.as_ref().clone()));
+                        stack.push((new_list, t2_tail.as_ref().clone()));
                     }
                     (std::cmp::Ordering::Greater, _, None) => {
                         return Err(UnifyError {
@@ -433,14 +431,14 @@ pub fn unify(term1: &Term, term2: &Term) -> Result<Substitution, UnifyError> {
                                 items1.len(),
                                 items2.len()
                             ),
-                            term1: t1.clone(),
-                            term2: t2.clone(),
+                            term1: t1,
+                            term2: t2,
                         });
                     }
-                    (std::cmp::Ordering::Less, Some(t1), _) => {
+                    (std::cmp::Ordering::Less, Some(t1_tail), _) => {
                         let remaining: Vec<Term> = items2[min_len..].to_vec();
                         let new_list = list(remaining, tail2.as_ref().map(|t| t.as_ref().clone()));
-                        stack.push((t1.as_ref().clone(), new_list));
+                        stack.push((t1_tail.as_ref().clone(), new_list));
                     }
                     (std::cmp::Ordering::Less, None, _) => {
                         return Err(UnifyError {
@@ -449,8 +447,8 @@ pub fn unify(term1: &Term, term2: &Term) -> Result<Substitution, UnifyError> {
                                 items1.len(),
                                 items2.len()
                             ),
-                            term1: t1.clone(),
-                            term2: t2.clone(),
+                            term1: t1,
+                            term2: t2,
                         });
                     }
                 }
@@ -458,8 +456,8 @@ pub fn unify(term1: &Term, term2: &Term) -> Result<Substitution, UnifyError> {
             _ => {
                 return Err(UnifyError {
                     message: format!("cannot unify {:?} with {:?}", t1, t2),
-                    term1: t1.clone(),
-                    term2: t2.clone(),
+                    term1: t1,
+                    term2: t2,
                 });
             }
         }
@@ -475,16 +473,15 @@ pub fn unify(term1: &Term, term2: &Term) -> Result<Substitution, UnifyError> {
 
     // 最後に残った遅延制約を制約ソルバーで処理
     for (t1, t2) in deferred {
-        match solve_arithmetic(&t1, &t2, &subst) {
+        match solve_arithmetic(&t1, &t2) {
             SolveResult::Solved(bindings) => {
-                // 解けた変数を代入に追加
+                // 解けた変数を goals に適用
                 for (var_name, value) in bindings {
-                    subst.insert(var_name, number(value));
+                    let replacement = number(value);
+                    substitute_in_goals(goals, &var_name, &replacement);
                 }
             }
             SolveResult::Contradiction => {
-                let t1 = apply_substitution(&t1, &subst);
-                let t2 = apply_substitution(&t2, &subst);
                 return Err(UnifyError {
                     message: format!("arithmetic constraint contradiction: {:?} = {:?}", t1, t2),
                     term1: t1,
@@ -492,9 +489,6 @@ pub fn unify(term1: &Term, term2: &Term) -> Result<Substitution, UnifyError> {
                 });
             }
             SolveResult::Unsolvable => {
-                // 従来の評価・検証フローへフォールバック
-                let t1 = apply_substitution(&t1, &subst);
-                let t2 = apply_substitution(&t2, &subst);
                 // 評価できなければエラー
                 if eval_arith(&t1).is_none() && matches!(&t1, Term::ArithExpr { .. }) {
                     return Err(UnifyError {
@@ -511,12 +505,8 @@ pub fn unify(term1: &Term, term2: &Term) -> Result<Substitution, UnifyError> {
                     });
                 }
                 // 両方評価できたら一致チェック
-                let v1 = eval_arith(&t1);
-                let v2 = eval_arith(&t2);
-                match (&t1, &t2, v1, v2) {
-                    (Term::Number { value: n1 }, Term::Number { value: n2 }, _, _)
-                        if n1 != n2 =>
-                    {
+                match (&t1, &t2) {
+                    (Term::Number { value: n1 }, Term::Number { value: n2 }) if n1 != n2 => {
                         return Err(UnifyError {
                             message: format!("number mismatch: {} != {}", n1, n2),
                             term1: t1,
@@ -529,7 +519,12 @@ pub fn unify(term1: &Term, term2: &Term) -> Result<Substitution, UnifyError> {
         }
     }
 
-    Ok(subst)
+    // goals 内の算術式を評価
+    for goal in goals.iter_mut() {
+        eval_arith_in_place(goal);
+    }
+
+    Ok(())
 }
 
 /// 節の変数をリネームして衝突を避ける
@@ -582,7 +577,6 @@ fn rename_term_vars(term: &Term, suffix: &str) -> Term {
 pub struct TraceStep {
     pub selected_goal: Term,
     pub matched_clause: Clause,
-    pub substitution: Substitution,
     pub new_goals: Vec<Term>,
 }
 
@@ -600,28 +594,41 @@ impl Interpreter {
         }
     }
 
+    /// all_terms[goal_idx] を clause とマッチし、body を挿入する
+    /// unify が成功すると all_terms 全体の変数がインプレースで書き換えられる
+    /// 返り値: (マッチした clause, body の長さ)
     fn rewrite_step(
         &mut self,
-        goal: &Term,
-    ) -> Result<(Clause, Substitution, Vec<Term>), RewriteError> {
+        all_terms: &mut Vec<Term>,
+        goal_idx: usize,
+    ) -> Result<(Clause, usize), RewriteError> {
+        let goal = all_terms[goal_idx].clone();
+
         for clause in &self.db {
             self.clause_counter += 1;
             let renamed = rename_clause_vars(clause, &self.clause_counter.to_string());
 
             let (head, body) = match &renamed {
-                Clause::Fact(term) => (term, &vec![]),
-                Clause::Rule { head, body } => (head, body),
+                Clause::Fact(term) => (term.clone(), vec![]),
+                Clause::Rule { head, body } => (head.clone(), body.clone()),
             };
 
-            if let Ok(subst) = unify(goal, head) {
-                let new_goals: Vec<Term> =
-                    body.iter().map(|t| apply_substitution(t, &subst)).collect();
-                return Ok((renamed, subst, new_goals));
+            let body_len = body.len();
+
+            // body を goal_idx+1 の位置に挿入した試行用 Vec を作成
+            let mut trial = all_terms.clone();
+            for (i, b) in body.into_iter().enumerate() {
+                trial.insert(goal_idx + 1 + i, b);
+            }
+
+            if unify(goal.clone(), head, &mut trial).is_ok() {
+                *all_terms = trial;
+                return Ok((renamed, body_len));
             }
         }
         Err(RewriteError {
             message: "no clause matches goal".to_string(),
-            goal: goal.clone(),
+            goal,
         })
     }
 
@@ -629,40 +636,29 @@ impl Interpreter {
         &mut self,
         query: Vec<Term>,
     ) -> Result<(Vec<Term>, Vec<TraceStep>), RewriteError> {
-        let mut goals = query;
+        // all_terms: [resolved... | remaining_goals...]
+        // resolved_count で境界を管理
+        let mut all_terms = query;
+        let mut resolved_count = 0;
         let mut trace = Vec::new();
-        let mut resolved_goals = Vec::new();
 
-        while let Some(goal) = goals.first().cloned() {
-            goals.remove(0);
+        while resolved_count < all_terms.len() {
+            let goal_before = all_terms[resolved_count].clone();
+            let (matched_clause, body_len) = self.rewrite_step(&mut all_terms, resolved_count)?;
 
-            let (matched_clause, subst, new_goals) = self.rewrite_step(&goal)?;
-
-            let resolved = apply_substitution(&goal, &subst);
-            resolved_goals.push(resolved);
+            let new_goals: Vec<Term> = all_terms[resolved_count + 1..resolved_count + 1 + body_len]
+                .to_vec();
 
             trace.push(TraceStep {
-                selected_goal: goal,
-                matched_clause: matched_clause.clone(),
-                substitution: subst.clone(),
-                new_goals: new_goals.clone(),
+                selected_goal: goal_before,
+                matched_clause,
+                new_goals,
             });
 
-            // goalsに代入を適用して更新
-            goals = new_goals
-                .into_iter()
-                .chain(goals)
-                .map(|g| apply_substitution(&g, &subst))
-                .collect();
-
-            // resolved_goalsにも代入を適用（後続のステップで変数が具体化されるため）
-            resolved_goals = resolved_goals
-                .into_iter()
-                .map(|g| apply_substitution(&g, &subst))
-                .collect();
+            resolved_count += 1;
         }
 
-        Ok((resolved_goals, trace))
+        Ok((all_terms, trace))
     }
 
     pub fn execute(&mut self, query: Vec<Term>) -> Result<Vec<Term>, RewriteError> {
@@ -708,23 +704,25 @@ mod tests {
     fn test_unify_vars() {
         let x = var("X".to_string());
         let a = struc("a".to_string(), vec![]);
-        let result = unify(&x, &a).unwrap();
-        assert_eq!(result.get("X").unwrap(), &a);
+        let mut goals = vec![var("X".to_string())];
+        unify(x, a.clone(), &mut goals).unwrap();
+        assert_eq!(goals[0], a);
     }
 
     #[test]
     fn test_unify_structs() {
         let t1 = struc("f".to_string(), vec![var("X".to_string())]);
         let t2 = struc("f".to_string(), vec![struc("a".to_string(), vec![])]);
-        let result = unify(&t1, &t2).unwrap();
-        assert_eq!(result.get("X").unwrap(), &struc("a".to_string(), vec![]));
+        let mut goals = vec![var("X".to_string())];
+        unify(t1, t2, &mut goals).unwrap();
+        assert_eq!(goals[0], struc("a".to_string(), vec![]));
     }
 
     #[test]
     fn test_unify_fail() {
         let t1 = struc("f".to_string(), vec![]);
         let t2 = struc("g".to_string(), vec![]);
-        assert!(unify(&t1, &t2).is_err());
+        assert!(unify(t1, t2, &mut vec![]).is_err());
     }
 
     // ===== RangeVar unify tests =====
@@ -744,8 +742,9 @@ mod tests {
             }),
         );
         let n = number(5);
-        let result = unify(&rv, &n).unwrap();
-        assert_eq!(result.get("X").unwrap(), &n);
+        let mut goals = vec![var("X".to_string())];
+        unify(rv, n.clone(), &mut goals).unwrap();
+        assert_eq!(goals[0], n);
     }
 
     #[test]
@@ -763,45 +762,49 @@ mod tests {
             }),
         );
         let n = number(15);
-        assert!(unify(&rv, &n).is_err());
+        assert!(unify(rv, n, &mut vec![]).is_err());
     }
 
     #[test]
     fn test_rangevar_number_boundary_exclusive() {
         use crate::parse::{Bound, number, range_var};
-        let rv = range_var(
-            "X".to_string(),
-            Some(Bound {
-                value: 0,
-                inclusive: false,
-            }),
-            Some(Bound {
-                value: 10,
-                inclusive: false,
-            }),
-        );
-        assert!(unify(&rv, &number(0)).is_err());
-        assert!(unify(&rv, &number(10)).is_err());
-        assert!(unify(&rv, &number(1)).is_ok());
-        assert!(unify(&rv, &number(9)).is_ok());
+        let make_rv = || {
+            range_var(
+                "X".to_string(),
+                Some(Bound {
+                    value: 0,
+                    inclusive: false,
+                }),
+                Some(Bound {
+                    value: 10,
+                    inclusive: false,
+                }),
+            )
+        };
+        assert!(unify(make_rv(), number(0), &mut vec![]).is_err());
+        assert!(unify(make_rv(), number(10), &mut vec![]).is_err());
+        assert!(unify(make_rv(), number(1), &mut vec![]).is_ok());
+        assert!(unify(make_rv(), number(9), &mut vec![]).is_ok());
     }
 
     #[test]
     fn test_rangevar_number_boundary_inclusive() {
         use crate::parse::{Bound, number, range_var};
-        let rv = range_var(
-            "X".to_string(),
-            Some(Bound {
-                value: 0,
-                inclusive: true,
-            }),
-            Some(Bound {
-                value: 10,
-                inclusive: true,
-            }),
-        );
-        assert!(unify(&rv, &number(0)).is_ok());
-        assert!(unify(&rv, &number(10)).is_ok());
+        let make_rv = || {
+            range_var(
+                "X".to_string(),
+                Some(Bound {
+                    value: 0,
+                    inclusive: true,
+                }),
+                Some(Bound {
+                    value: 10,
+                    inclusive: true,
+                }),
+            )
+        };
+        assert!(unify(make_rv(), number(0), &mut vec![]).is_ok());
+        assert!(unify(make_rv(), number(10), &mut vec![]).is_ok());
     }
 
     #[test]
@@ -829,9 +832,9 @@ mod tests {
                 inclusive: false,
             }),
         );
-        let result = unify(&rv1, &rv2).unwrap();
-        let x_term = result.get("X").unwrap();
-        match x_term {
+        let mut goals = vec![var("X".to_string())];
+        unify(rv1, rv2, &mut goals).unwrap();
+        match &goals[0] {
             Term::RangeVar { min, max, .. } => {
                 assert_eq!(
                     *min,
@@ -877,7 +880,7 @@ mod tests {
                 inclusive: false,
             }),
         );
-        assert!(unify(&rv1, &rv2).is_err());
+        assert!(unify(rv1, rv2, &mut vec![]).is_err());
     }
 
     #[test]
@@ -905,7 +908,7 @@ mod tests {
                 inclusive: false,
             }),
         );
-        assert!(unify(&rv1, &rv2).is_err());
+        assert!(unify(rv1, rv2, &mut vec![]).is_err());
     }
 
     // ===== arithmetic tests =====
@@ -915,7 +918,7 @@ mod tests {
         use crate::parse::number;
         let expr = crate::parse::arith_expr(crate::parse::ArithOp::Add, number(3), number(5));
         let n = number(8);
-        assert!(unify(&expr, &n).is_ok());
+        assert!(unify(expr, n, &mut vec![]).is_ok());
     }
 
     #[test]
@@ -923,7 +926,7 @@ mod tests {
         use crate::parse::number;
         let expr = crate::parse::arith_expr(crate::parse::ArithOp::Sub, number(10), number(3));
         let n = number(7);
-        assert!(unify(&expr, &n).is_ok());
+        assert!(unify(expr, n, &mut vec![]).is_ok());
     }
 
     #[test]
@@ -931,7 +934,7 @@ mod tests {
         use crate::parse::number;
         let expr = crate::parse::arith_expr(crate::parse::ArithOp::Mul, number(4), number(5));
         let n = number(20);
-        assert!(unify(&expr, &n).is_ok());
+        assert!(unify(expr, n, &mut vec![]).is_ok());
     }
 
     #[test]
@@ -939,7 +942,7 @@ mod tests {
         use crate::parse::number;
         let expr = crate::parse::arith_expr(crate::parse::ArithOp::Div, number(10), number(3));
         let n = number(3); // truncated
-        assert!(unify(&expr, &n).is_ok());
+        assert!(unify(expr, n, &mut vec![]).is_ok());
     }
 
     #[test]
@@ -1372,4 +1375,3 @@ mod tests {
         );
     }
 }
-
