@@ -7,7 +7,7 @@ use derived_deref::{Deref, DerefMut};
 
 use crate::events::{GeneratePreviewRequest, PreviewGenerated};
 use manifold_rs::Mesh as RsMesh;
-use prolog::manifold_bridge::generate_mesh_from_term;
+use prolog::manifold_bridge::generate_mesh_from_terms;
 use prolog::parse::{database, query as parse_query};
 use prolog::term_rewrite::execute;
 
@@ -60,14 +60,11 @@ fn consume_requests(
                     let resolved = execute(&mut db, query_terms)
                         .map_err(|e| format!("Rewrite error: {}", e))?;
 
-                    // Take the first resolved term and convert to mesh
-                    let term = resolved
-                        .first()
-                        .ok_or_else(|| "No resolved terms".to_string())?;
+                    println!("Resolved terms: {:?}", resolved);
 
-                    println!("Resolved term: {:?}", term);
-                    let rs_mesh: RsMesh =
-                        generate_mesh_from_term(term).map_err(|e| format!("Mesh error: {}", e))?;
+                    // 全ての解決済みTermをunionしてMeshを生成
+                    let rs_mesh: RsMesh = generate_mesh_from_terms(&resolved)
+                        .map_err(|e| format!("Mesh error: {}", e))?;
 
                     Ok(rs_mesh_to_bevy_mesh(&rs_mesh))
                 })();

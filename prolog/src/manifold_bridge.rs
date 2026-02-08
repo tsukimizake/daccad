@@ -327,10 +327,28 @@ impl ManifoldExpr {
     }
 }
 
-/// Term から直接 Mesh を生成する便利関数
-pub fn generate_mesh_from_term(term: &Term) -> Result<Mesh, ConversionError> {
-    let expr = ManifoldExpr::from_term(term)?;
-    Ok(expr.to_mesh())
+/// 複数のTermからMeshを生成する（全てをunionする）
+pub fn generate_mesh_from_terms(terms: &[Term]) -> Result<Mesh, ConversionError> {
+    if terms.is_empty() {
+        return Err(ConversionError::UnknownPrimitive(
+            "empty term list".to_string(),
+        ));
+    }
+
+    let exprs: Vec<ManifoldExpr> = terms
+        .iter()
+        .map(ManifoldExpr::from_term)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // 全てのManifoldExprをunionで結合
+    let manifold = exprs
+        .into_iter()
+        .map(|e| e.evaluate())
+        .reduce(|acc, m| acc.union(&m))
+        .unwrap(); // exprsが空でないことは上でチェック済み
+
+    let with_normals = manifold.calculate_normals(0, 30.0);
+    Ok(with_normals.to_mesh())
 }
 
 #[cfg(test)]
