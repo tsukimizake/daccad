@@ -443,8 +443,28 @@ fn simple_term(input: &str) -> PResult<'_, Term> {
     add_expr(input)
 }
 
+/// Pipe operator: `a |> f(b, c)` becomes `f(a, b, c)`
+fn pipe_expr(input: &str) -> PResult<'_, Term> {
+    let (input, first) = simple_term(input)?;
+    let (input, rest) = many0(preceded(ws(tag("|>")), simple_term)).parse(input)?;
+
+    let result = rest.into_iter().fold(first, |acc, rhs| {
+        // rhs should be a Struct; prepend acc as first argument
+        match rhs {
+            Term::Struct { functor, args } => {
+                let mut new_args = vec![acc];
+                new_args.extend(args);
+                struc(functor, new_args)
+            }
+            // If rhs is not a struct, wrap it as a unary call
+            other => struc("apply".to_string(), vec![other, acc]),
+        }
+    });
+    Ok((input, result))
+}
+
 pub(super) fn term(input: &str) -> PResult<'_, Term> {
-    simple_term(input)
+    pipe_expr(input)
 }
 
 fn goals(input: &str) -> PResult<'_, Vec<Term>> {
@@ -728,6 +748,69 @@ mod tests {
                 assert_eq!(body.len(), 1);
             }
             _ => panic!("Expected Rule"),
+        }
+    }
+
+    #[test]
+    fn parse_pipe_operator() {
+        // cube(1,1,1) |> translate(10,10,10) should become translate(cube(1,1,1), 10,10,10)
+        let src = "cube(1,1,1) |> translate(10,10,10).";
+        let (_, clause) = clause_parser(src).unwrap();
+
+        match clause {
+            Clause::Fact(term) => match &term {
+                Term::Struct { functor, args } => {
+                    assert_eq!(functor, "translate");
+                    assert_eq!(args.len(), 4);
+                    // First arg should be cube(1,1,1)
+                    match &args[0] {
+                        Term::Struct { functor, args } => {
+                            assert_eq!(functor, "cube");
+                            assert_eq!(args.len(), 3);
+                        }
+                        _ => panic!("Expected Struct for first arg"),
+                    }
+                    // Remaining args should be 10, 10, 10
+                    assert_eq!(args[1], number(10));
+                    assert_eq!(args[2], number(10));
+                    assert_eq!(args[3], number(10));
+                }
+                _ => panic!("Expected Struct"),
+            },
+            _ => panic!("Expected Fact"),
+        }
+    }
+
+    #[test]
+    fn parse_pipe_operator_chain() {
+        // a |> b |> c should become c(b(a))
+        let src = "cube(1,1,1) |> scale(2) |> translate(5,5,5).";
+        let (_, clause) = clause_parser(src).unwrap();
+
+        match clause {
+            Clause::Fact(term) => match &term {
+                Term::Struct { functor, args } => {
+                    assert_eq!(functor, "translate");
+                    assert_eq!(args.len(), 4);
+                    // First arg should be scale(cube(1,1,1), 2)
+                    match &args[0] {
+                        Term::Struct { functor, args } => {
+                            assert_eq!(functor, "scale");
+                            assert_eq!(args.len(), 2);
+                            // First arg of scale should be cube(1,1,1)
+                            match &args[0] {
+                                Term::Struct { functor, .. } => {
+                                    assert_eq!(functor, "cube");
+                                }
+                                _ => panic!("Expected cube"),
+                            }
+                        }
+                        _ => panic!("Expected scale"),
+                    }
+                }
+                _ => panic!("Expected Struct"),
+            },
+            _ => panic!("Expected Fact"),
         }
     }
 }
