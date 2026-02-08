@@ -1,10 +1,10 @@
 
 ## high priority:
 
-- toMeshしてexport
-
-## low priority:
-
 - できれば画面ドラッグでrotate
 - エラー行表示
 - constraint solver
+
+## low priority:
+
+- lsp

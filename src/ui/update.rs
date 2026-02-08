@@ -1,16 +1,18 @@
 use crate::events::{GeneratePreviewRequest, PreviewGenerated, PrologOutput};
 use crate::ui::{
     CurrentFilePath, EditorText, ErrorMessage, NextRequestId, PreviewTarget, PreviewTargets,
-    PrologFileContents,
+    PrologFileContents, ThreeMfFileContents,
 };
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::RenderTarget;
 use bevy::camera::primitives::MeshAabb;
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
+use bevy::mesh::{Indices, VertexAttributeValues};
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use bevy_egui::{EguiContexts, egui};
 use bevy_file_dialog::prelude::*;
+use std::io::Cursor;
 
 // egui UI: add previews dynamically and render all existing previews
 pub(super) fn egui_ui(
@@ -22,6 +24,7 @@ pub(super) fn egui_ui(
     mut ev_generate: MessageWriter<GeneratePreviewRequest>,
     error_message: Res<ErrorMessage>,
     current_file_path: Res<CurrentFilePath>,
+    meshes: Res<Assets<Mesh>>,
 ) {
     // Toolbar: add a new preview or reload existing
     if let Ok(ctx) = contexts.ctx_mut() {
@@ -84,6 +87,23 @@ pub(super) fn egui_ui(
                             query: t.query.clone(),
                             preview_index: Some(i),
                         });
+                    }
+                }
+
+                ui.separator();
+
+                // Export 3MF button - exports the first preview's mesh
+                if ui.button("Export 3MF").clicked() {
+                    if let Some(target) = preview_targets.first() {
+                        if let Some(mesh) = meshes.get(&target.mesh_handle) {
+                            if let Some(threemf_data) = bevy_mesh_to_threemf(mesh) {
+                                commands
+                                    .dialog()
+                                    .add_filter("3MF", &["3mf"])
+                                    .set_file_name("export.3mf")
+                                    .save_file::<ThreeMfFileContents>(threemf_data);
+                            }
+                        }
                     }
                 }
             });
@@ -442,3 +462,61 @@ pub(super) fn file_saved(
     }
 }
 
+pub(super) fn threemf_saved(
+    mut ev_saved: MessageReader<DialogFileSaved<ThreeMfFileContents>>,
+) {
+    for ev in ev_saved.read() {
+        if ev.result.is_ok() {
+            bevy::log::info!("3MF file saved to: {:?}", ev.path);
+        } else {
+            bevy::log::error!("Failed to save 3MF file: {:?}", ev.result);
+        }
+    }
+}
+
+/// Convert a Bevy Mesh to 3MF file bytes
+fn bevy_mesh_to_threemf(mesh: &Mesh) -> Option<Vec<u8>> {
+    // Get positions
+    let positions = match mesh.attribute(Mesh::ATTRIBUTE_POSITION)? {
+        VertexAttributeValues::Float32x3(pos) => pos,
+        _ => return None,
+    };
+
+    // Get indices
+    let indices = match mesh.indices()? {
+        Indices::U32(idx) => idx.clone(),
+        Indices::U16(idx) => idx.iter().map(|&i| i as u32).collect(),
+    };
+
+    // Convert to threemf types
+    let vertices: Vec<threemf::model::Vertex> = positions
+        .iter()
+        .map(|[x, y, z]| threemf::model::Vertex {
+            x: *x as f64,
+            y: *y as f64,
+            z: *z as f64,
+        })
+        .collect();
+
+    let triangles: Vec<threemf::model::Triangle> = indices
+        .chunks(3)
+        .map(|tri| threemf::model::Triangle {
+            v1: tri[0] as usize,
+            v2: tri[1] as usize,
+            v3: tri[2] as usize,
+        })
+        .collect();
+
+    let threemf_mesh = threemf::model::Mesh {
+        vertices: threemf::model::Vertices { vertex: vertices },
+        triangles: threemf::model::Triangles { triangle: triangles },
+    };
+
+    // Write to buffer
+    let mut buffer = Cursor::new(Vec::new());
+    if threemf::write(&mut buffer, threemf_mesh).is_err() {
+        return None;
+    }
+
+    Some(buffer.into_inner())
+}

@@ -24,4 +24,5 @@ bevy-async-ecs = "0.10"
 bevy_file_dialog = "0.9.1"
 derived-deref = "2.1.0"
 prolog = { path = "prolog" }
+threemf = "0.7"
 
