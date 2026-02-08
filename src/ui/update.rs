@@ -73,6 +73,8 @@ pub(super) fn egui_ui(
 
                 // Right half: show and edit previews
                 let right = &mut columns[1];
+                // Collect update requests to send after iterating
+                let mut updates_to_send: Vec<(usize, String)> = Vec::new();
                 egui::ScrollArea::vertical()
                     .auto_shrink([false; 2])
                     .show(right, |ui| {
@@ -83,12 +85,25 @@ pub(super) fn egui_ui(
                         } else {
                             for (i, t) in preview_targets.iter_mut().enumerate() {
                                 if let Some((tex_id, size)) = preview_images.get(i) {
-                                    preview_target_ui(ui, i, t, *tex_id, *size);
+                                    if preview_target_ui(ui, i, t, *tex_id, *size) {
+                                        updates_to_send.push((i, t.query.clone()));
+                                    }
                                 }
                                 ui.add_space(6.0);
                             }
                         }
                     });
+                // Send update requests
+                for (idx, query) in updates_to_send {
+                    let id = **next_id;
+                    **next_id += 1;
+                    ev_generate.write(GeneratePreviewRequest {
+                        request_id: id,
+                        database: (**editor_text).clone(),
+                        query,
+                        preview_index: Some(idx),
+                    });
+                }
             });
         });
     }
@@ -194,13 +209,15 @@ pub(super) fn on_preview_generated(
 
 // Pending previews and polling system are no longer needed with bevy-async-ecs
 
+/// Returns true if the Update button was clicked
 fn preview_target_ui(
     ui: &mut egui::Ui,
     index: usize,
     target: &mut PreviewTarget,
     tex_id: egui::TextureId,
     size: UVec2,
-) {
+) -> bool {
+    let mut update_clicked = false;
     egui::Frame::default()
         .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(120)))
         .corner_radius(egui::CornerRadius::same(6))
@@ -211,6 +228,9 @@ fn preview_target_ui(
             ui.horizontal(|ui| {
                 ui.label("?-");
                 ui.text_edit_singleline(&mut target.query);
+                if ui.button("Update").clicked() {
+                    update_clicked = true;
+                }
             });
             ui.add_space(4.0);
             // Rotation controls
@@ -228,6 +248,7 @@ fn preview_target_ui(
             let h = w * aspect;
             ui.add(egui::Image::from_texture((tex_id, egui::vec2(w, h))));
         });
+    update_clicked
 }
 
 // Keep spawned preview entity rotations in sync with UI values
