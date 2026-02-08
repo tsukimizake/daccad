@@ -4,6 +4,7 @@ use bevy::prelude::*;
 #[derive(Message, Clone)]
 pub struct GeneratePreviewRequest {
     pub request_id: u64,
+    pub database: String,
     pub query: String,
 }
 

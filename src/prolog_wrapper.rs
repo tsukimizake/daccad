@@ -7,7 +7,9 @@ use derived_deref::{Deref, DerefMut};
 
 use crate::events::{GeneratePreviewRequest, PreviewGenerated};
 use manifold_rs::Mesh as RsMesh;
-use prolog::mock::mock_generate_mesh;
+use prolog::manifold_bridge::generate_mesh_from_term;
+use prolog::parse::{database, query as parse_query};
+use prolog::term_rewrite::execute;
 
 #[derive(Resource, Clone, Deref, DerefMut)]
 struct AsyncWorldRes(AsyncWorld);
@@ -37,24 +39,55 @@ fn consume_requests(
     for req in ev_requests.read() {
         let async_world = async_world.clone();
         let request_id = req.request_id;
+        let db_src = req.database.clone();
         let query = req.query.clone();
         AsyncComputeTaskPool::get()
             .spawn(async move {
-                // Generate manifold-rs Mesh and convert to Bevy Mesh within this scope
-                let mesh = {
-                    let rs_mesh: RsMesh = mock_generate_mesh();
-                    let mesh = rs_mesh_to_bevy_mesh(&rs_mesh);
-                    mesh
-                };
-                async_world
-                    .apply(move |world: &mut World| {
-                        world.write_message(PreviewGenerated {
-                            request_id,
-                            query,
-                            mesh,
-                        });
-                    })
-                    .await;
+                // Parse query and execute term rewrite, then generate mesh
+                let result = (|| -> Result<Mesh, String> {
+                    // Parse the query string
+                    let (_, query_terms) =
+                        parse_query(&query).map_err(|e| format!("Query parse error: {:?}", e))?;
+
+                    // Parse database
+                    let mut db = database(&db_src)
+                        .map_err(|e| format!("Database parse error: {:?}", e))?;
+
+                    println!("Query terms: {:?}", query_terms);
+                    println!("Database clauses: {:#?}", db);
+
+                    // Execute term rewrite
+                    let resolved = execute(&mut db, query_terms)
+                        .map_err(|e| format!("Rewrite error: {}", e))?;
+
+                    // Take the first resolved term and convert to mesh
+                    let term = resolved
+                        .first()
+                        .ok_or_else(|| "No resolved terms".to_string())?;
+
+                    println!("Resolved term: {:?}", term);
+                    let rs_mesh: RsMesh =
+                        generate_mesh_from_term(term).map_err(|e| format!("Mesh error: {}", e))?;
+
+                    Ok(rs_mesh_to_bevy_mesh(&rs_mesh))
+                })();
+
+                match result {
+                    Ok(mesh) => {
+                        async_world
+                            .apply(move |world: &mut World| {
+                                world.write_message(PreviewGenerated {
+                                    request_id,
+                                    query,
+                                    mesh,
+                                });
+                            })
+                            .await;
+                    }
+                    Err(e) => {
+                        bevy::log::error!("Failed to generate mesh: {}", e);
+                    }
+                }
             })
             .detach();
     }

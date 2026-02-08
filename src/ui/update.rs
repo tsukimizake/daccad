@@ -24,6 +24,7 @@ pub(super) fn egui_ui(
                 let query_text = "main.".to_string();
                 ev_generate.write(GeneratePreviewRequest {
                     request_id: id,
+                    database: (**editor_text).clone(),
                     query: query_text,
                 });
             }

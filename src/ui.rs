@@ -18,7 +18,7 @@ impl Plugin for UiPlugin {
             .add_systems(EguiPrimaryContextPass, egui_ui)
             .add_systems(Update, (on_preview_generated, update_preview_transforms))
             .insert_resource(PreviewTargets::default())
-            .insert_resource(EditorText("main :- cube(10).".to_string()))
+            .insert_resource(EditorText("main :- cube(10, 20, 30).".to_string()))
             .insert_resource(NextRequestId::default());
     }
 }
