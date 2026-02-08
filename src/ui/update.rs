@@ -1,25 +1,63 @@
 use crate::events::{GeneratePreviewRequest, PreviewGenerated, PrologOutput};
-use crate::ui::{EditorText, ErrorMessage, NextRequestId, PreviewTarget, PreviewTargets};
+use crate::ui::{CurrentFilePath, EditorText, ErrorMessage, NextRequestId, PreviewTarget, PreviewTargets, PrologFileContents};
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::RenderTarget;
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use bevy_egui::{EguiContexts, egui};
+use bevy_file_dialog::prelude::*;
 
 // egui UI: add previews dynamically and render all existing previews
 pub(super) fn egui_ui(
+    mut commands: Commands,
     mut contexts: EguiContexts,
     mut preview_targets: ResMut<PreviewTargets>,
     mut editor_text: ResMut<EditorText>,
     mut next_id: ResMut<NextRequestId>,
     mut ev_generate: MessageWriter<GeneratePreviewRequest>,
     error_message: Res<ErrorMessage>,
+    current_file_path: Res<CurrentFilePath>,
 ) {
     // Toolbar: add a new preview or reload existing
     if let Ok(ctx) = contexts.ctx_mut() {
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             ui.horizontal(|ui| {
+                // File operations
+                if ui.button("Open").clicked() {
+                    commands
+                        .dialog()
+                        .add_filter("Prolog", &["pl", "pro"])
+                        .add_filter("All", &["*"])
+                        .load_file::<PrologFileContents>();
+                }
+                if ui.button("Save").clicked() {
+                    if let Some(ref path) = **current_file_path {
+                        let _ = std::fs::write(path, &**editor_text);
+                    } else {
+                        commands
+                            .dialog()
+                            .add_filter("Prolog", &["pl", "pro"])
+                            .set_file_name("untitled.pl")
+                            .save_file::<PrologFileContents>(editor_text.as_bytes().to_vec());
+                    }
+                }
+                if ui.button("Save As").clicked() {
+                    let file_name = current_file_path
+                        .as_ref()
+                        .as_ref()
+                        .and_then(|p| p.file_name())
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("untitled.pl");
+                    commands
+                        .dialog()
+                        .add_filter("Prolog", &["pl", "pro"])
+                        .set_file_name(file_name)
+                        .save_file::<PrologFileContents>(editor_text.as_bytes().to_vec());
+                }
+                
+                ui.separator();
+                
                 if ui.button("Add Preview").clicked() {
                     let id = **next_id;
                     **next_id += 1;
@@ -298,6 +336,30 @@ pub(super) fn handle_prolog_output(
             bevy::log::info!("Prolog: {}", output.message);
             // Clear error message on successful execution
             **error_message = String::new();
+        }
+    }
+}
+
+pub(super) fn file_loaded(
+    mut ev_loaded: MessageReader<DialogFileLoaded<PrologFileContents>>,
+    mut editor_text: ResMut<EditorText>,
+    mut current_file_path: ResMut<CurrentFilePath>,
+) {
+    for ev in ev_loaded.read() {
+        if let Ok(content) = std::str::from_utf8(&ev.contents) {
+            **editor_text = content.to_string();
+            **current_file_path = Some(ev.path.clone());
+        }
+    }
+}
+
+pub(super) fn file_saved(
+    mut ev_saved: MessageReader<DialogFileSaved<PrologFileContents>>,
+    mut current_file_path: ResMut<CurrentFilePath>,
+) {
+    for ev in ev_saved.read() {
+        if ev.result.is_ok() {
+            **current_file_path = Some(ev.path.clone());
         }
     }
 }

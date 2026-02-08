@@ -21,6 +21,7 @@ manifold-rs = "0.6.4"
 bevy = "0.18"
 bevy_egui = "0.39"
 bevy-async-ecs = "0.10"
+bevy_file_dialog = "0.9.1"
 derived-deref = "2.1.0"
 prolog = { path = "prolog" }
 
