@@ -348,12 +348,14 @@ fn preview_target_ui(
                 }
             });
             ui.add_space(4.0);
-            // Rotation controls (camera orbit)
+            // Camera controls (orbit and zoom)
             ui.horizontal(|ui| {
                 ui.label("Rotate X:");
                 ui.add(egui::DragValue::new(&mut target.rotate_x).speed(0.01));
                 ui.label("Rotate Y:");
                 ui.add(egui::DragValue::new(&mut target.rotate_y).speed(0.01));
+                ui.label("Zoom:");
+                ui.add(egui::DragValue::new(&mut target.camera_distance).speed(0.1).range(1.0..=100.0));
             });
             ui.add_space(6.0);
             // Show the offscreen render under controls
