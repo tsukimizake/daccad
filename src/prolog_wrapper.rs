@@ -41,6 +41,7 @@ fn consume_requests(
         let request_id = req.request_id;
         let db_src = req.database.clone();
         let query = req.query.clone();
+        let preview_index = req.preview_index;
         AsyncComputeTaskPool::get()
             .spawn(async move {
                 // Parse query and execute term rewrite, then generate mesh
@@ -77,6 +78,7 @@ fn consume_requests(
                                     request_id,
                                     query,
                                     mesh,
+                                    preview_index,
                                 });
                             })
                             .await;

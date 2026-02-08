@@ -15,19 +15,35 @@ pub(super) fn egui_ui(
     mut next_id: ResMut<NextRequestId>,
     mut ev_generate: MessageWriter<GeneratePreviewRequest>,
 ) {
-    // Toolbar: add a new preview
+    // Toolbar: add a new preview or reload existing
     if let Ok(ctx) = contexts.ctx_mut() {
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
-            if ui.button("Add Preview").clicked() {
-                let id = **next_id;
-                **next_id += 1;
-                let query_text = "main.".to_string();
-                ev_generate.write(GeneratePreviewRequest {
-                    request_id: id,
-                    database: (**editor_text).clone(),
-                    query: query_text,
-                });
-            }
+            ui.horizontal(|ui| {
+                if ui.button("Add Preview").clicked() {
+                    let id = **next_id;
+                    **next_id += 1;
+                    let query_text = "main.".to_string();
+                    ev_generate.write(GeneratePreviewRequest {
+                        request_id: id,
+                        database: (**editor_text).clone(),
+                        query: query_text,
+                        preview_index: None,
+                    });
+                }
+                if ui.button("Reload").clicked() {
+                    // Re-render all previews with the current editor text
+                    for (i, t) in preview_targets.iter().enumerate() {
+                        let id = **next_id;
+                        **next_id += 1;
+                        ev_generate.write(GeneratePreviewRequest {
+                            request_id: id,
+                            database: (**editor_text).clone(),
+                            query: t.query.clone(),
+                            preview_index: Some(i),
+                        });
+                    }
+                }
+            });
         });
     }
 
@@ -88,7 +104,18 @@ pub(super) fn on_preview_generated(
     mut preview_targets: ResMut<PreviewTargets>,
 ) {
     for ev in ev_generated.read() {
-        // Store generated mesh
+        // Check if this is an update to an existing preview
+        if let Some(idx) = ev.preview_index {
+            if let Some(target) = preview_targets.get_mut(idx) {
+                // Update the existing mesh asset
+                if let Some(mesh_asset) = meshes.get_mut(&target.mesh_handle) {
+                    *mesh_asset = ev.mesh.clone();
+                }
+                continue;
+            }
+        }
+
+        // New preview: spawn entities
         let mesh_handle = meshes.add(ev.mesh.clone());
 
         // Choose a simple material
