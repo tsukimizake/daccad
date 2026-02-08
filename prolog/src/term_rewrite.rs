@@ -186,6 +186,21 @@ fn intersect_max(a: Option<Bound>, b: Option<Bound>) -> Option<Bound> {
 }
 
 /// 範囲が空でないかチェック（少なくとも1つの整数値が含まれるか）
+fn range_is_valid(min: Option<Bound>, max: Option<Bound>) -> bool {
+    match (min, max) {
+        (None, _) | (_, None) => true,
+        (Some(min_b), Some(max_b)) => {
+            if min_b.value > max_b.value {
+                false
+            } else if min_b.value < max_b.value {
+                true
+            } else {
+                // min_b.value == max_b.value: 両方がinclusiveでないと空
+                min_b.inclusive && max_b.inclusive
+            }
+        }
+    }
+}
 
 /// 値が範囲内にあるかチェック
 fn value_in_range(value: i64, min: Option<Bound>, max: Option<Bound>) -> bool {
@@ -251,6 +266,14 @@ pub fn unify(term1: Term, term2: Term, goals: &mut Vec<Term>) -> Result<(), Unif
             ) => {
                 let new_min = intersect_min(*min1, *min2);
                 let new_max = intersect_max(*max1, *max2);
+
+                if !range_is_valid(new_min, new_max) {
+                    return Err(UnifyError {
+                        message: format!("range intersection is empty"),
+                        term1: t1,
+                        term2: t2,
+                    });
+                }
 
                 let intersected = range_var(n1.clone(), new_min, new_max);
                 if n1 != "_" {
