@@ -1,5 +1,4 @@
 use bevy::prelude::*;
-use std::path::PathBuf;
 
 // UI -> Prolog: request to generate a preview mesh
 #[derive(Message, Clone)]
