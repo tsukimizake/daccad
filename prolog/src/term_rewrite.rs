@@ -1,7 +1,16 @@
 use std::fmt;
 
 use crate::constraint::{SolveResult, solve_arithmetic};
+use crate::manifold_bridge::is_builtin_functor;
 use crate::parse::{ArithOp, Bound, Clause, Term, list, number, range_var};
+
+/// Check if a term is a built-in primitive that should not be rewritten
+fn is_builtin_primitive(term: &Term) -> bool {
+    match term {
+        Term::Struct { functor, .. } => is_builtin_functor(functor),
+        _ => false,
+    }
+}
 
 /// 単一化エラー
 #[derive(Debug, Clone)]
@@ -617,7 +626,18 @@ pub fn execute(db: &mut [Clause], query: Vec<Term>) -> Result<Vec<Term>, Rewrite
     let mut clause_counter = 0;
 
     while resolved_count < all_terms.len() {
-        rewrite_step(db, &mut clause_counter, &mut all_terms, resolved_count)?;
+        // Try to rewrite the goal; if it fails and it's a builtin primitive, skip it
+        match rewrite_step(db, &mut clause_counter, &mut all_terms, resolved_count) {
+            Ok(_) => {}
+            Err(e) => {
+                // If no clause matches but it's a builtin primitive, treat as resolved
+                if is_builtin_primitive(&all_terms[resolved_count]) {
+                    // Builtin primitives are terminal goals - no further rewriting needed
+                } else {
+                    return Err(e);
+                }
+            }
+        }
         resolved_count += 1;
     }
 
@@ -1312,4 +1332,3 @@ mod tests {
         );
     }
 }
-

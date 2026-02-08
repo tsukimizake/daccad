@@ -6,8 +6,35 @@
 use crate::parse::Term;
 use manifold_rs::{Manifold, Mesh};
 use std::fmt;
+use std::str::FromStr;
+use strum_macros::{EnumIter, EnumString, IntoStaticStr};
 
 const DEFAULT_SEGMENTS: u32 = 32;
+
+/// ビルトインプリミティブのfunctor名を表すenum
+/// strumによりfunctor文字列との相互変換が可能
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString, IntoStaticStr, EnumIter)]
+#[strum(serialize_all = "lowercase")]
+pub enum BuiltinFunctor {
+    // プリミティブ
+    Cube,
+    Sphere,
+    Cylinder,
+    Tetrahedron,
+    // CSG演算
+    Union,
+    Difference,
+    Intersection,
+    // 変形
+    Translate,
+    Scale,
+    Rotate,
+}
+
+/// functor名がビルトインプリミティブかどうかを判定
+pub fn is_builtin_functor(functor: &str) -> bool {
+    BuiltinFunctor::from_str(functor).is_ok()
+}
 
 /// 変換エラー
 #[derive(Debug, Clone)]
@@ -188,82 +215,82 @@ impl ManifoldExpr {
     fn from_struct(functor: &str, args: &[Term]) -> Result<Self, ConversionError> {
         let a = Args::new(functor, args);
 
-        match functor {
+        let builtin = BuiltinFunctor::from_str(functor)
+            .map_err(|_| ConversionError::UnknownPrimitive(functor.to_string()))?;
+
+        match builtin {
             // プリミティブ
-            "cube" if a.len() == 3 => {
+            BuiltinFunctor::Cube if a.len() == 3 => {
                 let (x, y, z) = (a.f64(0)?, a.f64(1)?, a.f64(2)?);
                 Ok(ManifoldExpr::Cube { x, y, z })
             }
-            "cube" => Err(a.arity_error("3")),
+            BuiltinFunctor::Cube => Err(a.arity_error("3")),
 
-            "sphere" if a.len() == 1 => Ok(ManifoldExpr::Sphere {
+            BuiltinFunctor::Sphere if a.len() == 1 => Ok(ManifoldExpr::Sphere {
                 radius: a.f64(0)?,
                 segments: DEFAULT_SEGMENTS,
             }),
-            "sphere" if a.len() == 2 => Ok(ManifoldExpr::Sphere {
+            BuiltinFunctor::Sphere if a.len() == 2 => Ok(ManifoldExpr::Sphere {
                 radius: a.f64(0)?,
                 segments: a.u32(1)?,
             }),
-            "sphere" => Err(a.arity_error("1 or 2")),
+            BuiltinFunctor::Sphere => Err(a.arity_error("1 or 2")),
 
-            "cylinder" if a.len() == 2 => Ok(ManifoldExpr::Cylinder {
+            BuiltinFunctor::Cylinder if a.len() == 2 => Ok(ManifoldExpr::Cylinder {
                 radius: a.f64(0)?,
                 height: a.f64(1)?,
                 segments: DEFAULT_SEGMENTS,
             }),
-            "cylinder" if a.len() == 3 => Ok(ManifoldExpr::Cylinder {
+            BuiltinFunctor::Cylinder if a.len() == 3 => Ok(ManifoldExpr::Cylinder {
                 radius: a.f64(0)?,
                 height: a.f64(1)?,
                 segments: a.u32(2)?,
             }),
-            "cylinder" => Err(a.arity_error("2 or 3")),
+            BuiltinFunctor::Cylinder => Err(a.arity_error("2 or 3")),
 
-            "tetrahedron" if a.len() == 0 => Ok(ManifoldExpr::Tetrahedron),
-            "tetrahedron" => Err(a.arity_error("0")),
+            BuiltinFunctor::Tetrahedron if a.len() == 0 => Ok(ManifoldExpr::Tetrahedron),
+            BuiltinFunctor::Tetrahedron => Err(a.arity_error("0")),
 
             // CSG演算
-            "union" if a.len() == 2 => {
+            BuiltinFunctor::Union if a.len() == 2 => {
                 Ok(ManifoldExpr::Union(Box::new(a.term(0)?), Box::new(a.term(1)?)))
             }
-            "union" => Err(a.arity_error("2")),
+            BuiltinFunctor::Union => Err(a.arity_error("2")),
 
-            "difference" if a.len() == 2 => {
+            BuiltinFunctor::Difference if a.len() == 2 => {
                 Ok(ManifoldExpr::Difference(Box::new(a.term(0)?), Box::new(a.term(1)?)))
             }
-            "difference" => Err(a.arity_error("2")),
+            BuiltinFunctor::Difference => Err(a.arity_error("2")),
 
-            "intersection" if a.len() == 2 => {
+            BuiltinFunctor::Intersection if a.len() == 2 => {
                 Ok(ManifoldExpr::Intersection(Box::new(a.term(0)?), Box::new(a.term(1)?)))
             }
-            "intersection" => Err(a.arity_error("2")),
+            BuiltinFunctor::Intersection => Err(a.arity_error("2")),
 
             // 変形
-            "translate" if a.len() == 4 => Ok(ManifoldExpr::Translate {
+            BuiltinFunctor::Translate if a.len() == 4 => Ok(ManifoldExpr::Translate {
                 expr: Box::new(a.term(0)?),
                 x: a.f64(1)?,
                 y: a.f64(2)?,
                 z: a.f64(3)?,
             }),
-            "translate" => Err(a.arity_error("4")),
+            BuiltinFunctor::Translate => Err(a.arity_error("4")),
 
-            "scale" if a.len() == 4 => Ok(ManifoldExpr::Scale {
+            BuiltinFunctor::Scale if a.len() == 4 => Ok(ManifoldExpr::Scale {
                 expr: Box::new(a.term(0)?),
                 x: a.f64(1)?,
                 y: a.f64(2)?,
                 z: a.f64(3)?,
             }),
-            "scale" => Err(a.arity_error("4")),
+            BuiltinFunctor::Scale => Err(a.arity_error("4")),
 
-            "rotate" if a.len() == 4 => Ok(ManifoldExpr::Rotate {
+            BuiltinFunctor::Rotate if a.len() == 4 => Ok(ManifoldExpr::Rotate {
                 expr: Box::new(a.term(0)?),
                 x: a.f64(1)?,
                 y: a.f64(2)?,
                 z: a.f64(3)?,
             }),
-            "rotate" => Err(a.arity_error("4")),
-
-            // 未知のfunctor
-            _ => Err(ConversionError::UnknownPrimitive(functor.to_string())),
+            BuiltinFunctor::Rotate => Err(a.arity_error("4")),
         }
     }
 
