@@ -45,6 +45,7 @@ struct PreviewTarget {
     pub rt_size: UVec2,
     pub rotate_x: f64,
     pub rotate_y: f64,
+    pub rotate_z: f64,
     pub query: String, // prolog query string to generate the preview. currently unused.
 }
 

@@ -2,7 +2,7 @@
 ## high priority:
 
 - toMeshしてexport
-- previewのカメラをデフォルトでもっと引く、調整可能に
+- previewのカメラを調整可能に
 - rotate zも
 - rotateの原点をオブジェクトの中心に
 

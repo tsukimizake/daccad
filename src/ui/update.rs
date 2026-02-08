@@ -273,6 +273,7 @@ pub(super) fn on_preview_generated(
             rt_size,
             rotate_x: 0.0,
             rotate_y: 0.0,
+            rotate_z: 0.0,
             query: ev.query.clone(),
         });
     }
@@ -310,6 +311,8 @@ fn preview_target_ui(
                 ui.add(egui::DragValue::new(&mut target.rotate_x).speed(0.01));
                 ui.label("Rotate Y:");
                 ui.add(egui::DragValue::new(&mut target.rotate_y).speed(0.01));
+                ui.label("Rotate Z:");
+                ui.add(egui::DragValue::new(&mut target.rotate_z).speed(0.01));
             });
             ui.add_space(6.0);
             // Show the offscreen render under controls
@@ -337,7 +340,8 @@ pub(super) fn update_preview_transforms(
         {
             let rx = t.rotate_x as f32;
             let ry = t.rotate_y as f32;
-            transform.rotation = Quat::from_euler(EulerRot::XYZ, rx, ry, 0.0);
+            let rz = t.rotate_z as f32;
+            transform.rotation = Quat::from_euler(EulerRot::XYZ, rx, ry, rz);
         }
     }
 }
