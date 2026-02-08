@@ -569,71 +569,59 @@ fn rename_term_vars(term: &mut Term, suffix: &str) {
 }
 
 /// Term rewrite方式のインタプリタ
-pub struct Interpreter {
-    db: Vec<Clause>,
-    clause_counter: usize,
+/// all_terms[goal_idx] を clause とマッチし、body を挿入する
+/// unify が成功すると all_terms 全体の変数がインプレースで書き換えられる
+/// 返り値: body の長さ
+fn rewrite_step(
+    db: &mut [Clause],
+    clause_counter: &mut usize,
+    all_terms: &mut Vec<Term>,
+    goal_idx: usize,
+) -> Result<usize, RewriteError> {
+    let goal = all_terms[goal_idx].clone();
+
+    for clause in db {
+        *clause_counter += 1;
+        let mut renamed = clause.clone();
+        rename_clause_vars(&mut renamed, &clause_counter.to_string());
+
+        let (head, body) = match &renamed {
+            Clause::Fact(term) => (term.clone(), vec![]),
+            Clause::Rule { head, body } => (head.clone(), body.clone()),
+        };
+
+        let body_len = body.len();
+
+        // body を goal_idx+1 の位置に挿入した試行用 Vec を作成
+        let mut trial = all_terms.clone();
+        for (i, b) in body.into_iter().enumerate() {
+            trial.insert(goal_idx + 1 + i, b);
+        }
+
+        if unify(goal.clone(), head, &mut trial).is_ok() {
+            *all_terms = trial;
+            return Ok(body_len);
+        }
+    }
+    Err(RewriteError {
+        message: "no clause matches goal".to_string(),
+        goal,
+    })
 }
 
-impl Interpreter {
-    pub fn new(db: Vec<Clause>) -> Self {
-        Self {
-            db,
-            clause_counter: 0,
-        }
+pub fn execute(db: &mut [Clause], query: Vec<Term>) -> Result<Vec<Term>, RewriteError> {
+    // all_terms: [resolved... | remaining_goals...]
+    // resolved_count で境界を管理
+    let mut all_terms = query;
+    let mut resolved_count = 0;
+    let mut clause_counter = 0;
+
+    while resolved_count < all_terms.len() {
+        rewrite_step(db, &mut clause_counter, &mut all_terms, resolved_count)?;
+        resolved_count += 1;
     }
 
-    /// all_terms[goal_idx] を clause とマッチし、body を挿入する
-    /// unify が成功すると all_terms 全体の変数がインプレースで書き換えられる
-    /// 返り値: body の長さ
-    fn rewrite_step(
-        &mut self,
-        all_terms: &mut Vec<Term>,
-        goal_idx: usize,
-    ) -> Result<usize, RewriteError> {
-        let goal = all_terms[goal_idx].clone();
-
-        for clause in &self.db {
-            self.clause_counter += 1;
-            let mut renamed = clause.clone();
-            rename_clause_vars(&mut renamed, &self.clause_counter.to_string());
-
-            let (head, body) = match &renamed {
-                Clause::Fact(term) => (term.clone(), vec![]),
-                Clause::Rule { head, body } => (head.clone(), body.clone()),
-            };
-
-            let body_len = body.len();
-
-            // body を goal_idx+1 の位置に挿入した試行用 Vec を作成
-            let mut trial = all_terms.clone();
-            for (i, b) in body.into_iter().enumerate() {
-                trial.insert(goal_idx + 1 + i, b);
-            }
-
-            if unify(goal.clone(), head, &mut trial).is_ok() {
-                *all_terms = trial;
-                return Ok(body_len);
-            }
-        }
-        Err(RewriteError {
-            message: "no clause matches goal".to_string(),
-            goal,
-        })
-    }
-
-    pub fn execute(&mut self, query: Vec<Term>) -> Result<Vec<Term>, RewriteError> {
-        // all_terms: [resolved... | remaining_goals...]
-        // resolved_count で境界を管理
-        let mut all_terms = query;
-        let mut resolved_count = 0;
-
-        while resolved_count < all_terms.len() {
-            self.rewrite_step(&mut all_terms, resolved_count)?;
-            resolved_count += 1;
-        }
-
-        Ok(all_terms)
-    }
+    Ok(all_terms)
 }
 
 #[cfg(test)]
@@ -642,17 +630,18 @@ mod tests {
     use crate::parse::{database, query, struc, var};
 
     fn run_success(db_src: &str, query_src: &str) -> Vec<Term> {
-        let db = database(db_src).expect("failed to parse db");
+        let mut db = database(db_src).expect("failed to parse db");
         let q = query(query_src).expect("failed to parse query").1;
-        let mut interp = Interpreter::new(db);
-        interp.execute(q).expect("Expected success")
+        execute(&mut db, q).expect("Expected success")
     }
 
     fn run_failure(db_src: &str, query_src: &str) {
-        let db = database(db_src).expect("failed to parse db");
+        let mut db = database(db_src).expect("failed to parse db");
         let q = query(query_src).expect("failed to parse query").1;
-        let mut interp = Interpreter::new(db);
-        assert!(interp.execute(q).is_err(), "Expected failure, got success");
+        assert!(
+            execute(&mut db, q).is_err(),
+            "Expected failure, got success"
+        );
     }
 
     /// resolved_goalsを文字列のVecに変換
@@ -1323,3 +1312,4 @@ mod tests {
         );
     }
 }
+
