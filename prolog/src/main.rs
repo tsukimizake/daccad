@@ -15,9 +15,9 @@ fn main() {
     println!("Database clauses: {:#?}", db_clauses);
     println!("Query terms: {:?}", query_terms);
 
-    // Create interpreter and execute with trace
+    // Create interpreter and execute
     let mut interpreter = Interpreter::new(db_clauses);
-    let result = interpreter.execute_with_trace(query_terms);
+    let result = interpreter.execute(query_terms);
 
     println!("Execution result: {:?}", result);
 }

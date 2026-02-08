@@ -1,7 +1,7 @@
 use std::fmt;
 
 use crate::constraint::{SolveResult, solve_arithmetic};
-use crate::parse::{ArithOp, Bound, Clause, Term, arith_expr, list, number, range_var, struc, var};
+use crate::parse::{ArithOp, Bound, Clause, Term, list, number, range_var};
 
 /// 単一化エラー
 #[derive(Debug, Clone)]
@@ -500,56 +500,49 @@ pub fn unify(term1: Term, term2: Term, goals: &mut Vec<Term>) -> Result<(), Unif
 }
 
 /// 節の変数をリネームして衝突を避ける
-fn rename_clause_vars(clause: &Clause, suffix: &str) -> Clause {
+fn rename_clause_vars(clause: &mut Clause, suffix: &str) {
     match clause {
-        Clause::Fact(term) => Clause::Fact(rename_term_vars(term, suffix)),
-        Clause::Rule { head, body } => Clause::Rule {
-            head: rename_term_vars(head, suffix),
-            body: body.iter().map(|t| rename_term_vars(t, suffix)).collect(),
-        },
+        Clause::Fact(term) => rename_term_vars(term, suffix),
+        Clause::Rule { head, body } => {
+            rename_term_vars(head, suffix);
+            for t in body.iter_mut() {
+                rename_term_vars(t, suffix);
+            }
+        }
     }
 }
 
-fn rename_term_vars(term: &Term, suffix: &str) -> Term {
+fn rename_term_vars(term: &mut Term, suffix: &str) {
     match term {
         Term::Var { name } => {
-            if name == "_" {
-                var(name.clone())
-            } else {
-                var(format!("{}_{}", name, suffix))
+            if name != "_" {
+                *name = format!("{}_{}", name, suffix);
             }
         }
-        Term::RangeVar { name, min, max } => {
-            if name == "_" {
-                range_var(name.clone(), *min, *max)
-            } else {
-                range_var(format!("{}_{}", name, suffix), *min, *max)
+        Term::RangeVar { name, .. } => {
+            if name != "_" {
+                *name = format!("{}_{}", name, suffix);
             }
         }
-        Term::Struct { functor, args } => {
-            let new_args = args.iter().map(|a| rename_term_vars(a, suffix)).collect();
-            struc(functor.clone(), new_args)
+        Term::Struct { args, .. } => {
+            for arg in args.iter_mut() {
+                rename_term_vars(arg, suffix);
+            }
         }
         Term::List { items, tail } => {
-            let new_items = items.iter().map(|i| rename_term_vars(i, suffix)).collect();
-            let new_tail = tail.as_ref().map(|t| rename_term_vars(t.as_ref(), suffix));
-            list(new_items, new_tail)
+            for item in items.iter_mut() {
+                rename_term_vars(item, suffix);
+            }
+            if let Some(t) = tail {
+                rename_term_vars(t.as_mut(), suffix);
+            }
         }
-        Term::ArithExpr { op, left, right } => arith_expr(
-            *op,
-            rename_term_vars(left, suffix),
-            rename_term_vars(right, suffix),
-        ),
-        Term::Number { .. } => term.clone(),
+        Term::ArithExpr { left, right, .. } => {
+            rename_term_vars(left.as_mut(), suffix);
+            rename_term_vars(right.as_mut(), suffix);
+        }
+        Term::Number { .. } => {}
     }
-}
-
-/// 実行トレースの1ステップ
-#[derive(Debug, Clone)]
-pub struct TraceStep {
-    pub selected_goal: Term,
-    pub matched_clause: Clause,
-    pub new_goals: Vec<Term>,
 }
 
 /// Term rewrite方式のインタプリタ
@@ -568,17 +561,18 @@ impl Interpreter {
 
     /// all_terms[goal_idx] を clause とマッチし、body を挿入する
     /// unify が成功すると all_terms 全体の変数がインプレースで書き換えられる
-    /// 返り値: (マッチした clause, body の長さ)
+    /// 返り値: body の長さ
     fn rewrite_step(
         &mut self,
         all_terms: &mut Vec<Term>,
         goal_idx: usize,
-    ) -> Result<(Clause, usize), RewriteError> {
+    ) -> Result<usize, RewriteError> {
         let goal = all_terms[goal_idx].clone();
 
         for clause in &self.db {
             self.clause_counter += 1;
-            let renamed = rename_clause_vars(clause, &self.clause_counter.to_string());
+            let mut renamed = clause.clone();
+            rename_clause_vars(&mut renamed, &self.clause_counter.to_string());
 
             let (head, body) = match &renamed {
                 Clause::Fact(term) => (term.clone(), vec![]),
@@ -595,7 +589,7 @@ impl Interpreter {
 
             if unify(goal.clone(), head, &mut trial).is_ok() {
                 *all_terms = trial;
-                return Ok((renamed, body_len));
+                return Ok(body_len);
             }
         }
         Err(RewriteError {
@@ -604,58 +598,31 @@ impl Interpreter {
         })
     }
 
-    pub fn execute_with_trace(
-        &mut self,
-        query: Vec<Term>,
-    ) -> Result<(Vec<Term>, Vec<TraceStep>), RewriteError> {
+    pub fn execute(&mut self, query: Vec<Term>) -> Result<Vec<Term>, RewriteError> {
         // all_terms: [resolved... | remaining_goals...]
         // resolved_count で境界を管理
         let mut all_terms = query;
         let mut resolved_count = 0;
-        let mut trace = Vec::new();
 
         while resolved_count < all_terms.len() {
-            let goal_before = all_terms[resolved_count].clone();
-            let (matched_clause, body_len) = self.rewrite_step(&mut all_terms, resolved_count)?;
-
-            let new_goals: Vec<Term> =
-                all_terms[resolved_count + 1..resolved_count + 1 + body_len].to_vec();
-
-            trace.push(TraceStep {
-                selected_goal: goal_before,
-                matched_clause,
-                new_goals,
-            });
-
+            self.rewrite_step(&mut all_terms, resolved_count)?;
             resolved_count += 1;
         }
 
-        Ok((all_terms, trace))
-    }
-
-    pub fn execute(&mut self, query: Vec<Term>) -> Result<Vec<Term>, RewriteError> {
-        let (resolved, _) = self.execute_with_trace(query)?;
-        Ok(resolved)
+        Ok(all_terms)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parse::{database, query};
+    use crate::parse::{database, query, struc, var};
 
     fn run_success(db_src: &str, query_src: &str) -> Vec<Term> {
         let db = database(db_src).expect("failed to parse db");
         let q = query(query_src).expect("failed to parse query").1;
         let mut interp = Interpreter::new(db);
         interp.execute(q).expect("Expected success")
-    }
-
-    fn run_success_with_trace(db_src: &str, query_src: &str) -> (Vec<Term>, Vec<TraceStep>) {
-        let db = database(db_src).expect("failed to parse db");
-        let q = query(query_src).expect("failed to parse query").1;
-        let mut interp = Interpreter::new(db);
-        interp.execute_with_trace(q).expect("Expected success")
     }
 
     fn run_failure(db_src: &str, query_src: &str) {
@@ -1154,20 +1121,6 @@ mod tests {
     fn member_first() {
         let resolved = run_success("member(X, [X|_]).", "member(a, [a, b, c]).");
         assert_eq!(resolved_strs(&resolved), vec!["member(a, [a, b, c])"]);
-    }
-
-    // ===== trace tests =====
-
-    #[test]
-    fn trace_records_rewrite() {
-        let db = "q(a, b). p(X, Y) :- q(X, Y).";
-        let (resolved, trace) = run_success_with_trace(db, "p(W, V).");
-
-        assert_eq!(trace.len(), 2);
-        assert!(matches!(&trace[0].matched_clause, Clause::Rule { .. }));
-        assert!(matches!(&trace[1].matched_clause, Clause::Fact(_)));
-
-        assert_eq!(resolved_strs(&resolved), vec!["p(a, b)", "q(a, b)"]);
     }
 
     // ===== rule failure tests =====
