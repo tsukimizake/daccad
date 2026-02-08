@@ -17,3 +17,10 @@ pub struct PreviewGenerated {
     pub mesh: Mesh,
     pub preview_index: Option<usize>, // Some(i) = update existing preview, None = new preview
 }
+
+// Prolog -> UI: error or log message from prolog execution
+#[derive(Message)]
+pub struct PrologOutput {
+    pub message: String,
+    pub is_error: bool,
+}

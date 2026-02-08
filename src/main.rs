@@ -4,7 +4,7 @@ use bevy::prelude::*;
 mod events;
 mod prolog_wrapper;
 mod ui;
-use crate::events::{GeneratePreviewRequest, PreviewGenerated};
+use crate::events::{GeneratePreviewRequest, PreviewGenerated, PrologOutput};
 use crate::prolog_wrapper::PrologPlugin;
 use crate::ui::UiPlugin;
 use bevy_async_ecs::AsyncEcsPlugin;
@@ -18,6 +18,7 @@ pub fn main() {
         .add_plugins(AsyncEcsPlugin)
         .add_message::<GeneratePreviewRequest>()
         .add_message::<PreviewGenerated>()
+        .add_message::<PrologOutput>()
         .add_plugins((UiPlugin, PrologPlugin))
         .run();
 }

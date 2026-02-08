@@ -1,5 +1,5 @@
-use crate::events::{GeneratePreviewRequest, PreviewGenerated};
-use crate::ui::{EditorText, NextRequestId, PreviewTarget, PreviewTargets};
+use crate::events::{GeneratePreviewRequest, PreviewGenerated, PrologOutput};
+use crate::ui::{EditorText, ErrorMessage, NextRequestId, PreviewTarget, PreviewTargets};
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::RenderTarget;
 use bevy::camera::visibility::RenderLayers;
@@ -14,6 +14,7 @@ pub(super) fn egui_ui(
     mut editor_text: ResMut<EditorText>,
     mut next_id: ResMut<NextRequestId>,
     mut ev_generate: MessageWriter<GeneratePreviewRequest>,
+    error_message: Res<ErrorMessage>,
 ) {
     // Toolbar: add a new preview or reload existing
     if let Ok(ctx) = contexts.ctx_mut() {
@@ -57,6 +58,19 @@ pub(super) fn egui_ui(
             (id, t.rt_size)
         })
         .collect();
+
+    // Error message panel at the bottom
+    if let Ok(ctx) = contexts.ctx_mut() {
+        if !error_message.is_empty() {
+            egui::TopBottomPanel::bottom("error_panel")
+                .min_height(24.0)
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.colored_label(egui::Color32::from_rgb(255, 100, 100), &**error_message);
+                    });
+                });
+        }
+    }
 
     // Main split view: left = large text area, right = previews list and controls
     if let Ok(ctx) = contexts.ctx_mut() {
@@ -267,6 +281,23 @@ pub(super) fn update_preview_transforms(
             let rx = t.rotate_x as f32;
             let ry = t.rotate_y as f32;
             transform.rotation = Quat::from_euler(EulerRot::XYZ, rx, ry, 0.0);
+        }
+    }
+}
+
+// Handle prolog output messages and update error display
+pub(super) fn handle_prolog_output(
+    mut ev_output: MessageReader<PrologOutput>,
+    mut error_message: ResMut<ErrorMessage>,
+) {
+    for output in ev_output.read() {
+        if output.is_error {
+            **error_message = output.message.clone();
+        } else {
+            // For non-error logs, we could display them differently or just log
+            bevy::log::info!("Prolog: {}", output.message);
+            // Clear error message on successful execution
+            **error_message = String::new();
         }
     }
 }

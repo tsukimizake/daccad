@@ -5,7 +5,7 @@ use bevy::{mesh::Indices, prelude::*};
 use bevy_async_ecs::AsyncWorld;
 use derived_deref::{Deref, DerefMut};
 
-use crate::events::{GeneratePreviewRequest, PreviewGenerated};
+use crate::events::{GeneratePreviewRequest, PreviewGenerated, PrologOutput};
 use manifold_rs::Mesh as RsMesh;
 use prolog::manifold_bridge::generate_mesh_from_terms;
 use prolog::parse::{database, query as parse_query};
@@ -45,6 +45,9 @@ fn consume_requests(
         AsyncComputeTaskPool::get()
             .spawn(async move {
                 // Parse query and execute term rewrite, then generate mesh
+                let async_world_for_log = async_world.clone();
+                let mut logs: Vec<String> = Vec::new();
+
                 let result = (|| -> Result<Mesh, String> {
                     // Parse the query string
                     let (_, query_terms) =
@@ -54,14 +57,14 @@ fn consume_requests(
                     let mut db = database(&db_src)
                         .map_err(|e| format!("Database parse error: {:?}", e))?;
 
-                    println!("Query terms: {:?}", query_terms);
-                    println!("Database clauses: {:#?}", db);
+                    logs.push(format!("Query terms: {:?}", query_terms));
+                    logs.push(format!("Database clauses: {:#?}", db));
 
                     // Execute term rewrite
                     let resolved = execute(&mut db, query_terms)
                         .map_err(|e| format!("Rewrite error: {}", e))?;
 
-                    println!("Resolved terms: {:?}", resolved);
+                    logs.push(format!("Resolved terms: {:?}", resolved));
 
                     // 全ての解決済みTermをunionしてMeshを生成
                     let rs_mesh: RsMesh = generate_mesh_from_terms(&resolved)
@@ -69,6 +72,19 @@ fn consume_requests(
 
                     Ok(rs_mesh_to_bevy_mesh(&rs_mesh))
                 })();
+
+                // Send logs to UI
+                let log_message = logs.join("\n");
+                if !log_message.is_empty() {
+                    async_world_for_log
+                        .apply(move |world: &mut World| {
+                            world.write_message(PrologOutput {
+                                message: log_message,
+                                is_error: false,
+                            });
+                        })
+                        .await;
+                }
 
                 match result {
                     Ok(mesh) => {
@@ -85,6 +101,14 @@ fn consume_requests(
                     }
                     Err(e) => {
                         bevy::log::error!("Failed to generate mesh: {}", e);
+                        async_world
+                            .apply(move |world: &mut World| {
+                                world.write_message(PrologOutput {
+                                    message: e,
+                                    is_error: true,
+                                });
+                            })
+                            .await;
                     }
                 }
             })
