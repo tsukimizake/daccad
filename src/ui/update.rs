@@ -1,5 +1,8 @@
 use crate::events::{GeneratePreviewRequest, PreviewGenerated, PrologOutput};
-use crate::ui::{CurrentFilePath, EditorText, ErrorMessage, NextRequestId, PreviewTarget, PreviewTargets, PrologFileContents};
+use crate::ui::{
+    CurrentFilePath, EditorText, ErrorMessage, NextRequestId, PreviewTarget, PreviewTargets,
+    PrologFileContents,
+};
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::RenderTarget;
 use bevy::camera::primitives::MeshAabb;
@@ -56,9 +59,9 @@ pub(super) fn egui_ui(
                         .set_file_name(file_name)
                         .save_file::<PrologFileContents>(editor_text.as_bytes().to_vec());
                 }
-                
+
                 ui.separator();
-                
+
                 if ui.button("Add Preview").clicked() {
                     let id = **next_id;
                     **next_id += 1;
@@ -243,13 +246,16 @@ pub(super) fn on_preview_generated(
         );
 
         // Offscreen camera rendering only that layer
-        let camera_entity = commands.spawn((
-            Camera3d::default(),
-            Camera::default(),
-            RenderTarget::Image(rt_image.clone().into()),
-            Transform::from_xyz(cam_pos.x, cam_pos.y, cam_pos.z).looking_at(Vec3::ZERO, Vec3::Y),
-            layer_only.clone(),
-        )).id();
+        let camera_entity = commands
+            .spawn((
+                Camera3d::default(),
+                Camera::default(),
+                RenderTarget::Image(rt_image.clone().into()),
+                Transform::from_xyz(cam_pos.x, cam_pos.y, cam_pos.z)
+                    .looking_at(Vec3::ZERO, Vec3::Y),
+                layer_only.clone(),
+            ))
+            .id();
 
         // Light for the offscreen layer
         commands.spawn((
@@ -314,7 +320,8 @@ pub(super) fn on_preview_generated(
             rt_image: rt_image.clone(),
             rt_size,
             camera_entity,
-            camera_distance,
+            base_camera_distance: camera_distance,
+            zoom: 10.0,
             rotate_x: 0.0,
             rotate_y: 0.0,
             query: ev.query.clone(),
@@ -355,7 +362,11 @@ fn preview_target_ui(
                 ui.label("Rotate Y:");
                 ui.add(egui::DragValue::new(&mut target.rotate_y).speed(0.01));
                 ui.label("Zoom:");
-                ui.add(egui::DragValue::new(&mut target.camera_distance).speed(0.1).range(1.0..=100.0));
+                ui.add(
+                    egui::DragValue::new(&mut target.zoom)
+                        .speed(0.1)
+                        .range(1.0..=100.0),
+                );
             });
             ui.add_space(6.0);
             // Show the offscreen render under controls
@@ -375,16 +386,15 @@ pub(super) fn update_preview_transforms(
 ) {
     for target in preview_targets.iter() {
         if let Ok(mut transform) = q.get_mut(target.camera_entity) {
-            // Calculate camera position based on spherical coordinates
             let rx = target.rotate_x as f32;
             let ry = target.rotate_y as f32;
-            let dist = target.camera_distance;
-            
+            let dist = target.base_camera_distance * (20.0 / target.zoom);
+
             // Orbit camera around origin
             let x = dist * ry.sin() * rx.cos();
             let y = dist * rx.sin();
             let z = dist * ry.cos() * rx.cos();
-            
+
             transform.translation = Vec3::new(x, y, z);
             *transform = transform.looking_at(Vec3::ZERO, Vec3::Y);
         }
@@ -431,3 +441,4 @@ pub(super) fn file_saved(
         }
     }
 }
+

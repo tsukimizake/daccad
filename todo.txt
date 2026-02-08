@@ -2,10 +2,6 @@
 ## high priority:
 
 - toMeshしてexport
-- previewのカメラを調整可能に
-- rotate zも
-- rotateの原点をオブジェクトの中心に
-
 
 ## low priority:
 

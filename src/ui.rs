@@ -44,7 +44,8 @@ struct PreviewTarget {
     pub rt_image: Handle<Image>,
     pub rt_size: UVec2,
     pub camera_entity: Entity,
-    pub camera_distance: f32,
+    pub base_camera_distance: f32, // calculated from mesh size
+    pub zoom: f32,                 // 1-100, default 10
     pub rotate_x: f64,
     pub rotate_y: f64,
     pub query: String, // prolog query string to generate the preview.
