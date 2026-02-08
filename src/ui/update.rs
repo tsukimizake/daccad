@@ -192,16 +192,12 @@ pub(super) fn on_preview_generated(
             ..default()
         });
 
-        // Position new preview based on current count
-        let idx = preview_targets.len();
-        let x = (idx as f32) * 2.5 - 2.5;
-
-        // Spawn the visible mesh entity in the 3D world
+        // Spawn the visible mesh entity at origin
         let entity = commands
             .spawn((
                 Mesh3d(mesh_handle.clone()),
                 MeshMaterial3d(material),
-                Transform::from_xyz(x, 0.5, 0.0),
+                Transform::from_xyz(0.0, 0.0, 0.0),
             ))
             .id();
 
@@ -247,13 +243,13 @@ pub(super) fn on_preview_generated(
         );
 
         // Offscreen camera rendering only that layer
-        commands.spawn((
+        let camera_entity = commands.spawn((
             Camera3d::default(),
             Camera::default(),
             RenderTarget::Image(rt_image.clone().into()),
             Transform::from_xyz(cam_pos.x, cam_pos.y, cam_pos.z).looking_at(Vec3::ZERO, Vec3::Y),
             layer_only.clone(),
-        ));
+        )).id();
 
         // Light for the offscreen layer
         commands.spawn((
@@ -264,16 +260,63 @@ pub(super) fn on_preview_generated(
 
         // Make the mesh visible to both default (0) and offscreen layer
         let both_layers = RenderLayers::from_layers(&[0, layer_idx as usize]);
-        commands.entity(entity).insert(both_layers);
+        commands.entity(entity).insert(both_layers.clone());
+
+        // Spawn XYZ axis indicators
+        let axis_length = 20.0;
+        let axis_radius = 0.1;
+        let axis_cylinder = meshes.add(Cylinder::new(axis_radius, axis_length));
+
+        // X axis (red)
+        let x_material = materials.add(StandardMaterial {
+            base_color: Color::srgb(1.0, 0.0, 0.0),
+            unlit: true,
+            ..default()
+        });
+        commands.spawn((
+            Mesh3d(axis_cylinder.clone()),
+            MeshMaterial3d(x_material),
+            Transform::from_xyz(axis_length / 2.0, 0.0, 0.0)
+                .with_rotation(Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2)),
+            both_layers.clone(),
+        ));
+
+        // Y axis (green)
+        let y_material = materials.add(StandardMaterial {
+            base_color: Color::srgb(0.0, 1.0, 0.0),
+            unlit: true,
+            ..default()
+        });
+        commands.spawn((
+            Mesh3d(axis_cylinder.clone()),
+            MeshMaterial3d(y_material),
+            Transform::from_xyz(0.0, axis_length / 2.0, 0.0),
+            both_layers.clone(),
+        ));
+
+        // Z axis (blue)
+        let z_material = materials.add(StandardMaterial {
+            base_color: Color::srgb(0.0, 0.0, 1.0),
+            unlit: true,
+            ..default()
+        });
+        commands.spawn((
+            Mesh3d(axis_cylinder.clone()),
+            MeshMaterial3d(z_material),
+            Transform::from_xyz(0.0, 0.0, axis_length / 2.0)
+                .with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)),
+            both_layers.clone(),
+        ));
 
         // Store in resource for UI display and transform updates
         preview_targets.push(PreviewTarget {
             mesh_handle: mesh_handle.clone(),
             rt_image: rt_image.clone(),
             rt_size,
+            camera_entity,
+            camera_distance,
             rotate_x: 0.0,
             rotate_y: 0.0,
-            rotate_z: 0.0,
             query: ev.query.clone(),
         });
     }
@@ -305,14 +348,12 @@ fn preview_target_ui(
                 }
             });
             ui.add_space(4.0);
-            // Rotation controls
+            // Rotation controls (camera orbit)
             ui.horizontal(|ui| {
                 ui.label("Rotate X:");
                 ui.add(egui::DragValue::new(&mut target.rotate_x).speed(0.01));
                 ui.label("Rotate Y:");
                 ui.add(egui::DragValue::new(&mut target.rotate_y).speed(0.01));
-                ui.label("Rotate Z:");
-                ui.add(egui::DragValue::new(&mut target.rotate_z).speed(0.01));
             });
             ui.add_space(6.0);
             // Show the offscreen render under controls
@@ -328,20 +369,22 @@ fn preview_target_ui(
 // Keep spawned preview entity rotations in sync with UI values
 pub(super) fn update_preview_transforms(
     preview_targets: Res<PreviewTargets>,
-    mut q: Query<(&Mesh3d, &mut Transform)>,
+    mut q: Query<&mut Transform, With<Camera3d>>,
 ) {
-    if preview_targets.is_empty() {
-        return;
-    }
-    for (mesh3d, mut transform) in q.iter_mut() {
-        if let Some(t) = preview_targets
-            .iter()
-            .find(|t| t.mesh_handle.id() == mesh3d.0.id())
-        {
-            let rx = t.rotate_x as f32;
-            let ry = t.rotate_y as f32;
-            let rz = t.rotate_z as f32;
-            transform.rotation = Quat::from_euler(EulerRot::XYZ, rx, ry, rz);
+    for target in preview_targets.iter() {
+        if let Ok(mut transform) = q.get_mut(target.camera_entity) {
+            // Calculate camera position based on spherical coordinates
+            let rx = target.rotate_x as f32;
+            let ry = target.rotate_y as f32;
+            let dist = target.camera_distance;
+            
+            // Orbit camera around origin
+            let x = dist * ry.sin() * rx.cos();
+            let y = dist * rx.sin();
+            let z = dist * ry.cos() * rx.cos();
+            
+            transform.translation = Vec3::new(x, y, z);
+            *transform = transform.looking_at(Vec3::ZERO, Vec3::Y);
         }
     }
 }

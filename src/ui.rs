@@ -43,10 +43,11 @@ struct PreviewTarget {
     pub mesh_handle: Handle<Mesh>,
     pub rt_image: Handle<Image>,
     pub rt_size: UVec2,
+    pub camera_entity: Entity,
+    pub camera_distance: f32,
     pub rotate_x: f64,
     pub rotate_y: f64,
-    pub rotate_z: f64,
-    pub query: String, // prolog query string to generate the preview. currently unused.
+    pub query: String, // prolog query string to generate the preview.
 }
 
 #[derive(Resource, Default, Clone, Deref, DerefMut)]
@@ -61,4 +62,3 @@ pub struct ErrorMessage(pub String);
 
 #[derive(Resource, Default, Clone, Deref, DerefMut)]
 pub struct CurrentFilePath(pub Option<PathBuf>);
-
