@@ -186,24 +186,6 @@ fn intersect_max(a: Option<Bound>, b: Option<Bound>) -> Option<Bound> {
 }
 
 /// 範囲が空でないかチェック（少なくとも1つの整数値が含まれるか）
-fn range_is_valid(min: Option<Bound>, max: Option<Bound>) -> bool {
-    match (min, max) {
-        (Some(min), Some(max)) => {
-            let effective_min = if min.inclusive {
-                min.value
-            } else {
-                min.value + 1
-            };
-            let effective_max = if max.inclusive {
-                max.value
-            } else {
-                max.value - 1
-            };
-            effective_min <= effective_max
-        }
-        _ => true,
-    }
-}
 
 /// 値が範囲内にあるかチェック
 fn value_in_range(value: i64, min: Option<Bound>, max: Option<Bound>) -> bool {
@@ -244,9 +226,7 @@ pub fn unify(term1: Term, term2: Term, goals: &mut Vec<Term>) -> Result<(), Unif
         }
 
         // 算術式がまだ評価できない場合は遅延
-        let has_unbound_var = |term: &Term| -> bool {
-            matches!(term, Term::ArithExpr { .. })
-        };
+        let has_unbound_var = |term: &Term| -> bool { matches!(term, Term::ArithExpr { .. }) };
 
         if has_unbound_var(&t1) || has_unbound_var(&t2) {
             deferred.push((t1, t2));
@@ -271,14 +251,6 @@ pub fn unify(term1: Term, term2: Term, goals: &mut Vec<Term>) -> Result<(), Unif
             ) => {
                 let new_min = intersect_min(*min1, *min2);
                 let new_max = intersect_max(*max1, *max2);
-
-                if !range_is_valid(new_min, new_max) {
-                    return Err(UnifyError {
-                        message: format!("range intersection is empty: {:?} ∩ {:?}", t1, t2),
-                        term1: t1,
-                        term2: t2,
-                    });
-                }
 
                 let intersected = range_var(n1.clone(), new_min, new_max);
                 if n1 != "_" {
@@ -646,8 +618,8 @@ impl Interpreter {
             let goal_before = all_terms[resolved_count].clone();
             let (matched_clause, body_len) = self.rewrite_step(&mut all_terms, resolved_count)?;
 
-            let new_goals: Vec<Term> = all_terms[resolved_count + 1..resolved_count + 1 + body_len]
-                .to_vec();
+            let new_goals: Vec<Term> =
+                all_terms[resolved_count + 1..resolved_count + 1 + body_len].to_vec();
 
             trace.push(TraceStep {
                 selected_goal: goal_before,
