@@ -600,11 +600,18 @@ fn rewrite_step(
         };
 
         let body_len = body.len();
+        let is_fact = body_len == 0;
 
-        // body を goal_idx+1 の位置に挿入した試行用 Vec を作成
+        // 試行用 Vec を作成
         let mut trial = all_terms.clone();
-        for (i, b) in body.into_iter().enumerate() {
-            trial.insert(goal_idx + 1 + i, b);
+        if is_fact {
+            // Factの場合：ゴールはそのまま残す（変数束縛のみ適用される）
+        } else {
+            // Ruleの場合：goal_idxの位置のゴールをbodyで置換
+            trial.remove(goal_idx);
+            for (i, b) in body.into_iter().enumerate() {
+                trial.insert(goal_idx + i, b);
+            }
         }
 
         if unify(goal.clone(), head, &mut trial).is_ok() {
@@ -619,26 +626,31 @@ fn rewrite_step(
 }
 
 pub fn execute(db: &mut [Clause], query: Vec<Term>) -> Result<Vec<Term>, RewriteError> {
-    // all_terms: [resolved... | remaining_goals...]
-    // resolved_count で境界を管理
     let mut all_terms = query;
-    let mut resolved_count = 0;
+    let mut idx = 0;
     let mut clause_counter = 0;
 
-    while resolved_count < all_terms.len() {
+    while idx < all_terms.len() {
         // Try to rewrite the goal; if it fails and it's a builtin primitive, skip it
-        match rewrite_step(db, &mut clause_counter, &mut all_terms, resolved_count) {
-            Ok(_) => {}
+        match rewrite_step(db, &mut clause_counter, &mut all_terms, idx) {
+            Ok(body_len) => {
+                if body_len == 0 {
+                    // Factにマッチ：ゴールはそのまま残っているので次へ
+                    idx += 1;
+                }
+                // body_len > 0: Ruleにマッチしてbodyで置換された。
+                // 置換されたbodyの最初の項から処理継続するのでidxはそのまま
+            }
             Err(e) => {
                 // If no clause matches but it's a builtin primitive, treat as resolved
-                if is_builtin_primitive(&all_terms[resolved_count]) {
-                    // Builtin primitives are terminal goals - no further rewriting needed
+                if is_builtin_primitive(&all_terms[idx]) {
+                    // Builtin primitives are terminal goals - skip to next
+                    idx += 1;
                 } else {
                     return Err(e);
                 }
             }
         }
-        resolved_count += 1;
     }
 
     Ok(all_terms)
@@ -1075,29 +1087,27 @@ mod tests {
 
     #[test]
     fn resolved_goals_returned() {
+        // Ruleにマッチするとheadがbodyで置換される
         let resolved = run_success("p :- q(X, Z), r(Z, Y). q(a, b). r(b, c).", "p.");
-        assert_eq!(resolved_strs(&resolved), vec!["p", "q(a, b)", "r(b, c)"]);
+        assert_eq!(resolved_strs(&resolved), vec!["q(a, b)", "r(b, c)"]);
     }
 
     #[test]
     fn sample_rule() {
         let resolved = run_success("p(X,Y) :- q(X, Z), r(Z, Y). q(a, b). r(b, c).", "p(A, B).");
-        assert_eq!(
-            resolved_strs(&resolved),
-            vec!["p(a, c)", "q(a, b)", "r(b, c)"]
-        );
+        assert_eq!(resolved_strs(&resolved), vec!["q(a, b)", "r(b, c)"]);
     }
 
     #[test]
     fn rule_single_goal() {
         let resolved = run_success("parent(X) :- father(X). father(tom).", "parent(tom).");
-        assert_eq!(resolved_strs(&resolved), vec!["parent(tom)", "father(tom)"]);
+        assert_eq!(resolved_strs(&resolved), vec!["father(tom)"]);
     }
 
     #[test]
     fn rule_single_goal_with_var_query() {
         let resolved = run_success("parent(X) :- father(X). father(tom).", "parent(Y).");
-        assert_eq!(resolved_strs(&resolved), vec!["parent(tom)", "father(tom)"]);
+        assert_eq!(resolved_strs(&resolved), vec!["father(tom)"]);
     }
 
     #[test]
@@ -1110,11 +1120,7 @@ mod tests {
         let resolved = run_success(db, "grandparent(alice, Who).");
         assert_eq!(
             resolved_strs(&resolved),
-            vec![
-                "grandparent(alice, carol)",
-                "parent(alice, bob)",
-                "parent(bob, carol)"
-            ]
+            vec!["parent(alice, bob)", "parent(bob, carol)"]
         );
     }
 
@@ -1177,7 +1183,7 @@ mod tests {
     #[test]
     fn rule_chain_two_levels() {
         let resolved = run_success("a(X) :- b(X). b(X) :- c(X). c(foo).", "a(foo).");
-        assert_eq!(resolved_strs(&resolved), vec!["a(foo)", "b(foo)", "c(foo)"]);
+        assert_eq!(resolved_strs(&resolved), vec!["c(foo)"]);
     }
 
     #[test]
@@ -1186,16 +1192,13 @@ mod tests {
             "a(X) :- b(X). b(X) :- c(X). c(X) :- d(X). d(bar).",
             "a(bar).",
         );
-        assert_eq!(
-            resolved_strs(&resolved),
-            vec!["a(bar)", "b(bar)", "c(bar)", "d(bar)"]
-        );
+        assert_eq!(resolved_strs(&resolved), vec!["d(bar)"]);
     }
 
     #[test]
     fn rule_chain_with_var_binding() {
         let resolved = run_success("a(X) :- b(X). b(X) :- c(X). c(baz).", "a(Y).");
-        assert_eq!(resolved_strs(&resolved), vec!["a(baz)", "b(baz)", "c(baz)"]);
+        assert_eq!(resolved_strs(&resolved), vec!["c(baz)"]);
     }
 
     // ===== rule with nested struct tests =====
@@ -1206,19 +1209,13 @@ mod tests {
             "outer(X) :- inner(X). inner(pair(a, b)).",
             "outer(pair(a, b)).",
         );
-        assert_eq!(
-            resolved_strs(&resolved),
-            vec!["outer(pair(a, b))", "inner(pair(a, b))"]
-        );
+        assert_eq!(resolved_strs(&resolved), vec!["inner(pair(a, b))"]);
     }
 
     #[test]
     fn rule_with_nested_struct_var_binding() {
         let resolved = run_success("outer(X) :- inner(X). inner(pair(a, b)).", "outer(Y).");
-        assert_eq!(
-            resolved_strs(&resolved),
-            vec!["outer(pair(a, b))", "inner(pair(a, b))"]
-        );
+        assert_eq!(resolved_strs(&resolved), vec!["inner(pair(a, b))"]);
     }
 
     #[test]
@@ -1229,17 +1226,14 @@ mod tests {
         );
         assert_eq!(
             resolved_strs(&resolved),
-            vec![
-                "wrap(node(leaf(a), leaf(b)))",
-                "data(node(leaf(a), leaf(b)))"
-            ]
+            vec!["data(node(leaf(a), leaf(b)))"]
         );
     }
 
     #[test]
     fn rule_shared_variable_in_body() {
         let resolved = run_success("same(X) :- eq(X, X). eq(a, a).", "same(a).");
-        assert_eq!(resolved_strs(&resolved), vec!["same(a)", "eq(a, a)"]);
+        assert_eq!(resolved_strs(&resolved), vec!["eq(a, a)"]);
     }
 
     // ===== rule with multiple args =====
@@ -1252,7 +1246,7 @@ mod tests {
         );
         assert_eq!(
             resolved_strs(&resolved),
-            vec!["triple(a, b, c)", "first(a)", "second(b)", "third(c)"]
+            vec!["first(a)", "second(b)", "third(c)"]
         );
     }
 
@@ -1264,10 +1258,7 @@ mod tests {
             "make_pair(pair(X, Y)) :- left(X), right(Y). left(a). right(b).",
             "make_pair(pair(a, b)).",
         );
-        assert_eq!(
-            resolved_strs(&resolved),
-            vec!["make_pair(pair(a, b))", "left(a)", "right(b)"]
-        );
+        assert_eq!(resolved_strs(&resolved), vec!["left(a)", "right(b)"]);
     }
 
     #[test]
@@ -1276,10 +1267,7 @@ mod tests {
             "make_pair(pair(X, Y)) :- left(X), right(Y). left(a). right(b).",
             "make_pair(P).",
         );
-        assert_eq!(
-            resolved_strs(&resolved),
-            vec!["make_pair(pair(a, b))", "left(a)", "right(b)"]
-        );
+        assert_eq!(resolved_strs(&resolved), vec!["left(a)", "right(b)"]);
     }
 
     // ===== backtracking required (ignored for now) =====
