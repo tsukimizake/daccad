@@ -1,0 +1,16 @@
+
+## high priority:
+
+- ファイルロード
+- ファイル保存
+- toMeshしてexport
+- previewのカメラをデフォルトでもっと引く、調整可能に
+- rotate zも
+- rotateの原点をオブジェクトの中心に
+
+
+## low priority:
+
+- できれば画面ドラッグでrotate
+- エラー行表示
+- constraint solver
