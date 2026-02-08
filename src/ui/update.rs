@@ -2,6 +2,7 @@ use crate::events::{GeneratePreviewRequest, PreviewGenerated, PrologOutput};
 use crate::ui::{CurrentFilePath, EditorText, ErrorMessage, NextRequestId, PreviewTarget, PreviewTargets, PrologFileContents};
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::RenderTarget;
+use bevy::camera::primitives::MeshAabb;
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
@@ -227,12 +228,30 @@ pub(super) fn on_preview_generated(
         let layer_idx = (preview_targets.len() as u8).saturating_add(1);
         let layer_only = RenderLayers::layer(layer_idx as usize);
 
+        // Calculate camera distance based on mesh bounds
+        let mesh_aabb = ev.mesh.compute_aabb();
+        let camera_distance = if let Some(aabb) = mesh_aabb {
+            let half_extents = aabb.half_extents;
+            let max_extent = half_extents.x.max(half_extents.y).max(half_extents.z);
+            // Use FOV of ~45 degrees, so distance = extent / tan(22.5°) ≈ extent * 2.4
+            // Add some margin (1.5x) for comfortable viewing
+            let distance = max_extent * 2.4 * 1.5;
+            distance.max(5.0) // Minimum distance
+        } else {
+            5.0
+        };
+        let cam_pos = Vec3::new(
+            camera_distance * 0.5,
+            camera_distance * 0.5,
+            camera_distance,
+        );
+
         // Offscreen camera rendering only that layer
         commands.spawn((
             Camera3d::default(),
             Camera::default(),
             RenderTarget::Image(rt_image.clone().into()),
-            Transform::from_xyz(2.5, 2.5, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
+            Transform::from_xyz(cam_pos.x, cam_pos.y, cam_pos.z).looking_at(Vec3::ZERO, Vec3::Y),
             layer_only.clone(),
         ));
 
