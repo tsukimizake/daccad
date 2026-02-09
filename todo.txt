@@ -1,11 +1,16 @@
 
 ## high priority:
 
-- エラー行表示
-- constraint solver
 - セッション保存
+- file watch mode
+- エラー行表示
+- tree-sitter highlight for editors
+
+
+## heavy tasks
+- constraint solver
+- lsp for editors
 
 ## low priority:
 
 - できれば画面ドラッグでrotate
-- lsp
