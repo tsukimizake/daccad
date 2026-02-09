@@ -1,5 +1,5 @@
 [package]
-name = "daccad"
+name = "cadhr"
 version = "0.1.0"
 edition = "2024"
 
@@ -13,7 +13,7 @@ opt-level = 3
 
 [workspace]
 members = [
-    "prolog",
+    "cadhr-lang",
 ]
 
 [dependencies]
@@ -23,6 +23,5 @@ bevy_egui = "0.39"
 bevy-async-ecs = "0.10"
 bevy_file_dialog = "0.9.1"
 derived-deref = "2.1.0"
-prolog = { path = "prolog" }
+cadhr-lang = { path = "cadhr-lang" }
 threemf = "0.7"
-

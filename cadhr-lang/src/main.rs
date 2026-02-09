@@ -1,4 +1,4 @@
-use prolog::{
+use cadhr_lang::{
     parse::{database, query},
     term_rewrite::execute,
 };

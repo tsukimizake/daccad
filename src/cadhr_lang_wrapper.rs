@@ -5,18 +5,18 @@ use bevy::{mesh::Indices, prelude::*};
 use bevy_async_ecs::AsyncWorld;
 use derived_deref::{Deref, DerefMut};
 
-use crate::events::{GeneratePreviewRequest, PreviewGenerated, PrologOutput};
+use crate::events::{CadhrLangOutput, GeneratePreviewRequest, PreviewGenerated};
 use manifold_rs::Mesh as RsMesh;
-use prolog::manifold_bridge::generate_mesh_from_terms;
-use prolog::parse::{database, query as parse_query};
-use prolog::term_rewrite::execute;
+use cadhr_lang::manifold_bridge::generate_mesh_from_terms;
+use cadhr_lang::parse::{database, query as parse_query};
+use cadhr_lang::term_rewrite::execute;
 
 #[derive(Resource, Clone, Deref, DerefMut)]
 struct AsyncWorldRes(AsyncWorld);
 
-pub struct PrologPlugin;
+pub struct CadhrLangPlugin;
 
-impl Plugin for PrologPlugin {
+impl Plugin for CadhrLangPlugin {
     fn build(&self, app: &mut App) {
         // Initialize AsyncWorld handle for this app
         app.add_systems(Startup, init_async_world);
@@ -78,7 +78,7 @@ fn consume_requests(
                 if !log_message.is_empty() {
                     async_world_for_log
                         .apply(move |world: &mut World| {
-                            world.write_message(PrologOutput {
+                            world.write_message(CadhrLangOutput {
                                 message: log_message,
                                 is_error: false,
                             });
@@ -103,7 +103,7 @@ fn consume_requests(
                         bevy::log::error!("Failed to generate mesh: {}", e);
                         async_world
                             .apply(move |world: &mut World| {
-                                world.write_message(PrologOutput {
+                                world.write_message(CadhrLangOutput {
                                     message: e,
                                     is_error: true,
                                 });

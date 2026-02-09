@@ -1,10 +1,10 @@
 [package]
-name = "prolog"
+name = "cadhr-lang"
 version = "0.1.0"
 edition = "2024"
 
 [lib]
-name = "prolog"
+name = "cadhr_lang"
 path = "src/lib.rs"
 
 [[bin]]

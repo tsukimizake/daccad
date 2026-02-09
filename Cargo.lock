@@ -1822,6 +1822,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d71b6127be86fdcfddb610f7182ac57211d4b18a3e9c82eb2d17662f2227ad6a"
 
 [[package]]
+name = "cadhr"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy-async-ecs",
+ "bevy_egui",
+ "bevy_file_dialog",
+ "cadhr-lang",
+ "derived-deref",
+ "manifold-rs",
+ "threemf",
+]
+
+[[package]]
+name = "cadhr-lang"
+version = "0.1.0"
+dependencies = [
+ "manifold-rs",
+ "nom 8.0.0",
+ "strum",
+ "strum_macros",
+]
+
+[[package]]
 name = "calloop"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2275,20 +2299,6 @@ dependencies = [
  "quote",
  "rustversion",
  "syn",
-]
-
-[[package]]
-name = "daccad"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "bevy-async-ecs",
- "bevy_egui",
- "bevy_file_dialog",
- "derived-deref",
- "manifold-rs",
- "prolog",
- "threemf",
 ]
 
 [[package]]
@@ -4331,16 +4341,6 @@ name = "profiling"
 version = "1.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3eb8486b569e12e2c32ad3e204dbaba5e4b5b216e9367044f25f1dba42341773"
-
-[[package]]
-name = "prolog"
-version = "0.1.0"
-dependencies = [
- "manifold-rs",
- "nom 8.0.0",
- "strum",
- "strum_macros",
-]
 
 [[package]]
 name = "quick-xml"

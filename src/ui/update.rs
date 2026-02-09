@@ -1,7 +1,7 @@
-use crate::events::{GeneratePreviewRequest, PreviewGenerated, PrologOutput};
+use crate::events::{CadhrLangOutput, GeneratePreviewRequest, PreviewGenerated};
 use crate::ui::{
     CurrentFilePath, EditorText, ErrorMessage, NextRequestId, PreviewTarget, PreviewTargets,
-    PrologFileContents, ThreeMfFileContents,
+    CadhrLangFileContents, ThreeMfFileContents,
 };
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::RenderTarget;
@@ -34,9 +34,9 @@ pub(super) fn egui_ui(
                 if ui.button("Open").clicked() {
                     commands
                         .dialog()
-                        .add_filter("Prolog", &["pl", "pro"])
+                        .add_filter("CadhrLang", &["cad", "cadhr"])
                         .add_filter("All", &["*"])
-                        .load_file::<PrologFileContents>();
+                        .load_file::<CadhrLangFileContents>();
                 }
                 if ui.button("Save").clicked() {
                     if let Some(ref path) = **current_file_path {
@@ -44,9 +44,9 @@ pub(super) fn egui_ui(
                     } else {
                         commands
                             .dialog()
-                            .add_filter("Prolog", &["pl", "pro"])
-                            .set_file_name("untitled.pl")
-                            .save_file::<PrologFileContents>(editor_text.as_bytes().to_vec());
+                            .add_filter("CadhrLang", &["cad", "cadhr"])
+                            .set_file_name("untitled.cadhr")
+                            .save_file::<CadhrLangFileContents>(editor_text.as_bytes().to_vec());
                     }
                 }
                 if ui.button("Save As").clicked() {
@@ -55,12 +55,12 @@ pub(super) fn egui_ui(
                         .as_ref()
                         .and_then(|p| p.file_name())
                         .and_then(|n| n.to_str())
-                        .unwrap_or("untitled.pl");
+                        .unwrap_or("untitled.cadhr");
                     commands
                         .dialog()
-                        .add_filter("Prolog", &["pl", "pro"])
+                        .add_filter("CadhrLang", &["cad", "cadhr"])
                         .set_file_name(file_name)
-                        .save_file::<PrologFileContents>(editor_text.as_bytes().to_vec());
+                        .save_file::<CadhrLangFileContents>(editor_text.as_bytes().to_vec());
                 }
 
                 ui.separator();
@@ -421,9 +421,9 @@ pub(super) fn update_preview_transforms(
     }
 }
 
-// Handle prolog output messages and update error display
-pub(super) fn handle_prolog_output(
-    mut ev_output: MessageReader<PrologOutput>,
+// Handle cadhr-lang output messages and update error display
+pub(super) fn handle_cadhr_lang_output(
+    mut ev_output: MessageReader<CadhrLangOutput>,
     mut error_message: ResMut<ErrorMessage>,
 ) {
     for output in ev_output.read() {
@@ -431,7 +431,7 @@ pub(super) fn handle_prolog_output(
             **error_message = output.message.clone();
         } else {
             // For non-error logs, we could display them differently or just log
-            bevy::log::info!("Prolog: {}", output.message);
+            bevy::log::info!("CadhrLang: {}", output.message);
             // Clear error message on successful execution
             **error_message = String::new();
         }
@@ -439,7 +439,7 @@ pub(super) fn handle_prolog_output(
 }
 
 pub(super) fn file_loaded(
-    mut ev_loaded: MessageReader<DialogFileLoaded<PrologFileContents>>,
+    mut ev_loaded: MessageReader<DialogFileLoaded<CadhrLangFileContents>>,
     mut editor_text: ResMut<EditorText>,
     mut current_file_path: ResMut<CurrentFilePath>,
 ) {
@@ -452,7 +452,7 @@ pub(super) fn file_loaded(
 }
 
 pub(super) fn file_saved(
-    mut ev_saved: MessageReader<DialogFileSaved<PrologFileContents>>,
+    mut ev_saved: MessageReader<DialogFileSaved<CadhrLangFileContents>>,
     mut current_file_path: ResMut<CurrentFilePath>,
 ) {
     for ev in ev_saved.read() {

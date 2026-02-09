@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-// UI -> Prolog: request to generate a preview mesh
+// UI -> CadhrLang: request to generate a preview mesh
 #[derive(Message, Clone)]
 pub struct GeneratePreviewRequest {
     pub request_id: u64,
@@ -9,7 +9,7 @@ pub struct GeneratePreviewRequest {
     pub preview_index: Option<usize>, // Some(i) = update existing preview, None = new preview
 }
 
-// Prolog -> UI: mesh has been generated for a request
+// CadhrLang -> UI: mesh has been generated for a request
 #[derive(Message)]
 pub struct PreviewGenerated {
     pub request_id: u64,
@@ -18,9 +18,9 @@ pub struct PreviewGenerated {
     pub preview_index: Option<usize>, // Some(i) = update existing preview, None = new preview
 }
 
-// Prolog -> UI: error or log message from prolog execution
+// CadhrLang -> UI: error or log message from cadhr-lang execution
 #[derive(Message)]
-pub struct PrologOutput {
+pub struct CadhrLangOutput {
     pub message: String,
     pub is_error: bool,
 }
