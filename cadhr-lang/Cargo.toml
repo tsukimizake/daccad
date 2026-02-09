@@ -1,10 +1,10 @@
 [package]
-name = "prolog"
+name = "cadhr-lang"
 version = "0.1.0"
 edition = "2024"
 
 [lib]
-name = "prolog"
+name = "cadhr_lang"
 path = "src/lib.rs"
 
 [[bin]]
@@ -22,3 +22,5 @@ opt-level = 3
 [dependencies]
 nom = "8.0.0"
 manifold-rs = "0.6.4"
+strum = "0.27"
+strum_macros = "0.27"

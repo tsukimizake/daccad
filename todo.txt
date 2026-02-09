@@ -1,0 +1,11 @@
+
+## high priority:
+
+- エラー行表示
+- constraint solver
+- セッション保存
+
+## low priority:
+
+- できれば画面ドラッグでrotate
+- lsp
