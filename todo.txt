@@ -1,7 +1,6 @@
 
 ## high priority:
 
-- セッション保存
 - file watch mode
 - エラー行表示
 - tree-sitter highlight for editors

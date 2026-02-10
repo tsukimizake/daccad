@@ -3,7 +3,7 @@
 //! Term（書き換え後の項）を ManifoldExpr 中間表現に変換し、
 //! それを manifold-rs の Manifold オブジェクトに評価する。
 
-use crate::parse::Term;
+use crate::parse::{ArithOp, Term};
 use manifold_rs::{Manifold, Mesh};
 use std::fmt;
 use std::str::FromStr;
@@ -206,9 +206,30 @@ impl ManifoldExpr {
     pub fn from_term(term: &Term) -> Result<Self, ConversionError> {
         match term {
             Term::Struct { functor, args } => Self::from_struct(functor, args),
+            Term::ArithExpr { op, left, right } => Self::from_arith_expr(*op, left, right),
             Term::Var { name } => Err(ConversionError::UnboundVariable(name.clone())),
             Term::RangeVar { name, .. } => Err(ConversionError::UnboundVariable(name.clone())),
             _ => Err(ConversionError::UnknownPrimitive(format!("{:?}", term))),
+        }
+    }
+
+    /// 算術演算子をCAD操作として変換
+    /// + -> union, - -> difference, * -> intersection
+    fn from_arith_expr(
+        op: ArithOp,
+        left: &Term,
+        right: &Term,
+    ) -> Result<Self, ConversionError> {
+        let left_expr = Box::new(Self::from_term(left)?);
+        let right_expr = Box::new(Self::from_term(right)?);
+
+        match op {
+            ArithOp::Add => Ok(ManifoldExpr::Union(left_expr, right_expr)),
+            ArithOp::Sub => Ok(ManifoldExpr::Difference(left_expr, right_expr)),
+            ArithOp::Mul => Ok(ManifoldExpr::Intersection(left_expr, right_expr)),
+            ArithOp::Div => Err(ConversionError::UnknownPrimitive(
+                "division operator (/) is not supported for CAD operations".to_string(),
+            )),
         }
     }
 
@@ -473,5 +494,83 @@ mod tests {
 
         let expr = ManifoldExpr::from_term(&diff).unwrap();
         assert!(matches!(expr, ManifoldExpr::Difference(_, _)));
+    }
+
+    #[test]
+    fn test_operator_union() {
+        use crate::parse::arith_expr;
+        use crate::parse::ArithOp;
+
+        // cube(1,1,1) + sphere(1) -> union
+        let cube = struc("cube".into(), vec![number(1), number(1), number(1)]);
+        let sphere = struc("sphere".into(), vec![number(1)]);
+        let add_term = arith_expr(ArithOp::Add, cube, sphere);
+
+        let expr = ManifoldExpr::from_term(&add_term).unwrap();
+        assert!(matches!(expr, ManifoldExpr::Union(_, _)));
+    }
+
+    #[test]
+    fn test_operator_difference() {
+        use crate::parse::arith_expr;
+        use crate::parse::ArithOp;
+
+        // cube(1,1,1) - sphere(1) -> difference
+        let cube = struc("cube".into(), vec![number(1), number(1), number(1)]);
+        let sphere = struc("sphere".into(), vec![number(1)]);
+        let sub_term = arith_expr(ArithOp::Sub, cube, sphere);
+
+        let expr = ManifoldExpr::from_term(&sub_term).unwrap();
+        assert!(matches!(expr, ManifoldExpr::Difference(_, _)));
+    }
+
+    #[test]
+    fn test_operator_intersection() {
+        use crate::parse::arith_expr;
+        use crate::parse::ArithOp;
+
+        // cube(1,1,1) * sphere(1) -> intersection
+        let cube = struc("cube".into(), vec![number(1), number(1), number(1)]);
+        let sphere = struc("sphere".into(), vec![number(1)]);
+        let mul_term = arith_expr(ArithOp::Mul, cube, sphere);
+
+        let expr = ManifoldExpr::from_term(&mul_term).unwrap();
+        assert!(matches!(expr, ManifoldExpr::Intersection(_, _)));
+    }
+
+    #[test]
+    fn test_operator_nested() {
+        use crate::parse::arith_expr;
+        use crate::parse::ArithOp;
+
+        // (cube(1,1,1) + sphere(1)) - cylinder(1,2)
+        let cube = struc("cube".into(), vec![number(1), number(1), number(1)]);
+        let sphere = struc("sphere".into(), vec![number(1)]);
+        let cylinder = struc("cylinder".into(), vec![number(1), number(2)]);
+
+        let union_term = arith_expr(ArithOp::Add, cube, sphere);
+        let diff_term = arith_expr(ArithOp::Sub, union_term, cylinder);
+
+        let expr = ManifoldExpr::from_term(&diff_term).unwrap();
+        match expr {
+            ManifoldExpr::Difference(left, _) => {
+                assert!(matches!(*left, ManifoldExpr::Union(_, _)));
+            }
+            _ => panic!("Expected Difference"),
+        }
+    }
+
+    #[test]
+    fn test_operator_division_error() {
+        use crate::parse::arith_expr;
+        use crate::parse::ArithOp;
+
+        // cube(1,1,1) / sphere(1) -> error
+        let cube = struc("cube".into(), vec![number(1), number(1), number(1)]);
+        let sphere = struc("sphere".into(), vec![number(1)]);
+        let div_term = arith_expr(ArithOp::Div, cube, sphere);
+
+        let result = ManifoldExpr::from_term(&div_term);
+        assert!(matches!(result, Err(ConversionError::UnknownPrimitive(_))));
     }
 }

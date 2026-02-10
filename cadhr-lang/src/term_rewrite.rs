@@ -8,6 +8,10 @@ use crate::parse::{ArithOp, Bound, Clause, Term, list, number, range_var};
 fn is_builtin_primitive(term: &Term) -> bool {
     match term {
         Term::Struct { functor, .. } => is_builtin_functor(functor),
+        // ArithExpr (+, -, *) with CAD primitives as operands is also builtin
+        Term::ArithExpr { left, right, .. } => {
+            is_builtin_primitive(left) && is_builtin_primitive(right)
+        }
         _ => false,
     }
 }

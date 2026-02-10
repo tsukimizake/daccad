@@ -752,36 +752,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_pipe_operator() {
-        // cube(1,1,1) |> translate(10,10,10) should become translate(cube(1,1,1), 10,10,10)
-        let src = "cube(1,1,1) |> translate(10,10,10).";
-        let (_, clause) = clause_parser(src).unwrap();
-
-        match clause {
-            Clause::Fact(term) => match &term {
-                Term::Struct { functor, args } => {
-                    assert_eq!(functor, "translate");
-                    assert_eq!(args.len(), 4);
-                    // First arg should be cube(1,1,1)
-                    match &args[0] {
-                        Term::Struct { functor, args } => {
-                            assert_eq!(functor, "cube");
-                            assert_eq!(args.len(), 3);
-                        }
-                        _ => panic!("Expected Struct for first arg"),
-                    }
-                    // Remaining args should be 10, 10, 10
-                    assert_eq!(args[1], number(10));
-                    assert_eq!(args[2], number(10));
-                    assert_eq!(args[3], number(10));
-                }
-                _ => panic!("Expected Struct"),
-            },
-            _ => panic!("Expected Fact"),
-        }
-    }
-
-    #[test]
     fn parse_pipe_operator_chain() {
         // a |> b |> c should become c(b(a))
         let src = "cube(1,1,1) |> scale(2) |> translate(5,5,5).";
@@ -810,6 +780,70 @@ mod tests {
                 }
                 _ => panic!("Expected Struct"),
             },
+            _ => panic!("Expected Fact"),
+        }
+    }
+
+    #[test]
+    fn parse_pipe_with_parentheses() {
+        // (cube(10,20,30) |> translate(10,0,0)) + cube(100,1,1)
+        // should become: union(translate(cube(10,20,30), 10,0,0), cube(100,1,1))
+        let src = "(cube(10,20,30) |> translate(10,0,0)) + cube(100,1,1).";
+        let (_, clause) = clause_parser(src).unwrap();
+
+        match clause {
+            Clause::Fact(term) => match &term {
+                Term::ArithExpr { op, left, right } => {
+                    assert_eq!(*op, ArithOp::Add);
+                    // left should be translate(cube(10,20,30), 10, 0, 0)
+                    match left.as_ref() {
+                        Term::Struct { functor, args } => {
+                            assert_eq!(functor, "translate");
+                            assert_eq!(args.len(), 4);
+                            match &args[0] {
+                                Term::Struct { functor, .. } => {
+                                    assert_eq!(functor, "cube");
+                                }
+                                _ => panic!("Expected cube"),
+                            }
+                        }
+                        _ => panic!("Expected Struct for left, got {:?}", left),
+                    }
+                    // right should be cube(100,1,1)
+                    match right.as_ref() {
+                        Term::Struct { functor, args } => {
+                            assert_eq!(functor, "cube");
+                            assert_eq!(args.len(), 3);
+                        }
+                        _ => panic!("Expected Struct for right"),
+                    }
+                }
+                _ => panic!("Expected ArithExpr, got {:?}", term),
+            },
+            _ => panic!("Expected Fact"),
+        }
+    }
+
+    #[test]
+    fn parse_pipe_without_parentheses() {
+        // cube(10,20,30) |> translate(10,0,0) + cube(100,1,1)
+        // Without parentheses, + binds tighter, so this becomes:
+        // cube(10,20,30) |> (translate(10,0,0) + cube(100,1,1))
+        // which is apply(translate(10,0,0) + cube(100,1,1), cube(10,20,30))
+        // But since translate + cube is ArithExpr not Struct, it wraps with "apply"
+        let src = "cube(10,20,30) |> translate(10,0,0) + cube(100,1,1).";
+        let (_, clause) = clause_parser(src).unwrap();
+
+        match clause {
+            Clause::Fact(term) => {
+                // This should be apply(ArithExpr, cube)
+                match &term {
+                    Term::Struct { functor, .. } => {
+                        assert_eq!(functor, "apply");
+                    }
+                    _ => panic!("Expected apply Struct, got {:?}", term),
+                }
+            }
             _ => panic!("Expected Fact"),
         }
     }
