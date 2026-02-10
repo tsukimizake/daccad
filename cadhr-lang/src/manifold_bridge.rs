@@ -206,16 +206,16 @@ impl ManifoldExpr {
     pub fn from_term(term: &Term) -> Result<Self, ConversionError> {
         match term {
             Term::Struct { functor, args } => Self::from_struct(functor, args),
-            Term::ArithExpr { op, left, right } => Self::from_arith_expr(*op, left, right),
+            Term::InfixExpr { op, left, right } => Self::from_infix_expr(*op, left, right),
             Term::Var { name } => Err(ConversionError::UnboundVariable(name.clone())),
             Term::RangeVar { name, .. } => Err(ConversionError::UnboundVariable(name.clone())),
             _ => Err(ConversionError::UnknownPrimitive(format!("{:?}", term))),
         }
     }
 
-    /// 算術演算子をCAD操作として変換
+    /// 中置演算子をCAD操作として変換
     /// + -> union, - -> difference, * -> intersection
-    fn from_arith_expr(
+    fn from_infix_expr(
         op: ArithOp,
         left: &Term,
         right: &Term,

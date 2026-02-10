@@ -37,8 +37,8 @@ pub enum Term {
     Number {
         value: i64,
     },
-    /// 算術式: left op right
-    ArithExpr {
+    /// 中置演算子式: left op right (算術演算 or CSG演算)
+    InfixExpr {
         op: ArithOp,
         left: Box<Term>,
         right: Box<Term>,
@@ -74,7 +74,7 @@ impl fmt::Debug for Term {
                 Ok(())
             }
             Term::Number { value } => write!(f, "{}", value),
-            Term::ArithExpr { op, left, right } => {
+            Term::InfixExpr { op, left, right } => {
                 let op_str = match op {
                     ArithOp::Add => "+",
                     ArithOp::Sub => "-",
@@ -160,7 +160,7 @@ pub fn range_var(name: String, min: Option<Bound>, max: Option<Bound>) -> Term {
 }
 
 pub fn arith_expr(op: ArithOp, left: Term, right: Term) -> Term {
-    Term::ArithExpr {
+    Term::InfixExpr {
         op,
         left: Box::new(left),
         right: Box::new(right),
@@ -793,7 +793,7 @@ mod tests {
 
         match clause {
             Clause::Fact(term) => match &term {
-                Term::ArithExpr { op, left, right } => {
+                Term::InfixExpr { op, left, right } => {
                     assert_eq!(*op, ArithOp::Add);
                     // left should be translate(cube(10,20,30), 10, 0, 0)
                     match left.as_ref() {

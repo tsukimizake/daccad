@@ -244,7 +244,7 @@ impl ArithExpr {
                 max: *max,
             }),
             Term::Number { value } => Ok(ArithExpr::Num(*value)),
-            Term::ArithExpr { op, left, right } => {
+            Term::InfixExpr { op, left, right } => {
                 let left = ArithExpr::try_from_term(left)?;
                 let right = ArithExpr::try_from_term(right)?;
                 Ok(ArithExpr::BinOp {
