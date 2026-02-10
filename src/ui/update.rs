@@ -1,8 +1,7 @@
 use crate::events::{CadhrLangOutput, GeneratePreviewRequest, PreviewGenerated};
 use crate::ui::{
     CurrentFilePath, EditorText, ErrorMessage, NextRequestId, PendingPreviewStates, PreviewState,
-    PreviewTarget, PreviewTargets, SessionLoadContents, SessionPreviews, SessionSaveContents,
-    ThreeMfFileContents,
+    PreviewTarget, SessionLoadContents, SessionPreviews, SessionSaveContents, ThreeMfFileContents,
 };
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::RenderTarget;
@@ -19,7 +18,7 @@ use std::io::Cursor;
 pub(super) fn egui_ui(
     mut commands: Commands,
     mut contexts: EguiContexts,
-    mut preview_targets: ResMut<PreviewTargets>,
+    mut preview_query: Query<&mut PreviewTarget>,
     mut editor_text: ResMut<EditorText>,
     mut next_id: ResMut<NextRequestId>,
     mut ev_generate: MessageWriter<GeneratePreviewRequest>,
@@ -27,6 +26,8 @@ pub(super) fn egui_ui(
     current_file_path: Res<CurrentFilePath>,
     meshes: Res<Assets<Mesh>>,
 ) {
+    // Collect preview targets into a Vec for indexed access
+    let mut preview_targets: Vec<Mut<PreviewTarget>> = preview_query.iter_mut().collect();
     // Toolbar: add a new preview or reload existing
     if let Ok(ctx) = contexts.ctx_mut() {
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
@@ -39,7 +40,11 @@ pub(super) fn egui_ui(
                 }
                 if ui.button("Save Session").clicked() {
                     if let Some(ref path) = **current_file_path {
-                        save_session(path, &editor_text, &preview_targets);
+                        save_session(
+                            path,
+                            &editor_text,
+                            preview_targets.iter().map(|t| t.as_ref()),
+                        );
                     } else {
                         commands
                             .dialog()
@@ -75,13 +80,13 @@ pub(super) fn egui_ui(
                 }
                 if ui.button("Update Previes").clicked() {
                     // Re-render all previews with the current editor text
-                    for (i, t) in preview_targets.iter().enumerate() {
+                    for (i, target) in preview_targets.iter().enumerate() {
                         let id = **next_id;
                         **next_id += 1;
                         ev_generate.write(GeneratePreviewRequest {
                             request_id: id,
                             database: (**editor_text).clone(),
-                            query: t.query.clone(),
+                            query: target.query.clone(),
                             preview_index: Some(i),
                         });
                     }
@@ -94,10 +99,17 @@ pub(super) fn egui_ui(
                     if let Some(target) = preview_targets.first() {
                         if let Some(mesh) = meshes.get(&target.mesh_handle) {
                             if let Some(threemf_data) = bevy_mesh_to_threemf(mesh) {
+                                let file_name = current_file_path
+                                    .as_ref()
+                                    .as_ref()
+                                    .and_then(|p| p.file_name())
+                                    .and_then(|n| n.to_str())
+                                    .map(|s| format!("{}.3mf", s))
+                                    .unwrap_or_else(|| "export.3mf".to_string());
                                 commands
                                     .dialog()
                                     .add_filter("3MF", &["3mf"])
-                                    .set_file_name("export.3mf")
+                                    .set_file_name(file_name)
                                     .save_file::<ThreeMfFileContents>(threemf_data);
                             }
                         }
@@ -156,10 +168,10 @@ pub(super) fn egui_ui(
                                 "プレビューはまだありません。上の『Add Preview』を押してください。",
                             );
                         } else {
-                            for (i, t) in preview_targets.iter_mut().enumerate() {
+                            for (i, target) in preview_targets.iter_mut().enumerate() {
                                 if let Some((tex_id, size)) = preview_images.get(i) {
-                                    if preview_target_ui(ui, i, t, *tex_id, *size) {
-                                        updates_to_send.push((i, t.query.clone()));
+                                    if preview_target_ui(ui, i, target, *tex_id, *size) {
+                                        updates_to_send.push((i, target.query.clone()));
                                     }
                                 }
                                 ui.add_space(6.0);
@@ -189,13 +201,16 @@ pub(super) fn on_preview_generated(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
-    mut preview_targets: ResMut<PreviewTargets>,
+    mut preview_query: Query<&mut PreviewTarget>,
     mut pending_states: ResMut<PendingPreviewStates>,
 ) {
+    // Count existing previews for layer assignment
+    let existing_count = preview_query.iter().count();
+
     for ev in ev_generated.read() {
         // Check if this is an update to an existing preview
         if let Some(idx) = ev.preview_index {
-            if let Some(target) = preview_targets.get_mut(idx) {
+            if let Some(target) = preview_query.iter_mut().nth(idx) {
                 // Update the existing mesh asset
                 if let Some(mesh_asset) = meshes.get_mut(&target.mesh_handle) {
                     *mesh_asset = ev.mesh.clone();
@@ -233,7 +248,7 @@ pub(super) fn on_preview_generated(
         let rt_image = images.add(image);
 
         // Unique render layer per preview
-        let layer_idx = (preview_targets.len() as u8).saturating_add(1);
+        let layer_idx = (existing_count as u8).saturating_add(1);
         let layer_only = RenderLayers::layer(layer_idx as usize);
 
         // Calculate camera distance based on mesh bounds
@@ -280,7 +295,7 @@ pub(super) fn on_preview_generated(
 
         // Spawn root entity with all children
         let mut camera_entity = Entity::PLACEHOLDER;
-        let root_entity = commands
+        commands
             .spawn(Transform::default())
             .with_children(|parent| {
                 // Mesh
@@ -336,32 +351,31 @@ pub(super) fn on_preview_generated(
                     both_layers.clone(),
                 ));
             })
-            .id();
+            .insert({
+                // Restore zoom/rotate from pending states if available
+                let new_idx = existing_count;
+                let (zoom, rotate_x, rotate_y) = if let Some(state) = pending_states.get(new_idx) {
+                    (state.zoom, state.rotate_x, state.rotate_y)
+                } else {
+                    (10.0, 0.0, 0.0)
+                };
 
-        // Restore zoom/rotate from pending states if available
-        let new_idx = preview_targets.len();
-        let (zoom, rotate_x, rotate_y) = if let Some(state) = pending_states.get(new_idx) {
-            (state.zoom, state.rotate_x, state.rotate_y)
-        } else {
-            (10.0, 0.0, 0.0)
-        };
-
-        // Store in resource for UI display and transform updates
-        preview_targets.push(PreviewTarget {
-            mesh_handle: mesh_handle.clone(),
-            rt_image: rt_image.clone(),
-            rt_size,
-            root_entity,
-            camera_entity,
-            base_camera_distance: camera_distance,
-            zoom,
-            rotate_x,
-            rotate_y,
-            query: ev.query.clone(),
-        });
+                PreviewTarget {
+                    mesh_handle: mesh_handle.clone(),
+                    rt_image: rt_image.clone(),
+                    rt_size,
+                    camera_entity,
+                    base_camera_distance: camera_distance,
+                    zoom,
+                    rotate_x,
+                    rotate_y,
+                    query: ev.query.clone(),
+                }
+            });
 
         // Clear pending states once all previews are restored
-        if preview_targets.len() >= pending_states.len() && !pending_states.is_empty() {
+        let current_count = existing_count + 1;
+        if current_count >= pending_states.len() && !pending_states.is_empty() {
             pending_states.clear();
         }
     }
@@ -419,11 +433,11 @@ fn preview_target_ui(
 
 // Keep spawned preview entity rotations in sync with UI values
 pub(super) fn update_preview_transforms(
-    preview_targets: Res<PreviewTargets>,
-    mut q: Query<&mut Transform, With<Camera3d>>,
+    preview_query: Query<&PreviewTarget>,
+    mut camera_query: Query<&mut Transform, With<Camera3d>>,
 ) {
-    for target in preview_targets.iter() {
-        if let Ok(mut transform) = q.get_mut(target.camera_entity) {
+    for target in preview_query.iter() {
+        if let Ok(mut transform) = camera_query.get_mut(target.camera_entity) {
             let rx = target.rotate_x as f32;
             let ry = target.rotate_y as f32;
             let dist = target.base_camera_distance * (20.0 / target.zoom);
@@ -456,7 +470,11 @@ pub(super) fn handle_cadhr_lang_output(
     }
 }
 
-fn save_session(dir: &std::path::Path, editor_text: &EditorText, preview_targets: &PreviewTargets) {
+fn save_session<'a>(
+    dir: &std::path::Path,
+    editor_text: &EditorText,
+    preview_targets: impl Iterator<Item = &'a PreviewTarget>,
+) {
     // Remove the marker file if it exists (from save_file dialog)
     let _ = std::fs::remove_file(dir);
 
@@ -475,7 +493,6 @@ fn save_session(dir: &std::path::Path, editor_text: &EditorText, preview_targets
 
     let previews = SessionPreviews {
         previews: preview_targets
-            .iter()
             .map(|t| PreviewState {
                 query: t.query.clone(),
                 zoom: t.zoom,
@@ -510,11 +527,11 @@ pub(super) fn session_saved(
     mut ev_saved: MessageReader<DialogFileSaved<SessionSaveContents>>,
     mut current_file_path: ResMut<CurrentFilePath>,
     editor_text: Res<EditorText>,
-    preview_targets: Res<PreviewTargets>,
+    preview_query: Query<&PreviewTarget>,
 ) {
     for ev in ev_saved.read() {
         if ev.result.is_ok() {
-            save_session(&ev.path, &editor_text, &preview_targets);
+            save_session(&ev.path, &editor_text, preview_query.iter());
             **current_file_path = Some(ev.path.clone());
         }
     }
@@ -525,7 +542,7 @@ pub(super) fn session_loaded(
     mut ev_picked: MessageReader<DialogDirectoryPicked<SessionLoadContents>>,
     mut editor_text: ResMut<EditorText>,
     mut current_file_path: ResMut<CurrentFilePath>,
-    mut preview_targets: ResMut<PreviewTargets>,
+    preview_query: Query<Entity, With<PreviewTarget>>,
     mut ev_generate: MessageWriter<GeneratePreviewRequest>,
     mut next_id: ResMut<NextRequestId>,
     mut pending_states: ResMut<PendingPreviewStates>,
@@ -535,13 +552,10 @@ pub(super) fn session_loaded(
             **editor_text = db_content;
             **current_file_path = Some(ev.path.clone());
 
-            // Despawn all entities from existing previews (despawn removes children recursively in Bevy 0.16+)
-            for target in preview_targets.iter() {
-                commands.entity(target.root_entity).despawn();
+            // Despawn all preview root entities (children are automatically removed)
+            for entity in preview_query.iter() {
+                commands.entity(entity).despawn();
             }
-
-            // Clear existing previews
-            preview_targets.clear();
 
             // Store pending states to restore zoom/rotate after preview generation
             **pending_states = previews.previews.clone();

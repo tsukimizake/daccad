@@ -27,6 +27,21 @@ pub struct SessionPreviews {
     pub previews: Vec<PreviewState>,
 }
 
+/// Preview target data stored as a component on the root entity.
+/// When this entity is despawned, all children are automatically removed.
+#[derive(Component, Clone)]
+pub struct PreviewTarget {
+    pub mesh_handle: Handle<Mesh>,
+    pub rt_image: Handle<Image>,
+    pub rt_size: UVec2,
+    pub camera_entity: Entity,
+    pub base_camera_distance: f32,
+    pub zoom: f32,
+    pub rotate_x: f64,
+    pub rotate_y: f64,
+    pub query: String,
+}
+
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         use bevy_egui::{EguiPlugin, EguiPrimaryContextPass};
@@ -55,30 +70,12 @@ impl Plugin for UiPlugin {
                 ),
             )
             .add_systems(Update, (session_saved, session_loaded, threemf_saved))
-            .insert_resource(PreviewTargets::default())
             .insert_resource(EditorText("main :- cube(10, 20, 30).".to_string()))
             .insert_resource(NextRequestId::default())
             .insert_resource(ErrorMessage::default())
             .insert_resource(CurrentFilePath::default())
             .insert_resource(PendingPreviewStates::default());
     }
-}
-
-#[derive(Resource, Clone, Default, Deref, DerefMut)]
-struct PreviewTargets(pub Vec<PreviewTarget>);
-
-#[derive(Clone)]
-struct PreviewTarget {
-    pub mesh_handle: Handle<Mesh>,
-    pub rt_image: Handle<Image>,
-    pub rt_size: UVec2,
-    pub root_entity: Entity,        // Parent entity; despawn_recursive removes all children
-    pub camera_entity: Entity,      // Needed for transform updates
-    pub base_camera_distance: f32,  // calculated from mesh size
-    pub zoom: f32,                  // 1-100, default 10
-    pub rotate_x: f64,
-    pub rotate_y: f64,
-    pub query: String, // cadhr-lang query string to generate the preview.
 }
 
 #[derive(Resource, Default, Clone, Deref, DerefMut)]
