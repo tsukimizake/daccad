@@ -1,14 +1,15 @@
 use crate::events::{CadhrLangOutput, GeneratePreviewRequest, PreviewGenerated};
 use crate::ui::{
-    CurrentFilePath, EditorText, ErrorMessage, NextRequestId, PreviewTarget, PreviewTargets,
-    CadhrLangFileContents, ThreeMfFileContents,
+    CurrentFilePath, EditorText, ErrorMessage, NextRequestId, PendingPreviewStates, PreviewState,
+    PreviewTarget, PreviewTargets, SessionLoadContents, SessionPreviews, SessionSaveContents,
+    ThreeMfFileContents,
 };
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::RenderTarget;
 use bevy::camera::primitives::MeshAabb;
 use bevy::camera::visibility::RenderLayers;
-use bevy::prelude::*;
 use bevy::mesh::{Indices, VertexAttributeValues};
+use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use bevy_egui::{EguiContexts, egui};
 use bevy_file_dialog::prelude::*;
@@ -30,37 +31,33 @@ pub(super) fn egui_ui(
     if let Ok(ctx) = contexts.ctx_mut() {
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                // File operations
-                if ui.button("Open").clicked() {
+                // Session operations
+                if ui.button("Open Session").clicked() {
                     commands
                         .dialog()
-                        .add_filter("CadhrLang", &["cad", "cadhr"])
-                        .add_filter("All", &["*"])
-                        .load_file::<CadhrLangFileContents>();
+                        .pick_directory_path::<SessionLoadContents>();
                 }
-                if ui.button("Save").clicked() {
+                if ui.button("Save Session").clicked() {
                     if let Some(ref path) = **current_file_path {
-                        let _ = std::fs::write(path, &**editor_text);
+                        save_session(path, &editor_text, &preview_targets);
                     } else {
                         commands
                             .dialog()
-                            .add_filter("CadhrLang", &["cad", "cadhr"])
-                            .set_file_name("untitled.cadhr")
-                            .save_file::<CadhrLangFileContents>(editor_text.as_bytes().to_vec());
+                            .set_file_name("untitled")
+                            .save_file::<SessionSaveContents>(vec![]);
                     }
                 }
-                if ui.button("Save As").clicked() {
+                if ui.button("Save Session As").clicked() {
                     let file_name = current_file_path
                         .as_ref()
                         .as_ref()
                         .and_then(|p| p.file_name())
                         .and_then(|n| n.to_str())
-                        .unwrap_or("untitled.cadhr");
+                        .unwrap_or("untitled");
                     commands
                         .dialog()
-                        .add_filter("CadhrLang", &["cad", "cadhr"])
                         .set_file_name(file_name)
-                        .save_file::<CadhrLangFileContents>(editor_text.as_bytes().to_vec());
+                        .save_file::<SessionSaveContents>(vec![]);
                 }
 
                 ui.separator();
@@ -76,7 +73,7 @@ pub(super) fn egui_ui(
                         preview_index: None,
                     });
                 }
-                if ui.button("Reload").clicked() {
+                if ui.button("Update Previes").clicked() {
                     // Re-render all previews with the current editor text
                     for (i, t) in preview_targets.iter().enumerate() {
                         let id = **next_id;
@@ -193,6 +190,7 @@ pub(super) fn on_preview_generated(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
     mut preview_targets: ResMut<PreviewTargets>,
+    mut pending_states: ResMut<PendingPreviewStates>,
 ) {
     for ev in ev_generated.read() {
         // Check if this is an update to an existing preview
@@ -214,15 +212,6 @@ pub(super) fn on_preview_generated(
             base_color: Color::srgb(0.7, 0.2, 0.2),
             ..default()
         });
-
-        // Spawn the visible mesh entity at origin
-        let entity = commands
-            .spawn((
-                Mesh3d(mesh_handle.clone()),
-                MeshMaterial3d(material),
-                Transform::from_xyz(0.0, 0.0, 0.0),
-            ))
-            .id();
 
         // Create an offscreen render target
         let rt_size = UVec2::new(512, 384);
@@ -265,87 +254,116 @@ pub(super) fn on_preview_generated(
             camera_distance,
         );
 
-        // Offscreen camera rendering only that layer
-        let camera_entity = commands
-            .spawn((
-                Camera3d::default(),
-                Camera::default(),
-                RenderTarget::Image(rt_image.clone().into()),
-                Transform::from_xyz(cam_pos.x, cam_pos.y, cam_pos.z)
-                    .looking_at(Vec3::ZERO, Vec3::Y),
-                layer_only.clone(),
-            ))
-            .id();
-
-        // Light for the offscreen layer
-        commands.spawn((
-            DirectionalLight::default(),
-            Transform::from_xyz(4.0, 8.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
-            layer_only.clone(),
-        ));
-
         // Make the mesh visible to both default (0) and offscreen layer
         let both_layers = RenderLayers::from_layers(&[0, layer_idx as usize]);
-        commands.entity(entity).insert(both_layers.clone());
 
         // Spawn XYZ axis indicators
         let axis_length = 20.0;
         let axis_radius = 0.1;
         let axis_cylinder = meshes.add(Cylinder::new(axis_radius, axis_length));
 
-        // X axis (red)
         let x_material = materials.add(StandardMaterial {
             base_color: Color::srgb(1.0, 0.0, 0.0),
             unlit: true,
             ..default()
         });
-        commands.spawn((
-            Mesh3d(axis_cylinder.clone()),
-            MeshMaterial3d(x_material),
-            Transform::from_xyz(axis_length / 2.0, 0.0, 0.0)
-                .with_rotation(Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2)),
-            both_layers.clone(),
-        ));
-
-        // Y axis (green)
         let y_material = materials.add(StandardMaterial {
             base_color: Color::srgb(0.0, 1.0, 0.0),
             unlit: true,
             ..default()
         });
-        commands.spawn((
-            Mesh3d(axis_cylinder.clone()),
-            MeshMaterial3d(y_material),
-            Transform::from_xyz(0.0, axis_length / 2.0, 0.0),
-            both_layers.clone(),
-        ));
-
-        // Z axis (blue)
         let z_material = materials.add(StandardMaterial {
             base_color: Color::srgb(0.0, 0.0, 1.0),
             unlit: true,
             ..default()
         });
-        commands.spawn((
-            Mesh3d(axis_cylinder.clone()),
-            MeshMaterial3d(z_material),
-            Transform::from_xyz(0.0, 0.0, axis_length / 2.0)
-                .with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)),
-            both_layers.clone(),
-        ));
+
+        // Spawn root entity with all children
+        let mut camera_entity = Entity::PLACEHOLDER;
+        let root_entity = commands
+            .spawn(Transform::default())
+            .with_children(|parent| {
+                // Mesh
+                parent.spawn((
+                    Mesh3d(mesh_handle.clone()),
+                    MeshMaterial3d(material),
+                    Transform::from_xyz(0.0, 0.0, 0.0),
+                    both_layers.clone(),
+                ));
+
+                // Camera
+                camera_entity = parent
+                    .spawn((
+                        Camera3d::default(),
+                        Camera::default(),
+                        RenderTarget::Image(rt_image.clone().into()),
+                        Transform::from_xyz(cam_pos.x, cam_pos.y, cam_pos.z)
+                            .looking_at(Vec3::ZERO, Vec3::Y),
+                        layer_only.clone(),
+                    ))
+                    .id();
+
+                // Light
+                parent.spawn((
+                    DirectionalLight::default(),
+                    Transform::from_xyz(4.0, 8.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
+                    layer_only.clone(),
+                ));
+
+                // X axis (red)
+                parent.spawn((
+                    Mesh3d(axis_cylinder.clone()),
+                    MeshMaterial3d(x_material),
+                    Transform::from_xyz(axis_length / 2.0, 0.0, 0.0)
+                        .with_rotation(Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2)),
+                    both_layers.clone(),
+                ));
+
+                // Y axis (green)
+                parent.spawn((
+                    Mesh3d(axis_cylinder.clone()),
+                    MeshMaterial3d(y_material),
+                    Transform::from_xyz(0.0, axis_length / 2.0, 0.0),
+                    both_layers.clone(),
+                ));
+
+                // Z axis (blue)
+                parent.spawn((
+                    Mesh3d(axis_cylinder.clone()),
+                    MeshMaterial3d(z_material),
+                    Transform::from_xyz(0.0, 0.0, axis_length / 2.0)
+                        .with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)),
+                    both_layers.clone(),
+                ));
+            })
+            .id();
+
+        // Restore zoom/rotate from pending states if available
+        let new_idx = preview_targets.len();
+        let (zoom, rotate_x, rotate_y) = if let Some(state) = pending_states.get(new_idx) {
+            (state.zoom, state.rotate_x, state.rotate_y)
+        } else {
+            (10.0, 0.0, 0.0)
+        };
 
         // Store in resource for UI display and transform updates
         preview_targets.push(PreviewTarget {
             mesh_handle: mesh_handle.clone(),
             rt_image: rt_image.clone(),
             rt_size,
+            root_entity,
             camera_entity,
             base_camera_distance: camera_distance,
-            zoom: 10.0,
-            rotate_x: 0.0,
-            rotate_y: 0.0,
+            zoom,
+            rotate_x,
+            rotate_y,
             query: ev.query.clone(),
         });
+
+        // Clear pending states once all previews are restored
+        if preview_targets.len() >= pending_states.len() && !pending_states.is_empty() {
+            pending_states.clear();
+        }
     }
 }
 
@@ -370,7 +388,7 @@ fn preview_target_ui(
             ui.horizontal(|ui| {
                 ui.label("?-");
                 ui.text_edit_singleline(&mut target.query);
-                if ui.button("Update").clicked() {
+                if ui.button("Update Preview").clicked() {
                     update_clicked = true;
                 }
             });
@@ -438,33 +456,113 @@ pub(super) fn handle_cadhr_lang_output(
     }
 }
 
-pub(super) fn file_loaded(
-    mut ev_loaded: MessageReader<DialogFileLoaded<CadhrLangFileContents>>,
-    mut editor_text: ResMut<EditorText>,
-    mut current_file_path: ResMut<CurrentFilePath>,
-) {
-    for ev in ev_loaded.read() {
-        if let Ok(content) = std::str::from_utf8(&ev.contents) {
-            **editor_text = content.to_string();
-            **current_file_path = Some(ev.path.clone());
+fn save_session(dir: &std::path::Path, editor_text: &EditorText, preview_targets: &PreviewTargets) {
+    // Remove the marker file if it exists (from save_file dialog)
+    let _ = std::fs::remove_file(dir);
+
+    if let Err(e) = std::fs::create_dir_all(dir) {
+        bevy::log::error!("Failed to create session directory: {:?}", e);
+        return;
+    }
+
+    let db_path = dir.join("db.cadhr");
+    let previews_path = dir.join("previews.json");
+
+    if let Err(e) = std::fs::write(&db_path, &**editor_text) {
+        bevy::log::error!("Failed to save db file: {:?}", e);
+        return;
+    }
+
+    let previews = SessionPreviews {
+        previews: preview_targets
+            .iter()
+            .map(|t| PreviewState {
+                query: t.query.clone(),
+                zoom: t.zoom,
+                rotate_x: t.rotate_x,
+                rotate_y: t.rotate_y,
+            })
+            .collect(),
+    };
+
+    match serde_json::to_string_pretty(&previews) {
+        Ok(json) => {
+            if let Err(e) = std::fs::write(&previews_path, json) {
+                bevy::log::error!("Failed to save previews.json: {:?}", e);
+            }
         }
+        Err(e) => bevy::log::error!("Failed to serialize previews: {:?}", e),
     }
 }
 
-pub(super) fn file_saved(
-    mut ev_saved: MessageReader<DialogFileSaved<CadhrLangFileContents>>,
+fn load_session(dir: &std::path::Path) -> Option<(String, SessionPreviews)> {
+    let db_path = dir.join("db.cadhr");
+    let previews_path = dir.join("previews.json");
+
+    let db_content = std::fs::read_to_string(&db_path).ok()?;
+    let previews_json = std::fs::read_to_string(&previews_path).ok()?;
+    let previews: SessionPreviews = serde_json::from_str(&previews_json).ok()?;
+
+    Some((db_content, previews))
+}
+
+pub(super) fn session_saved(
+    mut ev_saved: MessageReader<DialogFileSaved<SessionSaveContents>>,
     mut current_file_path: ResMut<CurrentFilePath>,
+    editor_text: Res<EditorText>,
+    preview_targets: Res<PreviewTargets>,
 ) {
     for ev in ev_saved.read() {
         if ev.result.is_ok() {
+            save_session(&ev.path, &editor_text, &preview_targets);
             **current_file_path = Some(ev.path.clone());
         }
     }
 }
 
-pub(super) fn threemf_saved(
-    mut ev_saved: MessageReader<DialogFileSaved<ThreeMfFileContents>>,
+pub(super) fn session_loaded(
+    mut commands: Commands,
+    mut ev_picked: MessageReader<DialogDirectoryPicked<SessionLoadContents>>,
+    mut editor_text: ResMut<EditorText>,
+    mut current_file_path: ResMut<CurrentFilePath>,
+    mut preview_targets: ResMut<PreviewTargets>,
+    mut ev_generate: MessageWriter<GeneratePreviewRequest>,
+    mut next_id: ResMut<NextRequestId>,
+    mut pending_states: ResMut<PendingPreviewStates>,
 ) {
+    for ev in ev_picked.read() {
+        if let Some((db_content, previews)) = load_session(&ev.path) {
+            **editor_text = db_content;
+            **current_file_path = Some(ev.path.clone());
+
+            // Despawn all entities from existing previews (despawn removes children recursively in Bevy 0.16+)
+            for target in preview_targets.iter() {
+                commands.entity(target.root_entity).despawn();
+            }
+
+            // Clear existing previews
+            preview_targets.clear();
+
+            // Store pending states to restore zoom/rotate after preview generation
+            **pending_states = previews.previews.clone();
+
+            for preview_state in previews.previews {
+                let id = **next_id;
+                **next_id += 1;
+                ev_generate.write(GeneratePreviewRequest {
+                    request_id: id,
+                    database: (**editor_text).clone(),
+                    query: preview_state.query,
+                    preview_index: None,
+                });
+            }
+        } else {
+            bevy::log::error!("Failed to load session from {:?}", ev.path);
+        }
+    }
+}
+
+pub(super) fn threemf_saved(mut ev_saved: MessageReader<DialogFileSaved<ThreeMfFileContents>>) {
     for ev in ev_saved.read() {
         if ev.result.is_ok() {
             bevy::log::info!("3MF file saved to: {:?}", ev.path);
@@ -509,7 +607,9 @@ fn bevy_mesh_to_threemf(mesh: &Mesh) -> Option<Vec<u8>> {
 
     let threemf_mesh = threemf::model::Mesh {
         vertices: threemf::model::Vertices { vertex: vertices },
-        triangles: threemf::model::Triangles { triangle: triangles },
+        triangles: threemf::model::Triangles {
+            triangle: triangles,
+        },
     };
 
     // Write to buffer
