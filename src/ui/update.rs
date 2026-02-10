@@ -296,7 +296,7 @@ pub(super) fn on_preview_generated(
         // Spawn root entity with all children
         let mut camera_entity = Entity::PLACEHOLDER;
         commands
-            .spawn(Transform::default())
+            .spawn((Transform::default(), Visibility::default()))
             .with_children(|parent| {
                 // Mesh
                 parent.spawn((
