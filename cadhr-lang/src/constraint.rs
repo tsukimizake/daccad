@@ -28,7 +28,6 @@ pub enum ArithConstraint {
 
 impl SolverState {
     pub fn new(expr_eqs: Vec<ArithEq>) -> Self {
-        println!("eqs: {:?}", expr_eqs);
         let constraints = expr_eqs.into_iter().map(|_eq| todo!()).collect();
         Self {
             constraints,
