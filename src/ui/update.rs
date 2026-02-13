@@ -92,29 +92,6 @@ pub(super) fn egui_ui(
                     }
                 }
 
-                ui.separator();
-
-                // Export 3MF button - exports the first preview's mesh
-                if ui.button("Export 3MF").clicked() {
-                    if let Some(target) = preview_targets.first() {
-                        if let Some(mesh) = meshes.get(&target.mesh_handle) {
-                            if let Some(threemf_data) = bevy_mesh_to_threemf(mesh) {
-                                let file_name = current_file_path
-                                    .as_ref()
-                                    .as_ref()
-                                    .and_then(|p| p.file_name())
-                                    .and_then(|n| n.to_str())
-                                    .map(|s| format!("{}.3mf", s))
-                                    .unwrap_or_else(|| "export.3mf".to_string());
-                                commands
-                                    .dialog()
-                                    .add_filter("3MF", &["3mf"])
-                                    .set_file_name(file_name)
-                                    .save_file::<ThreeMfFileContents>(threemf_data);
-                            }
-                        }
-                    }
-                }
             });
         });
     }
@@ -158,8 +135,9 @@ pub(super) fn egui_ui(
 
                 // Right half: show and edit previews
                 let right = &mut columns[1];
-                // Collect update requests to send after iterating
+                // Collect actions to process after iterating
                 let mut updates_to_send: Vec<(usize, String)> = Vec::new();
+                let mut exports_to_send: Vec<usize> = Vec::new();
                 egui::ScrollArea::vertical()
                     .auto_shrink([false; 2])
                     .show(right, |ui| {
@@ -170,8 +148,14 @@ pub(super) fn egui_ui(
                         } else {
                             for (i, target) in preview_targets.iter_mut().enumerate() {
                                 if let Some((tex_id, size)) = preview_images.get(i) {
-                                    if preview_target_ui(ui, i, target, *tex_id, *size) {
-                                        updates_to_send.push((i, target.query.clone()));
+                                    match preview_target_ui(ui, i, target, *tex_id, *size) {
+                                        PreviewAction::Update => {
+                                            updates_to_send.push((i, target.query.clone()));
+                                        }
+                                        PreviewAction::Export3MF => {
+                                            exports_to_send.push(i);
+                                        }
+                                        PreviewAction::None => {}
                                     }
                                 }
                                 ui.add_space(6.0);
@@ -188,6 +172,27 @@ pub(super) fn egui_ui(
                         query,
                         preview_index: Some(idx),
                     });
+                }
+                // Handle export requests
+                for idx in exports_to_send {
+                    if let Some(target) = preview_targets.get(idx) {
+                        if let Some(mesh) = meshes.get(&target.mesh_handle) {
+                            if let Some(threemf_data) = bevy_mesh_to_threemf(mesh) {
+                                let file_name = current_file_path
+                                    .as_ref()
+                                    .as_ref()
+                                    .and_then(|p| p.file_stem())
+                                    .and_then(|n| n.to_str())
+                                    .map(|s| format!("{}_preview{}.3mf", s, idx + 1))
+                                    .unwrap_or_else(|| format!("preview{}.3mf", idx + 1));
+                                commands
+                                    .dialog()
+                                    .add_filter("3MF", &["3mf"])
+                                    .set_file_name(file_name)
+                                    .save_file::<ThreeMfFileContents>(threemf_data);
+                            }
+                        }
+                    }
                 }
             });
         });
@@ -383,15 +388,22 @@ pub(super) fn on_preview_generated(
 
 // Pending previews and polling system are no longer needed with bevy-async-ecs
 
-/// Returns true if the Update button was clicked
+/// UI action returned from preview_target_ui
+enum PreviewAction {
+    None,
+    Update,
+    Export3MF,
+}
+
+/// Returns the action requested by the user
 fn preview_target_ui(
     ui: &mut egui::Ui,
     index: usize,
     target: &mut PreviewTarget,
     tex_id: egui::TextureId,
     size: UVec2,
-) -> bool {
-    let mut update_clicked = false;
+) -> PreviewAction {
+    let mut action = PreviewAction::None;
     egui::Frame::default()
         .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(120)))
         .corner_radius(egui::CornerRadius::same(6))
@@ -403,7 +415,10 @@ fn preview_target_ui(
                 ui.label("?-");
                 ui.text_edit_singleline(&mut target.query);
                 if ui.button("Update Preview").clicked() {
-                    update_clicked = true;
+                    action = PreviewAction::Update;
+                }
+                if ui.button("Export 3MF").clicked() {
+                    action = PreviewAction::Export3MF;
                 }
             });
             ui.add_space(4.0);
@@ -428,7 +443,7 @@ fn preview_target_ui(
             let h = w * aspect;
             ui.add(egui::Image::from_texture((tex_id, egui::vec2(w, h))));
         });
-    update_clicked
+    action
 }
 
 // Keep spawned preview entity rotations in sync with UI values

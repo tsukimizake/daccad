@@ -19,8 +19,12 @@ opt-level = 1
 [profile.dev.package."*"]
 opt-level = 3
 
+[features]
+default = ["manifold"]
+manifold = ["dep:manifold-rs"]
+
 [dependencies]
 nom = "8.0.0"
-manifold-rs = "0.6.4"
+manifold-rs = { version = "0.6.4", optional = true }
 strum = "0.27"
 strum_macros = "0.27"

@@ -14,6 +14,8 @@ opt-level = 3
 [workspace]
 members = [
     "cadhr-lang",
+    "cadhr-lsp",
+    "tree-sitter-cadhr-lang",
 ]
 
 [dependencies]

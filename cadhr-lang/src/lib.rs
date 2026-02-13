@@ -1,4 +1,5 @@
 pub mod constraint;
+#[cfg(feature = "manifold")]
 pub mod manifold_bridge;
 pub mod mock;
 pub mod parse;
