@@ -268,10 +268,11 @@ pub(super) fn on_preview_generated(
         } else {
             5.0
         };
+        // Camera position with Z as up axis (viewing from diagonal)
         let cam_pos = Vec3::new(
-            camera_distance * 0.5,
-            camera_distance * 0.5,
             camera_distance,
+            camera_distance * 0.5,
+            camera_distance * 0.5,
         );
 
         // Make the mesh visible to both default (0) and offscreen layer
@@ -318,7 +319,7 @@ pub(super) fn on_preview_generated(
                         Camera::default(),
                         RenderTarget::Image(rt_image.clone().into()),
                         Transform::from_xyz(cam_pos.x, cam_pos.y, cam_pos.z)
-                            .looking_at(Vec3::ZERO, Vec3::Y),
+                            .looking_at(Vec3::ZERO, Vec3::Z),
                         layer_only.clone(),
                     ))
                     .id();
@@ -326,7 +327,7 @@ pub(super) fn on_preview_generated(
                 // Light
                 parent.spawn((
                     DirectionalLight::default(),
-                    Transform::from_xyz(4.0, 8.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
+                    Transform::from_xyz(4.0, 4.0, 8.0).looking_at(Vec3::ZERO, Vec3::Z),
                     layer_only.clone(),
                 ));
 
@@ -447,6 +448,7 @@ fn preview_target_ui(
 }
 
 // Keep spawned preview entity rotations in sync with UI values
+// Camera is oriented so that XY is the horizontal plane and Z is up
 pub(super) fn update_preview_transforms(
     preview_query: Query<&PreviewTarget>,
     mut camera_query: Query<&mut Transform, With<Camera3d>>,
@@ -457,13 +459,20 @@ pub(super) fn update_preview_transforms(
             let ry = target.rotate_y as f32;
             let dist = target.base_camera_distance * (20.0 / target.zoom);
 
-            // Orbit camera around origin
-            let x = dist * ry.sin() * rx.cos();
-            let y = dist * rx.sin();
-            let z = dist * ry.cos() * rx.cos();
+            // Orbit camera around origin with Z as up axis
+            // rx controls elevation (angle from XY plane)
+            // ry controls azimuth (rotation around Z axis)
+            let x = dist * ry.cos() * rx.cos();
+            let y = dist * ry.sin() * rx.cos();
+            let z = dist * rx.sin();
 
             transform.translation = Vec3::new(x, y, z);
-            *transform = transform.looking_at(Vec3::ZERO, Vec3::Y);
+
+            // Build rotation using quaternions to avoid gimbal lock issues
+            // First rotate around Z axis (azimuth), then around the local X axis (elevation)
+            let rotation = Quat::from_rotation_z(ry + std::f32::consts::PI)
+                * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2 - rx);
+            transform.rotation = rotation;
         }
     }
 }
