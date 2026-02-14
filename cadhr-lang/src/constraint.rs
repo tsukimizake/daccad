@@ -15,27 +15,28 @@ pub struct SolverState {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ArithVar(String);
 
-// ArithExprより制約強く
+// とりあえず線形な制約のみ
 #[derive(Debug, Clone, PartialEq)]
 pub enum ArithConstraint {
     Eq(ArithVar, ArithVar),
-    Plus(ArithVar, ArithVar, i64),   // X = Y + c
-    Mul(ArithVar, ArithVar, i64),    // X = Y * c
-    Div(ArithVar, ArithVar, i64),    // X = Y / c
-    Minus(ArithVar, i64, ArithVar),  // X = c - Y
-    DivRev(ArithVar, i64, ArithVar), // X = c / Y
+    Plus(ArithVar, ArithVar, i64),  // X = Y + c
+    Mul(ArithVar, ArithVar, i64),   // X = Y * c
+    Minus(ArithVar, i64, ArithVar), // X = c - Y
 }
 
 impl SolverState {
     pub fn new(expr_eqs: Vec<ArithEq>) -> Self {
-        let constraints = expr_eqs.into_iter().map(|_eq| todo!()).collect();
+        let constraints = expr_eqs
+            .into_iter()
+            .flat_map(|eq| Self::extract_constraints(&eq))
+            .collect();
         Self {
             constraints,
             ..Self::default()
         }
     }
 
-    fn extract_constraints(eq: ArithEq) -> Vec<ArithConstraint> {
+    fn extract_constraints(eq: &ArithEq) -> Vec<ArithConstraint> {
         match eq {
             ArithEq { left, right } => {
                 todo!()
