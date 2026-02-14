@@ -12,11 +12,11 @@ fn main() {
     let mut db_clauses = database(db_str).expect("Failed to parse database");
     let (_, query_terms) = query(query_str).expect("Failed to parse query");
 
-    info!("Database clauses: {:#?}", db_clauses);
-    info!("Query terms: {:?}", query_terms);
+    println!("Database clauses: {:#?}", db_clauses);
+    println!("Query terms: {:?}", query_terms);
 
     // Execute query
     let result = execute(&mut db_clauses, query_terms);
 
-    info!("Execution result: {:?}", result);
+    println!("Execution result: {:?}", result);
 }
