@@ -215,11 +215,7 @@ impl ManifoldExpr {
 
     /// 中置演算子をCAD操作として変換
     /// + -> union, - -> difference, * -> intersection
-    fn from_infix_expr(
-        op: ArithOp,
-        left: &Term,
-        right: &Term,
-    ) -> Result<Self, ConversionError> {
+    fn from_infix_expr(op: ArithOp, left: &Term, right: &Term) -> Result<Self, ConversionError> {
         let left_expr = Box::new(Self::from_term(left)?);
         let right_expr = Box::new(Self::from_term(right)?);
 
@@ -273,19 +269,22 @@ impl ManifoldExpr {
             BuiltinFunctor::Tetrahedron => Err(a.arity_error("0")),
 
             // CSG演算
-            BuiltinFunctor::Union if a.len() == 2 => {
-                Ok(ManifoldExpr::Union(Box::new(a.term(0)?), Box::new(a.term(1)?)))
-            }
+            BuiltinFunctor::Union if a.len() == 2 => Ok(ManifoldExpr::Union(
+                Box::new(a.term(0)?),
+                Box::new(a.term(1)?),
+            )),
             BuiltinFunctor::Union => Err(a.arity_error("2")),
 
-            BuiltinFunctor::Difference if a.len() == 2 => {
-                Ok(ManifoldExpr::Difference(Box::new(a.term(0)?), Box::new(a.term(1)?)))
-            }
+            BuiltinFunctor::Difference if a.len() == 2 => Ok(ManifoldExpr::Difference(
+                Box::new(a.term(0)?),
+                Box::new(a.term(1)?),
+            )),
             BuiltinFunctor::Difference => Err(a.arity_error("2")),
 
-            BuiltinFunctor::Intersection if a.len() == 2 => {
-                Ok(ManifoldExpr::Intersection(Box::new(a.term(0)?), Box::new(a.term(1)?)))
-            }
+            BuiltinFunctor::Intersection if a.len() == 2 => Ok(ManifoldExpr::Intersection(
+                Box::new(a.term(0)?),
+                Box::new(a.term(1)?),
+            )),
             BuiltinFunctor::Intersection => Err(a.arity_error("2")),
 
             // 変形
@@ -498,8 +497,8 @@ mod tests {
 
     #[test]
     fn test_operator_union() {
-        use crate::parse::arith_expr;
         use crate::parse::ArithOp;
+        use crate::parse::arith_expr;
 
         // cube(1,1,1) + sphere(1) -> union
         let cube = struc("cube".into(), vec![number(1), number(1), number(1)]);
@@ -512,8 +511,8 @@ mod tests {
 
     #[test]
     fn test_operator_difference() {
-        use crate::parse::arith_expr;
         use crate::parse::ArithOp;
+        use crate::parse::arith_expr;
 
         // cube(1,1,1) - sphere(1) -> difference
         let cube = struc("cube".into(), vec![number(1), number(1), number(1)]);
@@ -526,8 +525,8 @@ mod tests {
 
     #[test]
     fn test_operator_intersection() {
-        use crate::parse::arith_expr;
         use crate::parse::ArithOp;
+        use crate::parse::arith_expr;
 
         // cube(1,1,1) * sphere(1) -> intersection
         let cube = struc("cube".into(), vec![number(1), number(1), number(1)]);
@@ -540,8 +539,8 @@ mod tests {
 
     #[test]
     fn test_operator_nested() {
-        use crate::parse::arith_expr;
         use crate::parse::ArithOp;
+        use crate::parse::arith_expr;
 
         // (cube(1,1,1) + sphere(1)) - cylinder(1,2)
         let cube = struc("cube".into(), vec![number(1), number(1), number(1)]);
@@ -562,8 +561,8 @@ mod tests {
 
     #[test]
     fn test_operator_division_error() {
-        use crate::parse::arith_expr;
         use crate::parse::ArithOp;
+        use crate::parse::arith_expr;
 
         // cube(1,1,1) / sphere(1) -> error
         let cube = struc("cube".into(), vec![number(1), number(1), number(1)]);

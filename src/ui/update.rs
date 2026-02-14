@@ -14,6 +14,11 @@ use bevy_egui::{EguiContexts, egui};
 use bevy_file_dialog::prelude::*;
 use std::io::Cursor;
 
+const MAX_CAMERA_PITCH: f64 = std::f64::consts::FRAC_PI_2 - 0.001;
+const MIN_CAMERA_PITCH: f64 = -MAX_CAMERA_PITCH;
+const MAX_CAMERA_YAW: f64 = std::f64::consts::PI - 0.001;
+const MIN_CAMERA_YAW: f64 = -MAX_CAMERA_YAW;
+
 // egui UI: add previews dynamically and render all existing previews
 pub(super) fn egui_ui(
     mut commands: Commands,
@@ -91,7 +96,6 @@ pub(super) fn egui_ui(
                         });
                     }
                 }
-
             });
         });
     }
@@ -424,10 +428,20 @@ fn preview_target_ui(
             ui.add_space(4.0);
             // Camera controls (orbit and zoom)
             ui.horizontal(|ui| {
+                target.rotate_x = target.rotate_x.clamp(MIN_CAMERA_PITCH, MAX_CAMERA_PITCH);
+                target.rotate_y = target.rotate_y.clamp(MIN_CAMERA_YAW, MAX_CAMERA_YAW);
                 ui.label("Rotate X:");
-                ui.add(egui::DragValue::new(&mut target.rotate_x).speed(0.01));
+                ui.add(
+                    egui::DragValue::new(&mut target.rotate_x)
+                        .speed(0.01)
+                        .range(MIN_CAMERA_PITCH..=MAX_CAMERA_PITCH),
+                );
                 ui.label("Rotate Y:");
-                ui.add(egui::DragValue::new(&mut target.rotate_y).speed(0.01));
+                ui.add(
+                    egui::DragValue::new(&mut target.rotate_y)
+                        .speed(0.01)
+                        .range(MIN_CAMERA_YAW..=MAX_CAMERA_YAW),
+                );
                 ui.label("Zoom:");
                 ui.add(
                     egui::DragValue::new(&mut target.zoom)
@@ -453,8 +467,8 @@ pub(super) fn update_preview_transforms(
 ) {
     for target in preview_query.iter() {
         if let Ok(mut transform) = camera_query.get_mut(target.camera_entity) {
-            let rx = target.rotate_x as f32;
-            let ry = target.rotate_y as f32;
+            let rx = target.rotate_x.clamp(MIN_CAMERA_PITCH, MAX_CAMERA_PITCH) as f32;
+            let ry = target.rotate_y.clamp(MIN_CAMERA_YAW, MAX_CAMERA_YAW) as f32;
             let dist = target.base_camera_distance * (20.0 / target.zoom);
 
             // Orbit camera around origin
