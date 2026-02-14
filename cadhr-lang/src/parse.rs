@@ -368,11 +368,6 @@ fn range_var_term(input: &str) -> PResult<'_, Term> {
     .parse(input)
 }
 
-#[allow(unused)]
-fn var_term(input: &str) -> PResult<'_, Term> {
-    map(ws(variable), var).parse(input)
-}
-
 fn atom_term(input: &str) -> PResult<'_, Term> {
     ws(map(
         pair(
