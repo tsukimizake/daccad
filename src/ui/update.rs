@@ -274,8 +274,8 @@ pub(super) fn on_preview_generated(
         };
         let cam_pos = Vec3::new(
             camera_distance * 0.5,
-            camera_distance * 0.5,
             camera_distance,
+            camera_distance * 0.5,
         );
 
         // Make the mesh visible to both default (0) and offscreen layer
@@ -322,7 +322,7 @@ pub(super) fn on_preview_generated(
                         Camera::default(),
                         RenderTarget::Image(rt_image.clone().into()),
                         Transform::from_xyz(cam_pos.x, cam_pos.y, cam_pos.z)
-                            .looking_at(Vec3::ZERO, Vec3::Y),
+                            .looking_at(Vec3::ZERO, Vec3::Z),
                         layer_only.clone(),
                     ))
                     .id();
@@ -330,7 +330,7 @@ pub(super) fn on_preview_generated(
                 // Light
                 parent.spawn((
                     DirectionalLight::default(),
-                    Transform::from_xyz(4.0, 8.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
+                    Transform::from_xyz(4.0, 4.0, 8.0).looking_at(Vec3::ZERO, Vec3::Z),
                     layer_only.clone(),
                 ));
 
@@ -473,11 +473,11 @@ pub(super) fn update_preview_transforms(
 
             // Orbit camera around origin
             let x = dist * ry.sin() * rx.cos();
-            let y = dist * rx.sin();
-            let z = dist * ry.cos() * rx.cos();
+            let y = dist * ry.cos() * rx.cos();
+            let z = dist * rx.sin();
 
             transform.translation = Vec3::new(x, y, z);
-            *transform = transform.looking_at(Vec3::ZERO, Vec3::Y);
+            *transform = transform.looking_at(Vec3::ZERO, Vec3::Z);
         }
     }
 }
