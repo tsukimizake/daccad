@@ -1,8 +1,9 @@
 use std::fmt;
 
 use crate::constraint::{SolveResult, solve_arithmetic};
-use crate::manifold_bridge::is_builtin_functor;
-use crate::parse::{ArithOp, Bound, Clause, Term, list, number, range_var};
+use crate::manifold_bridge::{BuiltinFunctor, is_builtin_functor};
+use crate::parse::{ArithOp, Bound, Clause, Term, list, number, range_var, struc, var};
+use strum::IntoEnumIterator;
 
 /// Check if a term is a built-in primitive that should not be rewritten
 fn is_builtin_primitive(term: &Term) -> bool {
@@ -14,6 +15,40 @@ fn is_builtin_primitive(term: &Term) -> bool {
         }
         _ => false,
     }
+}
+
+fn builtin_fact(functor: &str, arity: usize) -> Clause {
+    let args = (0..arity)
+        .map(|idx| var(format!("__builtin_arg_{}", idx)))
+        .collect();
+    Clause::Fact(struc(functor.to_string(), args))
+}
+
+fn builtin_functor_arities(functor: BuiltinFunctor) -> &'static [usize] {
+    match functor {
+        BuiltinFunctor::Cube => &[3],
+        BuiltinFunctor::Sphere => &[1, 2],
+        BuiltinFunctor::Cylinder => &[2, 3],
+        BuiltinFunctor::Tetrahedron => &[0],
+        BuiltinFunctor::Union => &[2],
+        BuiltinFunctor::Difference => &[2],
+        BuiltinFunctor::Intersection => &[2],
+        BuiltinFunctor::Translate => &[4],
+        BuiltinFunctor::Scale => &[4],
+        BuiltinFunctor::Rotate => &[4],
+    }
+}
+
+fn builtin_cad_facts() -> Vec<Clause> {
+    BuiltinFunctor::iter()
+        .flat_map(|functor| {
+            let functor_name: &'static str = functor.into();
+            builtin_functor_arities(functor)
+                .iter()
+                .copied()
+                .map(move |arity| builtin_fact(functor_name, arity))
+        })
+        .collect()
 }
 
 /// 単一化エラー
@@ -627,31 +662,36 @@ fn rewrite_term_recursive(
     other_goals: &mut Vec<Term>,
 ) -> Result<Vec<Term>, RewriteError> {
     // まず、この項自体がルールにマッチするか試す
-    if let Some((resolved_term, body)) = try_rewrite_single_with_result(db, clause_counter, &term, other_goals) {
+    if let Some((resolved_term, body)) =
+        try_rewrite_single_with_result(db, clause_counter, &term, other_goals)
+    {
         if body.is_empty() {
-            // Factにマッチ: 置換適用済みの項を返す
+            // CADビルトインfactにマッチしたときだけ、引数内の節参照を解決する
+            let resolved_term =
+                resolve_builtin_fact_args(db, clause_counter, resolved_term, other_goals)?;
             return Ok(vec![resolved_term]);
         } else {
             // Ruleにマッチ: bodyの各項を再帰的に解決
             // bodyの残りを other_goals に追加して、解決時に変数束縛が伝播するようにする
             let mut remaining_body: Vec<Term> = body;
             let mut all_resolved = Vec::new();
-            
+
             while let Some(b) = remaining_body.first().cloned() {
                 remaining_body.remove(0);
-                
+
                 // remaining_body を other_goals の先頭に追加
                 let mut temp_other_goals = remaining_body.clone();
                 temp_other_goals.extend(other_goals.clone());
-                
-                let resolved = rewrite_term_recursive(db, clause_counter, b, &mut temp_other_goals)?;
+
+                let resolved =
+                    rewrite_term_recursive(db, clause_counter, b, &mut temp_other_goals)?;
                 all_resolved.extend(resolved);
-                
+
                 // 置換が適用された remaining_body と other_goals を復元
                 remaining_body = temp_other_goals.drain(0..remaining_body.len()).collect();
                 *other_goals = temp_other_goals;
             }
-            
+
             return Ok(all_resolved);
         }
     }
@@ -661,22 +701,32 @@ fn rewrite_term_recursive(
         Term::InfixExpr { op, left, right } => {
             let new_left_terms = rewrite_term_recursive(db, clause_counter, *left, other_goals)?;
             let new_right_terms = rewrite_term_recursive(db, clause_counter, *right, other_goals)?;
-            
+
             // InfixExpr の各オペランドは1つの項に解決されるべき
             if new_left_terms.len() != 1 || new_right_terms.len() != 1 {
                 return Err(RewriteError {
                     message: "InfixExpr operand resolved to multiple terms".to_string(),
                     goal: Term::InfixExpr {
                         op,
-                        left: Box::new(new_left_terms.into_iter().next().unwrap_or(Term::Number { value: 0 })),
-                        right: Box::new(new_right_terms.into_iter().next().unwrap_or(Term::Number { value: 0 })),
+                        left: Box::new(
+                            new_left_terms
+                                .into_iter()
+                                .next()
+                                .unwrap_or(Term::Number { value: 0 }),
+                        ),
+                        right: Box::new(
+                            new_right_terms
+                                .into_iter()
+                                .next()
+                                .unwrap_or(Term::Number { value: 0 }),
+                        ),
                     },
                 });
             }
-            
+
             let new_left = new_left_terms.into_iter().next().unwrap();
             let new_right = new_right_terms.into_iter().next().unwrap();
-            
+
             let new_term = Term::InfixExpr {
                 op,
                 left: Box::new(new_left),
@@ -717,13 +767,61 @@ fn rewrite_term_recursive(
     }
 }
 
+fn resolve_builtin_fact_args(
+    db: &[Clause],
+    clause_counter: &mut usize,
+    term: Term,
+    other_goals: &mut Vec<Term>,
+) -> Result<Term, RewriteError> {
+    let (functor, args) = match term {
+        Term::Struct { functor, args } if is_builtin_functor(&functor) => (functor, args),
+        other => return Ok(other),
+    };
+
+    let mut resolved_args = Vec::with_capacity(args.len());
+    for arg in args {
+        match arg {
+            // リテラル/未束縛変数はそのまま。節参照っぽい項のみ再解決する。
+            Term::Number { .. } | Term::Var { .. } | Term::RangeVar { .. } => {
+                resolved_args.push(arg);
+            }
+            arg_term => {
+                let mut resolved =
+                    rewrite_term_recursive(db, clause_counter, arg_term, other_goals)?;
+                if resolved.len() != 1 {
+                    return Err(RewriteError {
+                        message: "builtin argument resolved to multiple terms".to_string(),
+                        goal: Term::Struct {
+                            functor,
+                            args: resolved_args,
+                        },
+                    });
+                }
+                resolved_args.push(resolved.remove(0));
+            }
+        }
+    }
+
+    Ok(Term::Struct {
+        functor,
+        args: resolved_args,
+    })
+}
+
 pub fn execute(db: &mut [Clause], query: Vec<Term>) -> Result<Vec<Term>, RewriteError> {
     let mut clause_counter = 0;
     let mut results = Vec::new();
+    let mut db_with_builtins = db.to_vec();
+    db_with_builtins.extend(builtin_cad_facts());
 
     for term in query {
         let mut other_goals = Vec::new();
-        let resolved = rewrite_term_recursive(db, &mut clause_counter, term, &mut other_goals)?;
+        let resolved = rewrite_term_recursive(
+            &db_with_builtins,
+            &mut clause_counter,
+            term,
+            &mut other_goals,
+        )?;
         results.extend(resolved);
         results.extend(other_goals);
     }
@@ -1189,10 +1287,7 @@ mod tests {
             grandparent(X, Y) :- parent(X, Z), parent(Z, Y).
         "#;
         let resolved = run_success(db, "grandparent(alice, Who).");
-        assert_eq!(
-            resolved,
-            vec!["parent(alice, bob)", "parent(bob, carol)"]
-        );
+        assert_eq!(resolved, vec!["parent(alice, bob)", "parent(bob, carol)"]);
     }
 
     // ===== list tests =====
@@ -1295,10 +1390,7 @@ mod tests {
             "wrap(X) :- data(X). data(node(leaf(a), leaf(b))).",
             "wrap(node(leaf(a), leaf(b))).",
         );
-        assert_eq!(
-            resolved,
-            vec!["data(node(leaf(a), leaf(b)))"]
-        );
+        assert_eq!(resolved, vec!["data(node(leaf(a), leaf(b)))"]);
     }
 
     #[test]
@@ -1315,10 +1407,7 @@ mod tests {
             "triple(X, Y, Z) :- first(X), second(Y), third(Z). first(a). second(b). third(c).",
             "triple(A, B, C).",
         );
-        assert_eq!(
-            resolved,
-            vec!["first(a)", "second(b)", "third(c)"]
-        );
+        assert_eq!(resolved, vec!["first(a)", "second(b)", "third(c)"]);
     }
 
     // ===== rule head with struct =====
@@ -1376,10 +1465,7 @@ mod tests {
             "connect(X, Z) :- link(X, Y), link(Y, Z). link(a, b). link(b, c).",
             "connect(a, Z).",
         );
-        assert_eq!(
-            resolved,
-            vec!["connect(a, c)", "link(a, b)", "link(b, c)"]
-        );
+        assert_eq!(resolved, vec!["connect(a, c)", "link(a, b)", "link(b, c)"]);
     }
 
     #[test]
@@ -1419,6 +1505,18 @@ mod tests {
         assert_eq!(
             resolved,
             vec!["(translate(cube(1, 1, 1), 10, 0, 0) + cube(2, 2, 2))"]
+        );
+    }
+
+    #[test]
+    fn arith_with_builtin_arg_clause_reference() {
+        let resolved = run_success(
+            "cub :- cube(40,90,50). main :- (cub - rotate(cub, 0, 30, 0)).",
+            "main.",
+        );
+        assert_eq!(
+            resolved,
+            vec!["(cube(40, 90, 50) - rotate(cube(40, 90, 50), 0, 30, 0))"]
         );
     }
 }
