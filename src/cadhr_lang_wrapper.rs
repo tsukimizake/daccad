@@ -67,7 +67,7 @@ fn consume_requests(
                     logs.push(format!("Resolved terms: {:?}", resolved));
 
                     // 全ての解決済みTermをunionしてMeshを生成
-                    let rs_mesh: RsMesh = generate_mesh_from_terms(&db, &resolved)
+                    let rs_mesh: RsMesh = generate_mesh_from_terms(&db, &resolved, &mut logs)
                         .map_err(|e| format!("Mesh error: {}", e))?;
 
                     Ok(rs_mesh_to_bevy_mesh(&rs_mesh))

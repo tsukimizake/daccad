@@ -202,20 +202,31 @@ impl ManifoldExpr {
     /// DBを参照しながら Prolog Term から ManifoldExpr へ変換
     pub fn from_term(term: &Term, db: &[Clause]) -> Result<Self, ConversionError> {
         let mut resolution_stack = Vec::new();
-        Self::from_term_internal(term, db, &mut resolution_stack)
+        let mut rewrite_logs = Vec::new();
+        Self::from_term_internal(term, db, &mut resolution_stack, &mut rewrite_logs)
+    }
+
+    fn from_term_with_logs(
+        term: &Term,
+        db: &[Clause],
+        rewrite_logs: &mut Vec<String>,
+    ) -> Result<Self, ConversionError> {
+        let mut resolution_stack = Vec::new();
+        Self::from_term_internal(term, db, &mut resolution_stack, rewrite_logs)
     }
 
     fn from_term_internal(
         term: &Term,
         db: &[Clause],
         resolution_stack: &mut Vec<Term>,
+        rewrite_logs: &mut Vec<String>,
     ) -> Result<Self, ConversionError> {
         match term {
             Term::Struct { functor, args } => {
-                Self::from_struct(functor, args, db, resolution_stack)
+                Self::from_struct(functor, args, db, resolution_stack, rewrite_logs)
             }
             Term::InfixExpr { op, left, right } => {
-                Self::from_infix_expr(*op, left, right, db, resolution_stack)
+                Self::from_infix_expr(*op, left, right, db, resolution_stack, rewrite_logs)
             }
             Term::Var { name } => Err(ConversionError::UnboundVariable(name.clone())),
             Term::RangeVar { name, .. } => Err(ConversionError::UnboundVariable(name.clone())),
@@ -231,9 +242,20 @@ impl ManifoldExpr {
         right: &Term,
         db: &[Clause],
         resolution_stack: &mut Vec<Term>,
+        rewrite_logs: &mut Vec<String>,
     ) -> Result<Self, ConversionError> {
-        let left_expr = Box::new(Self::from_term_internal(left, db, resolution_stack)?);
-        let right_expr = Box::new(Self::from_term_internal(right, db, resolution_stack)?);
+        let left_expr = Box::new(Self::from_term_internal(
+            left,
+            db,
+            resolution_stack,
+            rewrite_logs,
+        )?);
+        let right_expr = Box::new(Self::from_term_internal(
+            right,
+            db,
+            resolution_stack,
+            rewrite_logs,
+        )?);
 
         match op {
             ArithOp::Add => Ok(ManifoldExpr::Union(left_expr, right_expr)),
@@ -250,11 +272,18 @@ impl ManifoldExpr {
         args: &[Term],
         db: &[Clause],
         resolution_stack: &mut Vec<Term>,
+        rewrite_logs: &mut Vec<String>,
     ) -> Result<Self, ConversionError> {
         let a = Args::new(functor, args);
 
         let Ok(builtin) = BuiltinFunctor::from_str(functor) else {
-            return Self::resolve_non_builtin_struct(functor, args, db, resolution_stack);
+            return Self::resolve_non_builtin_struct(
+                functor,
+                args,
+                db,
+                resolution_stack,
+                rewrite_logs,
+            );
         };
 
         match builtin {
@@ -292,26 +321,61 @@ impl ManifoldExpr {
 
             // CSG演算
             BuiltinFunctor::Union if a.len() == 2 => Ok(ManifoldExpr::Union(
-                Box::new(Self::from_term_internal(&args[0], db, resolution_stack)?),
-                Box::new(Self::from_term_internal(&args[1], db, resolution_stack)?),
+                Box::new(Self::from_term_internal(
+                    &args[0],
+                    db,
+                    resolution_stack,
+                    rewrite_logs,
+                )?),
+                Box::new(Self::from_term_internal(
+                    &args[1],
+                    db,
+                    resolution_stack,
+                    rewrite_logs,
+                )?),
             )),
             BuiltinFunctor::Union => Err(a.arity_error("2")),
 
             BuiltinFunctor::Difference if a.len() == 2 => Ok(ManifoldExpr::Difference(
-                Box::new(Self::from_term_internal(&args[0], db, resolution_stack)?),
-                Box::new(Self::from_term_internal(&args[1], db, resolution_stack)?),
+                Box::new(Self::from_term_internal(
+                    &args[0],
+                    db,
+                    resolution_stack,
+                    rewrite_logs,
+                )?),
+                Box::new(Self::from_term_internal(
+                    &args[1],
+                    db,
+                    resolution_stack,
+                    rewrite_logs,
+                )?),
             )),
             BuiltinFunctor::Difference => Err(a.arity_error("2")),
 
             BuiltinFunctor::Intersection if a.len() == 2 => Ok(ManifoldExpr::Intersection(
-                Box::new(Self::from_term_internal(&args[0], db, resolution_stack)?),
-                Box::new(Self::from_term_internal(&args[1], db, resolution_stack)?),
+                Box::new(Self::from_term_internal(
+                    &args[0],
+                    db,
+                    resolution_stack,
+                    rewrite_logs,
+                )?),
+                Box::new(Self::from_term_internal(
+                    &args[1],
+                    db,
+                    resolution_stack,
+                    rewrite_logs,
+                )?),
             )),
             BuiltinFunctor::Intersection => Err(a.arity_error("2")),
 
             // 変形
             BuiltinFunctor::Translate if a.len() == 4 => Ok(ManifoldExpr::Translate {
-                expr: Box::new(Self::from_term_internal(&args[0], db, resolution_stack)?),
+                expr: Box::new(Self::from_term_internal(
+                    &args[0],
+                    db,
+                    resolution_stack,
+                    rewrite_logs,
+                )?),
                 x: a.f64(1)?,
                 y: a.f64(2)?,
                 z: a.f64(3)?,
@@ -319,7 +383,12 @@ impl ManifoldExpr {
             BuiltinFunctor::Translate => Err(a.arity_error("4")),
 
             BuiltinFunctor::Scale if a.len() == 4 => Ok(ManifoldExpr::Scale {
-                expr: Box::new(Self::from_term_internal(&args[0], db, resolution_stack)?),
+                expr: Box::new(Self::from_term_internal(
+                    &args[0],
+                    db,
+                    resolution_stack,
+                    rewrite_logs,
+                )?),
                 x: a.f64(1)?,
                 y: a.f64(2)?,
                 z: a.f64(3)?,
@@ -327,7 +396,12 @@ impl ManifoldExpr {
             BuiltinFunctor::Scale => Err(a.arity_error("4")),
 
             BuiltinFunctor::Rotate if a.len() == 4 => Ok(ManifoldExpr::Rotate {
-                expr: Box::new(Self::from_term_internal(&args[0], db, resolution_stack)?),
+                expr: Box::new(Self::from_term_internal(
+                    &args[0],
+                    db,
+                    resolution_stack,
+                    rewrite_logs,
+                )?),
                 x: a.f64(1)?,
                 y: a.f64(2)?,
                 z: a.f64(3)?,
@@ -341,6 +415,7 @@ impl ManifoldExpr {
         args: &[Term],
         db: &[Clause],
         resolution_stack: &mut Vec<Term>,
+        rewrite_logs: &mut Vec<String>,
     ) -> Result<Self, ConversionError> {
         let term = Term::Struct {
             functor: functor.to_string(),
@@ -378,8 +453,13 @@ impl ManifoldExpr {
             )));
         }
 
+        rewrite_logs.push(format!(
+            "Resolved terms (generate_mesh_from_terms): {:?} -> {:?}",
+            term, progressed_terms
+        ));
+
         resolution_stack.push(term);
-        let result = Self::from_terms_union(&progressed_terms, db, resolution_stack);
+        let result = Self::from_terms_union(&progressed_terms, db, resolution_stack, rewrite_logs);
         resolution_stack.pop();
         result
     }
@@ -388,12 +468,18 @@ impl ManifoldExpr {
         terms: &[Term],
         db: &[Clause],
         resolution_stack: &mut Vec<Term>,
+        rewrite_logs: &mut Vec<String>,
     ) -> Result<Self, ConversionError> {
-        let mut exprs = terms
-            .iter()
-            .map(|term| Self::from_term_internal(term, db, resolution_stack))
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter();
+        let mut exprs = Vec::with_capacity(terms.len());
+        for term in terms {
+            exprs.push(Self::from_term_internal(
+                term,
+                db,
+                resolution_stack,
+                rewrite_logs,
+            )?);
+        }
+        let mut exprs = exprs.into_iter();
 
         let Some(first) = exprs.next() else {
             return Err(ConversionError::UnknownPrimitive(
@@ -440,11 +526,15 @@ impl ManifoldExpr {
 }
 
 /// DBを参照しながら複数のTermからMeshを生成する（全てをunionする）
-pub fn generate_mesh_from_terms(db: &[Clause], terms: &[Term]) -> Result<Mesh, ConversionError> {
-    let exprs: Vec<ManifoldExpr> = terms
-        .iter()
-        .map(|term| ManifoldExpr::from_term(term, db))
-        .collect::<Result<Vec<_>, _>>()?;
+pub fn generate_mesh_from_terms(
+    db: &[Clause],
+    terms: &[Term],
+    logs: &mut Vec<String>,
+) -> Result<Mesh, ConversionError> {
+    let mut exprs: Vec<ManifoldExpr> = Vec::with_capacity(terms.len());
+    for term in terms {
+        exprs.push(ManifoldExpr::from_term_with_logs(term, db, logs)?);
+    }
 
     // 全てのManifoldExprをunionで結合
     let manifold = exprs
@@ -612,8 +702,15 @@ mod tests {
         let query_terms = query("main.").unwrap().1;
         let resolved = execute(&mut db, query_terms).unwrap();
 
-        let mesh = generate_mesh_from_terms(&db, &resolved);
+        let mut logs = Vec::new();
+        let mesh = generate_mesh_from_terms(&db, &resolved, &mut logs);
         assert!(mesh.is_ok());
+        assert!(
+            logs.iter()
+                .any(|line| line.contains("Resolved terms (generate_mesh_from_terms):")),
+            "expected mesh rewrite logs, got: {:?}",
+            logs
+        );
     }
 
     #[test]
