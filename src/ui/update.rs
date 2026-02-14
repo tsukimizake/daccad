@@ -91,7 +91,6 @@ pub(super) fn egui_ui(
                         });
                     }
                 }
-
             });
         });
     }
@@ -468,11 +467,7 @@ pub(super) fn update_preview_transforms(
 
             transform.translation = Vec3::new(x, y, z);
 
-            // Build rotation using quaternions to avoid gimbal lock issues
-            // First rotate around Z axis (azimuth), then around the local X axis (elevation)
-            let rotation = Quat::from_rotation_z(ry + std::f32::consts::PI)
-                * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2 - rx);
-            transform.rotation = rotation;
+            transform.look_at(Vec3::ZERO, Vec3::Z);
         }
     }
 }

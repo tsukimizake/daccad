@@ -1,7 +1,7 @@
-use std::sync::Arc;
 use bevy::log::{info, warn};
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, egui};
+use std::sync::Arc;
 
 pub(super) fn setup(mut commands: Commands) {
     // 3D camera for rendering model previews
@@ -15,7 +15,6 @@ pub(super) fn setup(mut commands: Commands) {
         Transform::from_xyz(4.0, 8.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 }
-
 
 pub(super) fn setup_fonts(mut contexts: EguiContexts) {
     if let Ok(ctx) = contexts.ctx_mut() {

@@ -6,10 +6,10 @@ use bevy_async_ecs::AsyncWorld;
 use derived_deref::{Deref, DerefMut};
 
 use crate::events::{CadhrLangOutput, GeneratePreviewRequest, PreviewGenerated};
-use manifold_rs::Mesh as RsMesh;
-use cadhr_lang::manifold_bridge::generate_mesh_from_terms;
+use cadhr_lang::manifold_bridge::generate_mesh_from_terms_with_db;
 use cadhr_lang::parse::{database, query as parse_query};
 use cadhr_lang::term_rewrite::execute;
+use manifold_rs::Mesh as RsMesh;
 
 #[derive(Resource, Clone, Deref, DerefMut)]
 struct AsyncWorldRes(AsyncWorld);
@@ -54,8 +54,8 @@ fn consume_requests(
                         parse_query(&query).map_err(|e| format!("Query parse error: {:?}", e))?;
 
                     // Parse database
-                    let mut db = database(&db_src)
-                        .map_err(|e| format!("Database parse error: {:?}", e))?;
+                    let mut db =
+                        database(&db_src).map_err(|e| format!("Database parse error: {:?}", e))?;
 
                     logs.push(format!("Query terms: {:?}", query_terms));
                     logs.push(format!("Database clauses: {:#?}", db));
@@ -67,7 +67,7 @@ fn consume_requests(
                     logs.push(format!("Resolved terms: {:?}", resolved));
 
                     // 全ての解決済みTermをunionしてMeshを生成
-                    let rs_mesh: RsMesh = generate_mesh_from_terms(&resolved)
+                    let rs_mesh: RsMesh = generate_mesh_from_terms_with_db(&db, &resolved)
                         .map_err(|e| format!("Mesh error: {}", e))?;
 
                     Ok(rs_mesh_to_bevy_mesh(&rs_mesh))

@@ -627,7 +627,9 @@ fn rewrite_term_recursive(
     other_goals: &mut Vec<Term>,
 ) -> Result<Vec<Term>, RewriteError> {
     // まず、この項自体がルールにマッチするか試す
-    if let Some((resolved_term, body)) = try_rewrite_single_with_result(db, clause_counter, &term, other_goals) {
+    if let Some((resolved_term, body)) =
+        try_rewrite_single_with_result(db, clause_counter, &term, other_goals)
+    {
         if body.is_empty() {
             // Factにマッチ: 置換適用済みの項を返す
             return Ok(vec![resolved_term]);
@@ -636,22 +638,23 @@ fn rewrite_term_recursive(
             // bodyの残りを other_goals に追加して、解決時に変数束縛が伝播するようにする
             let mut remaining_body: Vec<Term> = body;
             let mut all_resolved = Vec::new();
-            
+
             while let Some(b) = remaining_body.first().cloned() {
                 remaining_body.remove(0);
-                
+
                 // remaining_body を other_goals の先頭に追加
                 let mut temp_other_goals = remaining_body.clone();
                 temp_other_goals.extend(other_goals.clone());
-                
-                let resolved = rewrite_term_recursive(db, clause_counter, b, &mut temp_other_goals)?;
+
+                let resolved =
+                    rewrite_term_recursive(db, clause_counter, b, &mut temp_other_goals)?;
                 all_resolved.extend(resolved);
-                
+
                 // 置換が適用された remaining_body と other_goals を復元
                 remaining_body = temp_other_goals.drain(0..remaining_body.len()).collect();
                 *other_goals = temp_other_goals;
             }
-            
+
             return Ok(all_resolved);
         }
     }
@@ -661,22 +664,32 @@ fn rewrite_term_recursive(
         Term::InfixExpr { op, left, right } => {
             let new_left_terms = rewrite_term_recursive(db, clause_counter, *left, other_goals)?;
             let new_right_terms = rewrite_term_recursive(db, clause_counter, *right, other_goals)?;
-            
+
             // InfixExpr の各オペランドは1つの項に解決されるべき
             if new_left_terms.len() != 1 || new_right_terms.len() != 1 {
                 return Err(RewriteError {
                     message: "InfixExpr operand resolved to multiple terms".to_string(),
                     goal: Term::InfixExpr {
                         op,
-                        left: Box::new(new_left_terms.into_iter().next().unwrap_or(Term::Number { value: 0 })),
-                        right: Box::new(new_right_terms.into_iter().next().unwrap_or(Term::Number { value: 0 })),
+                        left: Box::new(
+                            new_left_terms
+                                .into_iter()
+                                .next()
+                                .unwrap_or(Term::Number { value: 0 }),
+                        ),
+                        right: Box::new(
+                            new_right_terms
+                                .into_iter()
+                                .next()
+                                .unwrap_or(Term::Number { value: 0 }),
+                        ),
                     },
                 });
             }
-            
+
             let new_left = new_left_terms.into_iter().next().unwrap();
             let new_right = new_right_terms.into_iter().next().unwrap();
-            
+
             let new_term = Term::InfixExpr {
                 op,
                 left: Box::new(new_left),
@@ -1189,10 +1202,7 @@ mod tests {
             grandparent(X, Y) :- parent(X, Z), parent(Z, Y).
         "#;
         let resolved = run_success(db, "grandparent(alice, Who).");
-        assert_eq!(
-            resolved,
-            vec!["parent(alice, bob)", "parent(bob, carol)"]
-        );
+        assert_eq!(resolved, vec!["parent(alice, bob)", "parent(bob, carol)"]);
     }
 
     // ===== list tests =====
@@ -1295,10 +1305,7 @@ mod tests {
             "wrap(X) :- data(X). data(node(leaf(a), leaf(b))).",
             "wrap(node(leaf(a), leaf(b))).",
         );
-        assert_eq!(
-            resolved,
-            vec!["data(node(leaf(a), leaf(b)))"]
-        );
+        assert_eq!(resolved, vec!["data(node(leaf(a), leaf(b)))"]);
     }
 
     #[test]
@@ -1315,10 +1322,7 @@ mod tests {
             "triple(X, Y, Z) :- first(X), second(Y), third(Z). first(a). second(b). third(c).",
             "triple(A, B, C).",
         );
-        assert_eq!(
-            resolved,
-            vec!["first(a)", "second(b)", "third(c)"]
-        );
+        assert_eq!(resolved, vec!["first(a)", "second(b)", "third(c)"]);
     }
 
     // ===== rule head with struct =====
@@ -1376,10 +1380,7 @@ mod tests {
             "connect(X, Z) :- link(X, Y), link(Y, Z). link(a, b). link(b, c).",
             "connect(a, Z).",
         );
-        assert_eq!(
-            resolved,
-            vec!["connect(a, c)", "link(a, b)", "link(b, c)"]
-        );
+        assert_eq!(resolved, vec!["connect(a, c)", "link(a, b)", "link(b, c)"]);
     }
 
     #[test]

@@ -3,7 +3,8 @@
 //! Term（書き換え後の項）を ManifoldExpr 中間表現に変換し、
 //! それを manifold-rs の Manifold オブジェクトに評価する。
 
-use crate::parse::{ArithOp, Term};
+use crate::parse::{ArithOp, Clause, Term};
+use crate::term_rewrite::execute;
 use manifold_rs::{Manifold, Mesh};
 use std::fmt;
 use std::str::FromStr;
@@ -142,10 +143,6 @@ impl<'a> Args<'a> {
         }
     }
 
-    fn term(&self, i: usize) -> Result<ManifoldExpr, ConversionError> {
-        ManifoldExpr::from_term(&self.args[i])
-    }
-
     fn arity_error(&self, expected: &str) -> ConversionError {
         ConversionError::ArityMismatch {
             functor: self.functor.to_string(),
@@ -202,11 +199,24 @@ pub enum ManifoldExpr {
 }
 
 impl ManifoldExpr {
-    /// Prolog Term から ManifoldExpr へ変換
-    pub fn from_term(term: &Term) -> Result<Self, ConversionError> {
+    /// DBを参照しながら Prolog Term から ManifoldExpr へ変換
+    pub fn from_term(term: &Term, db: &[Clause]) -> Result<Self, ConversionError> {
+        let mut resolution_stack = Vec::new();
+        Self::from_term_internal(term, db, &mut resolution_stack)
+    }
+
+    fn from_term_internal(
+        term: &Term,
+        db: &[Clause],
+        resolution_stack: &mut Vec<Term>,
+    ) -> Result<Self, ConversionError> {
         match term {
-            Term::Struct { functor, args } => Self::from_struct(functor, args),
-            Term::InfixExpr { op, left, right } => Self::from_infix_expr(*op, left, right),
+            Term::Struct { functor, args } => {
+                Self::from_struct(functor, args, db, resolution_stack)
+            }
+            Term::InfixExpr { op, left, right } => {
+                Self::from_infix_expr(*op, left, right, db, resolution_stack)
+            }
             Term::Var { name } => Err(ConversionError::UnboundVariable(name.clone())),
             Term::RangeVar { name, .. } => Err(ConversionError::UnboundVariable(name.clone())),
             _ => Err(ConversionError::UnknownPrimitive(format!("{:?}", term))),
@@ -219,9 +229,11 @@ impl ManifoldExpr {
         op: ArithOp,
         left: &Term,
         right: &Term,
+        db: &[Clause],
+        resolution_stack: &mut Vec<Term>,
     ) -> Result<Self, ConversionError> {
-        let left_expr = Box::new(Self::from_term(left)?);
-        let right_expr = Box::new(Self::from_term(right)?);
+        let left_expr = Box::new(Self::from_term_internal(left, db, resolution_stack)?);
+        let right_expr = Box::new(Self::from_term_internal(right, db, resolution_stack)?);
 
         match op {
             ArithOp::Add => Ok(ManifoldExpr::Union(left_expr, right_expr)),
@@ -233,11 +245,17 @@ impl ManifoldExpr {
         }
     }
 
-    fn from_struct(functor: &str, args: &[Term]) -> Result<Self, ConversionError> {
+    fn from_struct(
+        functor: &str,
+        args: &[Term],
+        db: &[Clause],
+        resolution_stack: &mut Vec<Term>,
+    ) -> Result<Self, ConversionError> {
         let a = Args::new(functor, args);
 
-        let builtin = BuiltinFunctor::from_str(functor)
-            .map_err(|_| ConversionError::UnknownPrimitive(functor.to_string()))?;
+        let Ok(builtin) = BuiltinFunctor::from_str(functor) else {
+            return Self::resolve_non_builtin_struct(functor, args, db, resolution_stack);
+        };
 
         match builtin {
             // プリミティブ
@@ -273,24 +291,27 @@ impl ManifoldExpr {
             BuiltinFunctor::Tetrahedron => Err(a.arity_error("0")),
 
             // CSG演算
-            BuiltinFunctor::Union if a.len() == 2 => {
-                Ok(ManifoldExpr::Union(Box::new(a.term(0)?), Box::new(a.term(1)?)))
-            }
+            BuiltinFunctor::Union if a.len() == 2 => Ok(ManifoldExpr::Union(
+                Box::new(Self::from_term_internal(&args[0], db, resolution_stack)?),
+                Box::new(Self::from_term_internal(&args[1], db, resolution_stack)?),
+            )),
             BuiltinFunctor::Union => Err(a.arity_error("2")),
 
-            BuiltinFunctor::Difference if a.len() == 2 => {
-                Ok(ManifoldExpr::Difference(Box::new(a.term(0)?), Box::new(a.term(1)?)))
-            }
+            BuiltinFunctor::Difference if a.len() == 2 => Ok(ManifoldExpr::Difference(
+                Box::new(Self::from_term_internal(&args[0], db, resolution_stack)?),
+                Box::new(Self::from_term_internal(&args[1], db, resolution_stack)?),
+            )),
             BuiltinFunctor::Difference => Err(a.arity_error("2")),
 
-            BuiltinFunctor::Intersection if a.len() == 2 => {
-                Ok(ManifoldExpr::Intersection(Box::new(a.term(0)?), Box::new(a.term(1)?)))
-            }
+            BuiltinFunctor::Intersection if a.len() == 2 => Ok(ManifoldExpr::Intersection(
+                Box::new(Self::from_term_internal(&args[0], db, resolution_stack)?),
+                Box::new(Self::from_term_internal(&args[1], db, resolution_stack)?),
+            )),
             BuiltinFunctor::Intersection => Err(a.arity_error("2")),
 
             // 変形
             BuiltinFunctor::Translate if a.len() == 4 => Ok(ManifoldExpr::Translate {
-                expr: Box::new(a.term(0)?),
+                expr: Box::new(Self::from_term_internal(&args[0], db, resolution_stack)?),
                 x: a.f64(1)?,
                 y: a.f64(2)?,
                 z: a.f64(3)?,
@@ -298,7 +319,7 @@ impl ManifoldExpr {
             BuiltinFunctor::Translate => Err(a.arity_error("4")),
 
             BuiltinFunctor::Scale if a.len() == 4 => Ok(ManifoldExpr::Scale {
-                expr: Box::new(a.term(0)?),
+                expr: Box::new(Self::from_term_internal(&args[0], db, resolution_stack)?),
                 x: a.f64(1)?,
                 y: a.f64(2)?,
                 z: a.f64(3)?,
@@ -306,13 +327,83 @@ impl ManifoldExpr {
             BuiltinFunctor::Scale => Err(a.arity_error("4")),
 
             BuiltinFunctor::Rotate if a.len() == 4 => Ok(ManifoldExpr::Rotate {
-                expr: Box::new(a.term(0)?),
+                expr: Box::new(Self::from_term_internal(&args[0], db, resolution_stack)?),
                 x: a.f64(1)?,
                 y: a.f64(2)?,
                 z: a.f64(3)?,
             }),
             BuiltinFunctor::Rotate => Err(a.arity_error("4")),
         }
+    }
+
+    fn resolve_non_builtin_struct(
+        functor: &str,
+        args: &[Term],
+        db: &[Clause],
+        resolution_stack: &mut Vec<Term>,
+    ) -> Result<Self, ConversionError> {
+        let term = Term::Struct {
+            functor: functor.to_string(),
+            args: args.to_vec(),
+        };
+
+        if resolution_stack.iter().any(|seen| seen == &term) {
+            return Err(ConversionError::UnknownPrimitive(format!(
+                "{} (clause resolution loop detected for {:?})",
+                functor, term
+            )));
+        }
+
+        if db.is_empty() {
+            return Err(ConversionError::UnknownPrimitive(format!(
+                "{} (clause resolution requires database, but db is empty)",
+                functor
+            )));
+        }
+
+        let mut db_copy = db.to_vec();
+        let resolved_terms = execute(&mut db_copy, vec![term.clone()]).map_err(|e| {
+            ConversionError::UnknownPrimitive(format!("{} (rewrite error: {})", functor, e))
+        })?;
+
+        let progressed_terms = resolved_terms
+            .into_iter()
+            .filter(|candidate| candidate != &term)
+            .collect::<Vec<_>>();
+
+        if progressed_terms.is_empty() {
+            return Err(ConversionError::UnknownPrimitive(format!(
+                "{} (rewrite produced no progress from {:?})",
+                functor, term
+            )));
+        }
+
+        resolution_stack.push(term);
+        let result = Self::from_terms_union(&progressed_terms, db, resolution_stack);
+        resolution_stack.pop();
+        result
+    }
+
+    fn from_terms_union(
+        terms: &[Term],
+        db: &[Clause],
+        resolution_stack: &mut Vec<Term>,
+    ) -> Result<Self, ConversionError> {
+        let mut exprs = terms
+            .iter()
+            .map(|term| Self::from_term_internal(term, db, resolution_stack))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter();
+
+        let Some(first) = exprs.next() else {
+            return Err(ConversionError::UnknownPrimitive(
+                "empty term list".to_string(),
+            ));
+        };
+
+        Ok(exprs.fold(first, |acc, expr| {
+            ManifoldExpr::Union(Box::new(acc), Box::new(expr))
+        }))
     }
 
     /// ManifoldExpr を manifold-rs の Manifold に評価
@@ -348,8 +439,11 @@ impl ManifoldExpr {
     }
 }
 
-/// 複数のTermからMeshを生成する（全てをunionする）
-pub fn generate_mesh_from_terms(terms: &[Term]) -> Result<Mesh, ConversionError> {
+/// DBを参照しながら複数のTermからMeshを生成する（全てをunionする）
+pub fn generate_mesh_from_terms_with_db(
+    db: &[Clause],
+    terms: &[Term],
+) -> Result<Mesh, ConversionError> {
     if terms.is_empty() {
         return Err(ConversionError::UnknownPrimitive(
             "empty term list".to_string(),
@@ -358,7 +452,7 @@ pub fn generate_mesh_from_terms(terms: &[Term]) -> Result<Mesh, ConversionError>
 
     let exprs: Vec<ManifoldExpr> = terms
         .iter()
-        .map(ManifoldExpr::from_term)
+        .map(|term| ManifoldExpr::from_term(term, db))
         .collect::<Result<Vec<_>, _>>()?;
 
     // 全てのManifoldExprをunionで結合
@@ -375,12 +469,13 @@ pub fn generate_mesh_from_terms(terms: &[Term]) -> Result<Mesh, ConversionError>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parse::{number, struc, var};
+    use crate::parse::{database, number, query, struc, var};
+    use crate::term_rewrite::execute;
 
     #[test]
     fn test_cube_conversion() {
         let term = struc("cube".into(), vec![number(10), number(20), number(30)]);
-        let expr = ManifoldExpr::from_term(&term).unwrap();
+        let expr = ManifoldExpr::from_term(&term, &[]).unwrap();
         match expr {
             ManifoldExpr::Cube { x, y, z } => {
                 assert_eq!(x, 10.0);
@@ -394,7 +489,7 @@ mod tests {
     #[test]
     fn test_sphere_default_segments() {
         let term = struc("sphere".into(), vec![number(5)]);
-        let expr = ManifoldExpr::from_term(&term).unwrap();
+        let expr = ManifoldExpr::from_term(&term, &[]).unwrap();
         match expr {
             ManifoldExpr::Sphere { radius, segments } => {
                 assert_eq!(radius, 5.0);
@@ -407,7 +502,7 @@ mod tests {
     #[test]
     fn test_sphere_explicit_segments() {
         let term = struc("sphere".into(), vec![number(5), number(16)]);
-        let expr = ManifoldExpr::from_term(&term).unwrap();
+        let expr = ManifoldExpr::from_term(&term, &[]).unwrap();
         match expr {
             ManifoldExpr::Sphere { radius, segments } => {
                 assert_eq!(radius, 5.0);
@@ -420,7 +515,7 @@ mod tests {
     #[test]
     fn test_cylinder_default_segments() {
         let term = struc("cylinder".into(), vec![number(3), number(10)]);
-        let expr = ManifoldExpr::from_term(&term).unwrap();
+        let expr = ManifoldExpr::from_term(&term, &[]).unwrap();
         match expr {
             ManifoldExpr::Cylinder {
                 radius,
@@ -440,7 +535,7 @@ mod tests {
         let cube1 = struc("cube".into(), vec![number(1), number(1), number(1)]);
         let cube2 = struc("cube".into(), vec![number(2), number(2), number(2)]);
         let union_term = struc("union".into(), vec![cube1, cube2]);
-        let expr = ManifoldExpr::from_term(&union_term).unwrap();
+        let expr = ManifoldExpr::from_term(&union_term, &[]).unwrap();
         assert!(matches!(expr, ManifoldExpr::Union(_, _)));
     }
 
@@ -451,7 +546,7 @@ mod tests {
             "translate".into(),
             vec![cube, number(5), number(10), number(15)],
         );
-        let expr = ManifoldExpr::from_term(&translated).unwrap();
+        let expr = ManifoldExpr::from_term(&translated, &[]).unwrap();
         match expr {
             ManifoldExpr::Translate { x, y, z, .. } => {
                 assert_eq!(x, 5.0);
@@ -465,22 +560,69 @@ mod tests {
     #[test]
     fn test_unbound_variable_error() {
         let term = struc("cube".into(), vec![var("X".into()), number(1), number(1)]);
-        let result = ManifoldExpr::from_term(&term);
+        let result = ManifoldExpr::from_term(&term, &[]);
         assert!(matches!(result, Err(ConversionError::UnboundVariable(_))));
     }
 
     #[test]
     fn test_arity_mismatch() {
         let term = struc("cube".into(), vec![number(1), number(2)]);
-        let result = ManifoldExpr::from_term(&term);
+        let result = ManifoldExpr::from_term(&term, &[]);
         assert!(matches!(result, Err(ConversionError::ArityMismatch { .. })));
     }
 
     #[test]
     fn test_unknown_primitive() {
         let term = struc("unknown_shape".into(), vec![number(1)]);
-        let result = ManifoldExpr::from_term(&term);
+        let result = ManifoldExpr::from_term(&term, &[]);
         assert!(matches!(result, Err(ConversionError::UnknownPrimitive(_))));
+    }
+
+    #[test]
+    fn test_resolve_user_clause_inside_builtin_argument() {
+        let db = database("cub :- cube(40, 90, 50).").unwrap();
+        let term = struc(
+            "rotate".into(),
+            vec![
+                struc("cub".into(), vec![]),
+                number(0),
+                number(30),
+                number(0),
+            ],
+        );
+
+        let expr = ManifoldExpr::from_term(&term, &db).unwrap();
+        match expr {
+            ManifoldExpr::Rotate { expr, x, y, z } => {
+                assert_eq!(x, 0.0);
+                assert_eq!(y, 30.0);
+                assert_eq!(z, 0.0);
+                match *expr {
+                    ManifoldExpr::Cube {
+                        x: cube_x,
+                        y: cube_y,
+                        z: cube_z,
+                    } => {
+                        assert_eq!(cube_x, 40.0);
+                        assert_eq!(cube_y, 90.0);
+                        assert_eq!(cube_z, 50.0);
+                    }
+                    _ => panic!("Expected Cube"),
+                }
+            }
+            _ => panic!("Expected Rotate"),
+        }
+    }
+
+    #[test]
+    fn test_generate_mesh_with_rewrite_result_containing_builtin_arg_reference() {
+        let mut db =
+            database("main :- (cub - rotate(cub, 0, 30, 0)). cub :- cube(40, 90, 50).").unwrap();
+        let query_terms = query("main.").unwrap().1;
+        let resolved = execute(&mut db, query_terms).unwrap();
+
+        let mesh = generate_mesh_from_terms_with_db(&db, &resolved);
+        assert!(mesh.is_ok());
     }
 
     #[test]
@@ -492,56 +634,56 @@ mod tests {
         let sphere = struc("sphere".into(), vec![number(1)]);
         let diff = struc("difference".into(), vec![union_term, sphere]);
 
-        let expr = ManifoldExpr::from_term(&diff).unwrap();
+        let expr = ManifoldExpr::from_term(&diff, &[]).unwrap();
         assert!(matches!(expr, ManifoldExpr::Difference(_, _)));
     }
 
     #[test]
     fn test_operator_union() {
-        use crate::parse::arith_expr;
         use crate::parse::ArithOp;
+        use crate::parse::arith_expr;
 
         // cube(1,1,1) + sphere(1) -> union
         let cube = struc("cube".into(), vec![number(1), number(1), number(1)]);
         let sphere = struc("sphere".into(), vec![number(1)]);
         let add_term = arith_expr(ArithOp::Add, cube, sphere);
 
-        let expr = ManifoldExpr::from_term(&add_term).unwrap();
+        let expr = ManifoldExpr::from_term(&add_term, &[]).unwrap();
         assert!(matches!(expr, ManifoldExpr::Union(_, _)));
     }
 
     #[test]
     fn test_operator_difference() {
-        use crate::parse::arith_expr;
         use crate::parse::ArithOp;
+        use crate::parse::arith_expr;
 
         // cube(1,1,1) - sphere(1) -> difference
         let cube = struc("cube".into(), vec![number(1), number(1), number(1)]);
         let sphere = struc("sphere".into(), vec![number(1)]);
         let sub_term = arith_expr(ArithOp::Sub, cube, sphere);
 
-        let expr = ManifoldExpr::from_term(&sub_term).unwrap();
+        let expr = ManifoldExpr::from_term(&sub_term, &[]).unwrap();
         assert!(matches!(expr, ManifoldExpr::Difference(_, _)));
     }
 
     #[test]
     fn test_operator_intersection() {
-        use crate::parse::arith_expr;
         use crate::parse::ArithOp;
+        use crate::parse::arith_expr;
 
         // cube(1,1,1) * sphere(1) -> intersection
         let cube = struc("cube".into(), vec![number(1), number(1), number(1)]);
         let sphere = struc("sphere".into(), vec![number(1)]);
         let mul_term = arith_expr(ArithOp::Mul, cube, sphere);
 
-        let expr = ManifoldExpr::from_term(&mul_term).unwrap();
+        let expr = ManifoldExpr::from_term(&mul_term, &[]).unwrap();
         assert!(matches!(expr, ManifoldExpr::Intersection(_, _)));
     }
 
     #[test]
     fn test_operator_nested() {
-        use crate::parse::arith_expr;
         use crate::parse::ArithOp;
+        use crate::parse::arith_expr;
 
         // (cube(1,1,1) + sphere(1)) - cylinder(1,2)
         let cube = struc("cube".into(), vec![number(1), number(1), number(1)]);
@@ -551,7 +693,7 @@ mod tests {
         let union_term = arith_expr(ArithOp::Add, cube, sphere);
         let diff_term = arith_expr(ArithOp::Sub, union_term, cylinder);
 
-        let expr = ManifoldExpr::from_term(&diff_term).unwrap();
+        let expr = ManifoldExpr::from_term(&diff_term, &[]).unwrap();
         match expr {
             ManifoldExpr::Difference(left, _) => {
                 assert!(matches!(*left, ManifoldExpr::Union(_, _)));
@@ -562,15 +704,15 @@ mod tests {
 
     #[test]
     fn test_operator_division_error() {
-        use crate::parse::arith_expr;
         use crate::parse::ArithOp;
+        use crate::parse::arith_expr;
 
         // cube(1,1,1) / sphere(1) -> error
         let cube = struc("cube".into(), vec![number(1), number(1), number(1)]);
         let sphere = struc("sphere".into(), vec![number(1)]);
         let div_term = arith_expr(ArithOp::Div, cube, sphere);
 
-        let result = ManifoldExpr::from_term(&div_term);
+        let result = ManifoldExpr::from_term(&div_term, &[]);
         assert!(matches!(result, Err(ConversionError::UnknownPrimitive(_))));
     }
 }
