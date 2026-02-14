@@ -20,6 +20,12 @@ const MAX_CAMERA_PITCH: f64 = std::f64::consts::FRAC_PI_2 - 0.001;
 const MIN_CAMERA_PITCH: f64 = -MAX_CAMERA_PITCH;
 const MAX_CAMERA_YAW: f64 = std::f64::consts::PI - 0.001;
 const MIN_CAMERA_YAW: f64 = -MAX_CAMERA_YAW;
+const DEFAULT_ZOOM: f32 = 10.0;
+const AUTO_ZOOM_SENTINEL: f32 = 0.0;
+const MIN_ZOOM: f32 = 1.0;
+const MAX_ZOOM: f32 = 100.0;
+const CAMERA_DISTANCE_FACTOR: f32 = 2.4 * 1.5;
+const MIN_CAMERA_DISTANCE: f32 = 5.0;
 
 // egui UI: add previews dynamically and render all existing previews
 pub(super) fn egui_ui(
@@ -85,7 +91,7 @@ pub(super) fn egui_ui(
                         PreviewState {
                             preview_id: Some(preview_id),
                             query: query_text.clone(),
-                            zoom: 10.0,
+                            zoom: AUTO_ZOOM_SENTINEL,
                             rotate_x: 0.0,
                             rotate_y: 0.0,
                         },
@@ -286,17 +292,25 @@ pub(super) fn on_preview_generated(
         };
         let layer_only = RenderLayers::layer(render_layer);
 
-        // Calculate camera distance based on mesh bounds
         let mesh_aabb = ev.mesh.compute_aabb();
-        let camera_distance = if let Some(aabb) = mesh_aabb {
+        let (camera_distance, auto_zoom) = if let Some(aabb) = mesh_aabb {
             let half_extents = aabb.half_extents;
             let max_extent = half_extents.x.max(half_extents.y).max(half_extents.z);
-            // Use FOV of ~45 degrees, so distance = extent / tan(22.5°) ≈ extent * 2.4
-            // Add some margin (1.5x) for comfortable viewing
-            let distance = max_extent * 2.4 * 1.5;
-            distance.max(5.0) // Minimum distance
+            let natural_distance = max_extent * CAMERA_DISTANCE_FACTOR;
+            let camera_distance = natural_distance.max(MIN_CAMERA_DISTANCE);
+            let auto_zoom = if natural_distance > f32::EPSILON {
+                (DEFAULT_ZOOM * camera_distance / natural_distance).clamp(MIN_ZOOM, MAX_ZOOM)
+            } else {
+                DEFAULT_ZOOM
+            };
+            (camera_distance, auto_zoom)
         } else {
-            5.0
+            (MIN_CAMERA_DISTANCE, DEFAULT_ZOOM)
+        };
+        let initial_zoom = if pending_state.zoom > AUTO_ZOOM_SENTINEL {
+            pending_state.zoom
+        } else {
+            auto_zoom
         };
         let cam_pos = Vec3::new(
             camera_distance * 0.5,
@@ -395,7 +409,7 @@ pub(super) fn on_preview_generated(
                     rt_size,
                     camera_entity,
                     base_camera_distance: camera_distance,
-                    zoom: pending_state.zoom,
+                    zoom: initial_zoom,
                     rotate_x: pending_state.rotate_x,
                     rotate_y: pending_state.rotate_y,
                     query: ev.query.clone(),
@@ -464,7 +478,7 @@ fn preview_target_ui(
                 ui.add(
                     egui::DragValue::new(&mut target.zoom)
                         .speed(0.1)
-                        .range(1.0..=100.0),
+                        .range(MIN_ZOOM..=MAX_ZOOM),
                 );
             });
             ui.add_space(6.0);
@@ -510,7 +524,8 @@ pub(super) fn update_preview_transforms(
         if let Ok(mut transform) = camera_query.get_mut(target.camera_entity) {
             let rx = target.rotate_x.clamp(MIN_CAMERA_PITCH, MAX_CAMERA_PITCH) as f32;
             let ry = target.rotate_y.clamp(MIN_CAMERA_YAW, MAX_CAMERA_YAW) as f32;
-            let dist = target.base_camera_distance * (20.0 / target.zoom);
+            let zoom = target.zoom.clamp(MIN_ZOOM, MAX_ZOOM);
+            let dist = target.base_camera_distance * (20.0 / zoom);
 
             // Orbit camera around origin
             let x = dist * ry.sin() * rx.cos();
