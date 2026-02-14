@@ -440,16 +440,7 @@ impl ManifoldExpr {
 }
 
 /// DBを参照しながら複数のTermからMeshを生成する（全てをunionする）
-pub fn generate_mesh_from_terms_with_db(
-    db: &[Clause],
-    terms: &[Term],
-) -> Result<Mesh, ConversionError> {
-    if terms.is_empty() {
-        return Err(ConversionError::UnknownPrimitive(
-            "empty term list".to_string(),
-        ));
-    }
-
+pub fn generate_mesh_from_terms(db: &[Clause], terms: &[Term]) -> Result<Mesh, ConversionError> {
     let exprs: Vec<ManifoldExpr> = terms
         .iter()
         .map(|term| ManifoldExpr::from_term(term, db))
@@ -460,7 +451,7 @@ pub fn generate_mesh_from_terms_with_db(
         .into_iter()
         .map(|e| e.evaluate())
         .reduce(|acc, m| acc.union(&m))
-        .unwrap(); // exprsが空でないことは上でチェック済み
+        .unwrap_or(manifold_rs::Manifold::empty());
 
     let with_normals = manifold.calculate_normals(0, 30.0);
     Ok(with_normals.to_mesh())
@@ -621,7 +612,7 @@ mod tests {
         let query_terms = query("main.").unwrap().1;
         let resolved = execute(&mut db, query_terms).unwrap();
 
-        let mesh = generate_mesh_from_terms_with_db(&db, &resolved);
+        let mesh = generate_mesh_from_terms(&db, &resolved);
         assert!(mesh.is_ok());
     }
 

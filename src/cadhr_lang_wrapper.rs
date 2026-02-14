@@ -6,7 +6,7 @@ use bevy_async_ecs::AsyncWorld;
 use derived_deref::{Deref, DerefMut};
 
 use crate::events::{CadhrLangOutput, GeneratePreviewRequest, PreviewGenerated};
-use cadhr_lang::manifold_bridge::generate_mesh_from_terms_with_db;
+use cadhr_lang::manifold_bridge::generate_mesh_from_terms;
 use cadhr_lang::parse::{database, query as parse_query};
 use cadhr_lang::term_rewrite::execute;
 use manifold_rs::Mesh as RsMesh;
@@ -67,7 +67,7 @@ fn consume_requests(
                     logs.push(format!("Resolved terms: {:?}", resolved));
 
                     // 全ての解決済みTermをunionしてMeshを生成
-                    let rs_mesh: RsMesh = generate_mesh_from_terms_with_db(&db, &resolved)
+                    let rs_mesh: RsMesh = generate_mesh_from_terms(&db, &resolved)
                         .map_err(|e| format!("Mesh error: {}", e))?;
 
                     Ok(rs_mesh_to_bevy_mesh(&rs_mesh))
