@@ -215,6 +215,7 @@ pub(super) fn on_preview_generated(
 ) {
     // Count existing previews for layer assignment
     let existing_count = preview_query.iter().count();
+    let mut new_preview_count = 0usize;
 
     for ev in ev_generated.read() {
         // Check if this is an update to an existing preview
@@ -255,9 +256,10 @@ pub(super) fn on_preview_generated(
             | TextureUsages::TEXTURE_BINDING
             | TextureUsages::COPY_SRC;
         let rt_image = images.add(image);
+        let preview_idx = existing_count + new_preview_count;
 
         // Unique render layer per preview
-        let layer_idx = (existing_count as u8).saturating_add(1);
+        let layer_idx = (preview_idx as u8).saturating_add(1);
         let layer_only = RenderLayers::layer(layer_idx as usize);
 
         // Calculate camera distance based on mesh bounds
@@ -362,12 +364,12 @@ pub(super) fn on_preview_generated(
             })
             .insert({
                 // Restore zoom/rotate from pending states if available
-                let new_idx = existing_count;
-                let (zoom, rotate_x, rotate_y) = if let Some(state) = pending_states.get(new_idx) {
-                    (state.zoom, state.rotate_x, state.rotate_y)
-                } else {
-                    (10.0, 0.0, 0.0)
-                };
+                let (zoom, rotate_x, rotate_y) =
+                    if let Some(state) = pending_states.get(preview_idx) {
+                        (state.zoom, state.rotate_x, state.rotate_y)
+                    } else {
+                        (10.0, 0.0, 0.0)
+                    };
 
                 PreviewTarget {
                     mesh_handle: mesh_handle.clone(),
@@ -381,12 +383,13 @@ pub(super) fn on_preview_generated(
                     query: ev.query.clone(),
                 }
             });
+        new_preview_count += 1;
+    }
 
-        // Clear pending states once all previews are restored
-        let current_count = existing_count + 1;
-        if current_count >= pending_states.len() && !pending_states.is_empty() {
-            pending_states.clear();
-        }
+    // Clear pending states once all previews are restored
+    let current_count = existing_count + new_preview_count;
+    if current_count >= pending_states.len() && !pending_states.is_empty() {
+        pending_states.clear();
     }
 }
 
