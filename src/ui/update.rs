@@ -1,7 +1,8 @@
 use crate::events::{CadhrLangOutput, GeneratePreviewRequest, PreviewGenerated};
 use crate::ui::{
-    CurrentFilePath, EditorText, ErrorMessage, NextRequestId, PendingPreviewStates, PreviewState,
-    PreviewTarget, SessionLoadContents, SessionPreviews, SessionSaveContents, ThreeMfFileContents,
+    CurrentFilePath, EditorText, ErrorMessage, FreeRenderLayers, NextPreviewId,
+    PendingPreviewStates, PreviewState, PreviewTarget, SessionLoadContents, SessionPreviews,
+    SessionSaveContents, ThreeMfFileContents,
 };
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::RenderTarget;
@@ -23,16 +24,18 @@ const MIN_CAMERA_YAW: f64 = -MAX_CAMERA_YAW;
 pub(super) fn egui_ui(
     mut commands: Commands,
     mut contexts: EguiContexts,
-    mut preview_query: Query<&mut PreviewTarget>,
+    mut preview_query: Query<(Entity, &mut PreviewTarget)>,
     mut editor_text: ResMut<EditorText>,
-    mut next_id: ResMut<NextRequestId>,
+    mut next_preview_id: ResMut<NextPreviewId>,
+    mut pending_states: ResMut<PendingPreviewStates>,
+    mut free_render_layers: ResMut<FreeRenderLayers>,
     mut ev_generate: MessageWriter<GeneratePreviewRequest>,
     error_message: Res<ErrorMessage>,
     current_file_path: Res<CurrentFilePath>,
     meshes: Res<Assets<Mesh>>,
 ) {
     // Collect preview targets into a Vec for indexed access
-    let mut preview_targets: Vec<Mut<PreviewTarget>> = preview_query.iter_mut().collect();
+    let mut preview_targets: Vec<(Entity, Mut<PreviewTarget>)> = preview_query.iter_mut().collect();
     // Toolbar: add a new preview or reload existing
     if let Ok(ctx) = contexts.ctx_mut() {
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
@@ -48,7 +51,7 @@ pub(super) fn egui_ui(
                         save_session(
                             path,
                             &editor_text,
-                            preview_targets.iter().map(|t| t.as_ref()),
+                            preview_targets.iter().map(|(_, t)| t.as_ref()),
                         );
                     } else {
                         commands
@@ -73,26 +76,32 @@ pub(super) fn egui_ui(
                 ui.separator();
 
                 if ui.button("Add Preview").clicked() {
-                    let id = **next_id;
-                    **next_id += 1;
+                    let preview_id = **next_preview_id;
+                    **next_preview_id += 1;
                     let query_text = "main.".to_string();
+                    pending_states.insert(
+                        preview_id,
+                        PreviewState {
+                            preview_id: Some(preview_id),
+                            query: query_text.clone(),
+                            zoom: 10.0,
+                            rotate_x: 0.0,
+                            rotate_y: 0.0,
+                        },
+                    );
                     ev_generate.write(GeneratePreviewRequest {
-                        request_id: id,
+                        preview_id,
                         database: (**editor_text).clone(),
                         query: query_text,
-                        preview_index: None,
                     });
                 }
                 if ui.button("Update Previes").clicked() {
                     // Re-render all previews with the current editor text
-                    for (i, target) in preview_targets.iter().enumerate() {
-                        let id = **next_id;
-                        **next_id += 1;
+                    for (_, target) in preview_targets.iter() {
                         ev_generate.write(GeneratePreviewRequest {
-                            request_id: id,
+                            preview_id: target.preview_id,
                             database: (**editor_text).clone(),
                             query: target.query.clone(),
-                            preview_index: Some(i),
                         });
                     }
                 }
@@ -103,7 +112,7 @@ pub(super) fn egui_ui(
     // Precompute egui texture ids for each preview's offscreen image
     let preview_images: Vec<(egui::TextureId, UVec2)> = preview_targets
         .iter()
-        .map(|t| {
+        .map(|(_, t)| {
             let id = contexts.image_id(&t.rt_image).unwrap_or_else(|| {
                 contexts.add_image(bevy_egui::EguiTextureHandle::Strong(t.rt_image.clone()))
             });
@@ -140,8 +149,9 @@ pub(super) fn egui_ui(
                 // Right half: show and edit previews
                 let right = &mut columns[1];
                 // Collect actions to process after iterating
-                let mut updates_to_send: Vec<(usize, String)> = Vec::new();
+                let mut updates_to_send: Vec<(u64, String)> = Vec::new();
                 let mut exports_to_send: Vec<usize> = Vec::new();
+                let mut closes_to_send: Vec<(Entity, usize)> = Vec::new();
                 egui::ScrollArea::vertical()
                     .auto_shrink([false; 2])
                     .show(right, |ui| {
@@ -150,14 +160,18 @@ pub(super) fn egui_ui(
                                 "プレビューはまだありません。上の『Add Preview』を押してください。",
                             );
                         } else {
-                            for (i, target) in preview_targets.iter_mut().enumerate() {
+                            for (i, (entity, target)) in preview_targets.iter_mut().enumerate() {
                                 if let Some((tex_id, size)) = preview_images.get(i) {
                                     match preview_target_ui(ui, i, target, *tex_id, *size) {
                                         PreviewAction::Update => {
-                                            updates_to_send.push((i, target.query.clone()));
+                                            updates_to_send
+                                                .push((target.preview_id, target.query.clone()));
                                         }
                                         PreviewAction::Export3MF => {
                                             exports_to_send.push(i);
+                                        }
+                                        PreviewAction::Close => {
+                                            closes_to_send.push((*entity, target.render_layer));
                                         }
                                         PreviewAction::None => {}
                                     }
@@ -167,20 +181,17 @@ pub(super) fn egui_ui(
                         }
                     });
                 // Send update requests
-                for (idx, query) in updates_to_send {
-                    let id = **next_id;
-                    **next_id += 1;
+                for (preview_id, query) in updates_to_send {
                     ev_generate.write(GeneratePreviewRequest {
-                        request_id: id,
+                        preview_id,
                         database: (**editor_text).clone(),
                         query,
-                        preview_index: Some(idx),
                     });
                 }
                 // Handle export requests
                 for idx in exports_to_send {
                     if let Some(target) = preview_targets.get(idx) {
-                        if let Some(mesh) = meshes.get(&target.mesh_handle) {
+                        if let Some(mesh) = meshes.get(&target.1.mesh_handle) {
                             if let Some(threemf_data) = bevy_mesh_to_threemf(mesh) {
                                 let file_name = current_file_path
                                     .as_ref()
@@ -198,6 +209,10 @@ pub(super) fn egui_ui(
                         }
                     }
                 }
+                for (entity, render_layer) in closes_to_send {
+                    free_render_layers.push(render_layer);
+                    commands.entity(entity).despawn();
+                }
             });
         });
     }
@@ -212,22 +227,28 @@ pub(super) fn on_preview_generated(
     mut images: ResMut<Assets<Image>>,
     mut preview_query: Query<&mut PreviewTarget>,
     mut pending_states: ResMut<PendingPreviewStates>,
+    mut free_render_layers: ResMut<FreeRenderLayers>,
 ) {
-    // Count existing previews for layer assignment
-    let existing_count = preview_query.iter().count();
-    let mut new_preview_count = 0usize;
-
     for ev in ev_generated.read() {
-        // Check if this is an update to an existing preview
-        if let Some(idx) = ev.preview_index {
-            if let Some(target) = preview_query.iter_mut().nth(idx) {
-                // Update the existing mesh asset
+        // Update existing preview if it is still alive.
+        let mut updated_existing = false;
+        for target in preview_query.iter_mut() {
+            if target.preview_id == ev.preview_id {
                 if let Some(mesh_asset) = meshes.get_mut(&target.mesh_handle) {
                     *mesh_asset = ev.mesh.clone();
                 }
-                continue;
+                updated_existing = true;
+                break;
             }
         }
+        if updated_existing {
+            continue;
+        }
+
+        // Spawn only when this ID is still pending creation.
+        let Some(pending_state) = pending_states.remove(&ev.preview_id) else {
+            continue;
+        };
 
         // New preview: spawn entities
         let mesh_handle = meshes.add(ev.mesh.clone());
@@ -256,11 +277,16 @@ pub(super) fn on_preview_generated(
             | TextureUsages::TEXTURE_BINDING
             | TextureUsages::COPY_SRC;
         let rt_image = images.add(image);
-        let preview_idx = existing_count + new_preview_count;
 
         // Unique render layer per preview
-        let layer_idx = (preview_idx as u8).saturating_add(1);
-        let layer_only = RenderLayers::layer(layer_idx as usize);
+        let Some(render_layer) = free_render_layers.pop() else {
+            bevy::log::error!(
+                "No free render layer available for preview {}",
+                ev.preview_id
+            );
+            continue;
+        };
+        let layer_only = RenderLayers::layer(render_layer);
 
         // Calculate camera distance based on mesh bounds
         let mesh_aabb = ev.mesh.compute_aabb();
@@ -281,7 +307,7 @@ pub(super) fn on_preview_generated(
         );
 
         // Make the mesh visible to both default (0) and offscreen layer
-        let both_layers = RenderLayers::from_layers(&[0, layer_idx as usize]);
+        let both_layers = RenderLayers::from_layers(&[0, render_layer]);
 
         // Spawn XYZ axis indicators
         let axis_length = 20.0;
@@ -363,33 +389,20 @@ pub(super) fn on_preview_generated(
                 ));
             })
             .insert({
-                // Restore zoom/rotate from pending states if available
-                let (zoom, rotate_x, rotate_y) =
-                    if let Some(state) = pending_states.get(preview_idx) {
-                        (state.zoom, state.rotate_x, state.rotate_y)
-                    } else {
-                        (10.0, 0.0, 0.0)
-                    };
-
                 PreviewTarget {
+                    preview_id: ev.preview_id,
+                    render_layer,
                     mesh_handle: mesh_handle.clone(),
                     rt_image: rt_image.clone(),
                     rt_size,
                     camera_entity,
                     base_camera_distance: camera_distance,
-                    zoom,
-                    rotate_x,
-                    rotate_y,
+                    zoom: pending_state.zoom,
+                    rotate_x: pending_state.rotate_x,
+                    rotate_y: pending_state.rotate_y,
                     query: ev.query.clone(),
                 }
             });
-        new_preview_count += 1;
-    }
-
-    // Clear pending states once all previews are restored
-    let current_count = existing_count + new_preview_count;
-    if current_count >= pending_states.len() && !pending_states.is_empty() {
-        pending_states.clear();
     }
 }
 
@@ -400,6 +413,7 @@ enum PreviewAction {
     None,
     Update,
     Export3MF,
+    Close,
 }
 
 /// Returns the action requested by the user
@@ -426,6 +440,9 @@ fn preview_target_ui(
                 }
                 if ui.button("Export 3MF").clicked() {
                     action = PreviewAction::Export3MF;
+                }
+                if ui.button("Close").clicked() {
+                    action = PreviewAction::Close;
                 }
             });
             ui.add_space(4.0);
@@ -526,6 +543,7 @@ fn save_session<'a>(
     let previews = SessionPreviews {
         previews: preview_targets
             .map(|t| PreviewState {
+                preview_id: Some(t.preview_id),
                 query: t.query.clone(),
                 zoom: t.zoom,
                 rotate_x: t.rotate_x,
@@ -574,10 +592,11 @@ pub(super) fn session_loaded(
     mut ev_picked: MessageReader<DialogDirectoryPicked<SessionLoadContents>>,
     mut editor_text: ResMut<EditorText>,
     mut current_file_path: ResMut<CurrentFilePath>,
-    preview_query: Query<Entity, With<PreviewTarget>>,
+    preview_query: Query<(Entity, &PreviewTarget)>,
     mut ev_generate: MessageWriter<GeneratePreviewRequest>,
-    mut next_id: ResMut<NextRequestId>,
+    mut next_preview_id: ResMut<NextPreviewId>,
     mut pending_states: ResMut<PendingPreviewStates>,
+    mut free_render_layers: ResMut<FreeRenderLayers>,
 ) {
     for ev in ev_picked.read() {
         if let Some((db_content, previews)) = load_session(&ev.path) {
@@ -585,21 +604,33 @@ pub(super) fn session_loaded(
             **current_file_path = Some(ev.path.clone());
 
             // Despawn all preview root entities (children are automatically removed)
-            for entity in preview_query.iter() {
+            for (entity, target) in preview_query.iter() {
+                free_render_layers.push(target.render_layer);
                 commands.entity(entity).despawn();
             }
 
-            // Store pending states to restore zoom/rotate after preview generation
-            **pending_states = previews.previews.clone();
+            pending_states.clear();
 
-            for preview_state in previews.previews {
-                let id = **next_id;
-                **next_id += 1;
+            for mut preview_state in previews.previews {
+                let preview_id = if let Some(saved_id) = preview_state.preview_id {
+                    if saved_id >= **next_preview_id {
+                        **next_preview_id = saved_id.saturating_add(1);
+                    }
+                    saved_id
+                } else {
+                    let generated_id = **next_preview_id;
+                    **next_preview_id += 1;
+                    generated_id
+                };
+
+                preview_state.preview_id = Some(preview_id);
+                let query = preview_state.query.clone();
+                pending_states.insert(preview_id, preview_state);
+
                 ev_generate.write(GeneratePreviewRequest {
-                    request_id: id,
+                    preview_id,
                     database: (**editor_text).clone(),
-                    query: preview_state.query,
-                    preview_index: None,
+                    query,
                 });
             }
         } else {
