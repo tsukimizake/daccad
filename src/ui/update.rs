@@ -14,6 +14,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, T
 use bevy_egui::{EguiContexts, egui};
 use bevy_file_dialog::prelude::*;
 use std::io::Cursor;
+use std::path::Path;
 
 const MAX_CAMERA_PITCH: f64 = std::f64::consts::FRAC_PI_2 - 0.001;
 const MIN_CAMERA_PITCH: f64 = -MAX_CAMERA_PITCH;
@@ -193,13 +194,10 @@ pub(super) fn egui_ui(
                     if let Some(target) = preview_targets.get(idx) {
                         if let Some(mesh) = meshes.get(&target.1.mesh_handle) {
                             if let Some(threemf_data) = bevy_mesh_to_threemf(mesh) {
-                                let file_name = current_file_path
-                                    .as_ref()
-                                    .as_ref()
-                                    .and_then(|p| p.file_stem())
-                                    .and_then(|n| n.to_str())
-                                    .map(|s| format!("{}_preview{}.3mf", s, idx + 1))
-                                    .unwrap_or_else(|| format!("preview{}.3mf", idx + 1));
+                                let file_name = export_3mf_file_name(
+                                    current_file_path.as_ref().as_ref().map(|p| p.as_path()),
+                                    &target.1.query,
+                                );
                                 commands
                                     .dialog()
                                     .add_filter("3MF", &["3mf"])
@@ -478,6 +476,29 @@ fn preview_target_ui(
             ui.add(egui::Image::from_texture((tex_id, egui::vec2(w, h))));
         });
     action
+}
+
+fn export_3mf_file_name(current_path: Option<&Path>, query: &str) -> String {
+    let base_name = current_path
+        .and_then(|p| p.file_stem())
+        .and_then(|n| n.to_str())
+        .filter(|s| !s.is_empty());
+    let query_suffix = sanitize_query_for_filename(query);
+
+    if let Some(base) = base_name {
+        format!("{base}_{query_suffix}.3mf")
+    } else {
+        format!("{query_suffix}.3mf")
+    }
+}
+
+fn sanitize_query_for_filename(query: &str) -> String {
+    query
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+        .collect::<String>()
+        .trim_matches('_')
+        .to_string()
 }
 
 // Keep spawned preview entity rotations in sync with UI values
