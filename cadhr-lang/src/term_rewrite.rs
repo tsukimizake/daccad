@@ -88,6 +88,9 @@ fn substitute_in_place(term: &mut Term, var_name: &str, replacement: &Term) {
         Term::Var { name } if name == var_name => {
             *term = replacement.clone();
         }
+        Term::DefaultVar { name, .. } if name == var_name => {
+            *term = replacement.clone();
+        }
         Term::RangeVar { name, .. } if name == var_name => {
             *term = replacement.clone();
         }
@@ -124,6 +127,76 @@ fn substitute_in_stack(stack: &mut Vec<(Term, Term)>, var_name: &str, replacemen
 fn substitute_in_goals(goals: &mut Vec<Term>, var_name: &str, replacement: &Term) {
     for goal in goals.iter_mut() {
         substitute_in_place(goal, var_name, replacement);
+    }
+}
+
+fn collect_default_var_bindings(term: &Term, bindings: &mut Vec<(String, i64)>) {
+    match term {
+        Term::DefaultVar { name, value } if name != "_" => {
+            bindings.push((name.clone(), *value));
+        }
+        Term::Struct { args, .. } => {
+            for arg in args {
+                collect_default_var_bindings(arg, bindings);
+            }
+        }
+        Term::List { items, tail } => {
+            for item in items {
+                collect_default_var_bindings(item, bindings);
+            }
+            if let Some(t) = tail {
+                collect_default_var_bindings(t, bindings);
+            }
+        }
+        Term::InfixExpr { left, right, .. } => {
+            collect_default_var_bindings(left, bindings);
+            collect_default_var_bindings(right, bindings);
+        }
+        _ => {}
+    }
+}
+
+fn replace_default_vars_with_numbers(term: &mut Term) {
+    match term {
+        Term::DefaultVar { value, .. } => {
+            *term = number(*value);
+        }
+        Term::Struct { args, .. } => {
+            for arg in args {
+                replace_default_vars_with_numbers(arg);
+            }
+        }
+        Term::List { items, tail } => {
+            for item in items {
+                replace_default_vars_with_numbers(item);
+            }
+            if let Some(t) = tail {
+                replace_default_vars_with_numbers(t);
+            }
+        }
+        Term::InfixExpr { left, right, .. } => {
+            replace_default_vars_with_numbers(left);
+            replace_default_vars_with_numbers(right);
+        }
+        _ => {}
+    }
+}
+
+fn apply_default_var_bindings(term: &mut Term, goals: &mut Vec<Term>) {
+    let mut bindings = Vec::new();
+    collect_default_var_bindings(term, &mut bindings);
+    for (name, value) in bindings {
+        let replacement = number(value);
+        substitute_in_place(term, &name, &replacement);
+        substitute_in_goals(goals, &name, &replacement);
+    }
+    replace_default_vars_with_numbers(term);
+    for goal in goals.iter_mut() {
+        replace_default_vars_with_numbers(goal);
+    }
+    eval_arith_in_place(term);
+    for goal in goals.iter_mut() {
+        eval_arith_in_place(goal);
     }
 }
 
@@ -178,6 +251,7 @@ fn eval_arith_in_place(term: &mut Term) {
 fn occurs_check(var_name: &str, term: &Term) -> bool {
     match term {
         Term::Var { name } => name == var_name,
+        Term::DefaultVar { name, .. } => name == var_name,
         Term::RangeVar { name, .. } => name == var_name,
         Term::Struct { args, .. } => args.iter().any(|arg| occurs_check(var_name, arg)),
         Term::List { items, tail } => {
@@ -286,6 +360,28 @@ pub fn unify(term1: Term, term2: Term, goals: &mut Vec<Term>) -> Result<(), Unif
         }
         if let Some(val) = eval_arith(&t2) {
             t2 = number(val);
+        }
+
+        // X@25 のような既定値付き変数は、単一化時に X=25 を伝播する。
+        if let Term::DefaultVar { name, value } = &t1 {
+            let name = name.clone();
+            let replacement = number(*value);
+            if name != "_" {
+                substitute_in_stack(&mut stack, &name, &replacement);
+                substitute_in_goals(goals, &name, &replacement);
+                substitute_in_deferred(&mut deferred, &name, &replacement);
+            }
+            t1 = replacement;
+        }
+        if let Term::DefaultVar { name, value } = &t2 {
+            let name = name.clone();
+            let replacement = number(*value);
+            if name != "_" {
+                substitute_in_stack(&mut stack, &name, &replacement);
+                substitute_in_goals(goals, &name, &replacement);
+                substitute_in_deferred(&mut deferred, &name, &replacement);
+            }
+            t2 = replacement;
         }
 
         // 算術式がまだ評価できない場合は遅延
@@ -590,6 +686,11 @@ fn rename_term_vars(term: &mut Term, suffix: &str) {
                 *name = format!("{}_{}", name, suffix);
             }
         }
+        Term::DefaultVar { name, .. } => {
+            if name != "_" {
+                *name = format!("{}_{}", name, suffix);
+            }
+        }
         Term::RangeVar { name, .. } => {
             if name != "_" {
                 *name = format!("{}_{}", name, suffix);
@@ -661,6 +762,9 @@ fn rewrite_term_recursive(
     term: Term,
     other_goals: &mut Vec<Term>,
 ) -> Result<Vec<Term>, RewriteError> {
+    let mut term = term;
+    apply_default_var_bindings(&mut term, other_goals);
+
     // まず、この項自体がルールにマッチするか試す
     if let Some((resolved_term, body)) =
         try_rewrite_single_with_result(db, clause_counter, &term, other_goals)
@@ -782,7 +886,10 @@ fn resolve_builtin_fact_args(
     for arg in args {
         match arg {
             // リテラル/未束縛変数はそのまま。節参照っぽい項のみ再解決する。
-            Term::Number { .. } | Term::Var { .. } | Term::RangeVar { .. } => {
+            Term::Number { .. }
+            | Term::Var { .. }
+            | Term::DefaultVar { .. }
+            | Term::RangeVar { .. } => {
                 resolved_args.push(arg);
             }
             arg_term => {
@@ -1143,6 +1250,29 @@ mod tests {
     fn test_arith_both_sides_expr() {
         let resolved = run_success("f(5).", "f(X).");
         assert_eq!(resolved, vec!["f(5)"]);
+    }
+
+    #[test]
+    fn default_var_matches_annotated_value() {
+        let resolved = run_success("f(25).", "f(X@25).");
+        assert_eq!(resolved, vec!["f(25)"]);
+    }
+
+    #[test]
+    fn default_var_conflict_fails() {
+        run_failure("f(30).", "f(X@25).");
+    }
+
+    #[test]
+    fn default_var_propagates_within_rule_body() {
+        let resolved = run_success(
+            "cut(W) :- cube(W, 50, 260). main :- cube(X@25, 50, 300) - (cut(W@5) |> translate(X / 2 - W, 0, 0)).",
+            "main.",
+        );
+        assert_eq!(
+            resolved,
+            vec!["(cube(25, 50, 300) - translate(cube(5, 50, 260), 7, 0, 0))"]
+        );
     }
 
     // ===== basic fact tests =====

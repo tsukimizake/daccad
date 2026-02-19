@@ -238,6 +238,7 @@ impl ArithExpr {
     pub fn try_from_term(term: &Term) -> Result<Self, ConversionError> {
         match term {
             Term::Var { name } => Ok(ArithExpr::Var(name.clone())),
+            Term::DefaultVar { value, .. } => Ok(ArithExpr::Num(*value)),
             Term::RangeVar { name, min, max } => Ok(ArithExpr::RangeVar {
                 name: name.clone(),
                 min: *min,

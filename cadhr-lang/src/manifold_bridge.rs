@@ -112,6 +112,7 @@ impl<'a> Args<'a> {
     fn f64(&self, i: usize) -> Result<f64, ConversionError> {
         match &self.args[i] {
             Term::Number { value } => Ok(*value as f64),
+            Term::DefaultVar { value, .. } => Ok(*value as f64),
             Term::Var { name } | Term::RangeVar { name, .. } => {
                 Err(ConversionError::UnboundVariable(name.clone()))
             }
@@ -127,6 +128,12 @@ impl<'a> Args<'a> {
         match &self.args[i] {
             Term::Number { value } if *value >= 0 => Ok(*value as u32),
             Term::Number { .. } => Err(ConversionError::TypeMismatch {
+                functor: self.functor.to_string(),
+                arg_index: i,
+                expected: "non-negative integer",
+            }),
+            Term::DefaultVar { value, .. } if *value >= 0 => Ok(*value as u32),
+            Term::DefaultVar { .. } => Err(ConversionError::TypeMismatch {
                 functor: self.functor.to_string(),
                 arg_index: i,
                 expected: "non-negative integer",

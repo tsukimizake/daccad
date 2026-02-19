@@ -28,6 +28,11 @@ pub enum Term {
     Var {
         name: String,
     },
+    /// 既定値付き変数: X@25
+    DefaultVar {
+        name: String,
+        value: i64,
+    },
     /// 範囲制約付き変数: min < X < max など
     RangeVar {
         name: String,
@@ -63,6 +68,7 @@ impl fmt::Debug for Term {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Term::Var { name } => write!(f, "{}", name),
+            Term::DefaultVar { name, value } => write!(f, "{}@{}", name, value),
             Term::RangeVar { name, min, max } => {
                 if let Some(b) = min {
                     write!(f, "{} {} ", b.value, if b.inclusive { "<=" } else { "<" })?;
@@ -138,6 +144,10 @@ impl fmt::Debug for Clause {
 /// Termコンストラクタ
 pub fn var(name: String) -> Term {
     Term::Var { name }
+}
+
+pub fn default_var(name: String, value: i64) -> Term {
+    Term::DefaultVar { name, value }
 }
 
 pub fn number(value: i64) -> Term {
@@ -301,6 +311,14 @@ fn number_term(input: &str) -> PResult<'_, Term> {
     map(ws(integer), number).parse(input)
 }
 
+fn default_var_term(input: &str) -> PResult<'_, Term> {
+    map(
+        separated_pair(ws(variable), ws(char('@')), ws(integer)),
+        |(name, value)| default_var(name, value),
+    )
+    .parse(input)
+}
+
 /// 比較演算子 (<, <=, >, >=)
 #[derive(Clone, Copy)]
 enum CompOp {
@@ -391,6 +409,7 @@ fn primary_term(input: &str) -> PResult<'_, Term> {
     alt((
         list_term,
         paren_term,
+        default_var_term,
         range_var_term,
         number_term,
         atom_term,
@@ -743,6 +762,26 @@ mod tests {
                 assert_eq!(body.len(), 1);
             }
             _ => panic!("Expected Rule"),
+        }
+    }
+
+    #[test]
+    fn parse_default_var() {
+        let src = "hoge(X@25).";
+        let (_, clause) = clause_parser(src).unwrap();
+
+        match clause {
+            Clause::Fact(term) => match &term {
+                Term::Struct { args, .. } => match &args[0] {
+                    Term::DefaultVar { name, value } => {
+                        assert_eq!(name, "X");
+                        assert_eq!(*value, 25);
+                    }
+                    _ => panic!("Expected DefaultVar"),
+                },
+                _ => panic!("Expected Struct"),
+            },
+            _ => panic!("Expected Fact"),
         }
     }
 
