@@ -9,9 +9,111 @@ use nom::{
 };
 use std::fmt;
 
+// ============================================================
+// FixedPoint: 2桁固定小数点数 (hundredths)
+// ============================================================
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FixedPoint(i64);
+
+impl FixedPoint {
+    pub fn from_hundredths(h: i64) -> Self {
+        Self(h)
+    }
+    pub fn from_int(v: i64) -> Self {
+        Self(v * 100)
+    }
+    pub fn to_f64(self) -> f64 {
+        self.0 as f64 / 100.0
+    }
+    pub fn to_i64_checked(self) -> Option<i64> {
+        (self.0 % 100 == 0).then(|| self.0 / 100)
+    }
+    pub fn raw(self) -> i64 {
+        self.0
+    }
+}
+
+impl fmt::Debug for FixedPoint {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self)
+    }
+}
+
+impl fmt::Display for FixedPoint {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.0 % 100 == 0 {
+            write!(f, "{}", self.0 / 100)
+        } else {
+            let abs = self.0.unsigned_abs();
+            let sign = if self.0 < 0 { "-" } else { "" };
+            let whole = abs / 100;
+            let frac = abs % 100;
+            if frac % 10 == 0 {
+                write!(f, "{}{}.{}", sign, whole, frac / 10)
+            } else {
+                write!(f, "{}{}.{:02}", sign, whole, frac)
+            }
+        }
+    }
+}
+
+impl std::ops::Add for FixedPoint {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self {
+        Self(self.0 + rhs.0)
+    }
+}
+
+impl std::ops::Sub for FixedPoint {
+    type Output = Self;
+    fn sub(self, rhs: Self) -> Self {
+        Self(self.0 - rhs.0)
+    }
+}
+
+impl std::ops::Mul for FixedPoint {
+    type Output = Self;
+    fn mul(self, rhs: Self) -> Self {
+        Self(self.0 * rhs.0 / 100)
+    }
+}
+
+impl std::ops::Div for FixedPoint {
+    type Output = Self;
+    fn div(self, rhs: Self) -> Self {
+        Self(self.0 * 100 / rhs.0)
+    }
+}
+
+impl std::ops::Neg for FixedPoint {
+    type Output = Self;
+    fn neg(self) -> Self {
+        Self(-self.0)
+    }
+}
+
+impl PartialOrd for FixedPoint {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for FixedPoint {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.cmp(&other.0)
+    }
+}
+
+impl From<i64> for FixedPoint {
+    fn from(v: i64) -> Self {
+        Self::from_int(v)
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Bound {
-    pub value: i64,
+    pub value: FixedPoint,
     pub inclusive: bool,
 }
 
@@ -31,7 +133,7 @@ pub enum Term {
     /// 既定値付き変数: X@25
     DefaultVar {
         name: String,
-        value: i64,
+        value: FixedPoint,
     },
     /// 範囲制約付き変数: min < X < max など
     RangeVar {
@@ -40,7 +142,7 @@ pub enum Term {
         max: Option<Bound>,
     },
     Number {
-        value: i64,
+        value: FixedPoint,
     },
     /// 中置演算子式: left op right (算術演算 or CSG演算)
     InfixExpr {
@@ -146,12 +248,18 @@ pub fn var(name: String) -> Term {
     Term::Var { name }
 }
 
-pub fn default_var(name: String, value: i64) -> Term {
+pub fn default_var(name: String, value: FixedPoint) -> Term {
     Term::DefaultVar { name, value }
 }
 
-pub fn number(value: i64) -> Term {
+pub fn number(value: FixedPoint) -> Term {
     Term::Number { value }
+}
+
+pub fn number_int(value: i64) -> Term {
+    Term::Number {
+        value: FixedPoint::from_int(value),
+    }
 }
 
 pub fn struc(functor: String, args: Vec<Term>) -> Term {
@@ -280,10 +388,27 @@ fn variable(input: &str) -> PResult<'_, String> {
     .parse(input)
 }
 
-fn integer(input: &str) -> PResult<'_, i64> {
-    map_res(recognize(pair(opt(char('-')), digit1)), |s: &str| {
-        s.parse::<i64>()
-    })
+fn fixed_number(input: &str) -> PResult<'_, FixedPoint> {
+    map_res(
+        recognize((opt(char('-')), digit1, opt(pair(char('.'), digit1)))),
+        |s: &str| -> Result<FixedPoint, String> {
+            if let Some(dot_pos) = s.find('.') {
+                let int_part: i64 = s[..dot_pos].parse().map_err(|e: std::num::ParseIntError| e.to_string())?;
+                let frac_str = &s[dot_pos + 1..];
+                let frac_val: i64 = frac_str.parse().map_err(|e: std::num::ParseIntError| e.to_string())?;
+                let frac = match frac_str.len() {
+                    1 => frac_val * 10,
+                    2 => frac_val,
+                    _ => return Err("fractional part must be 1-2 digits".to_string()),
+                };
+                let sign = if s.starts_with('-') { -1 } else { 1 };
+                Ok(FixedPoint::from_hundredths(sign * (int_part.abs() * 100 + frac)))
+            } else {
+                let v: i64 = s.parse().map_err(|e: std::num::ParseIntError| e.to_string())?;
+                Ok(FixedPoint::from_int(v))
+            }
+        },
+    )
     .parse(input)
 }
 
@@ -308,12 +433,12 @@ fn paren_term(input: &str) -> PResult<'_, Term> {
 }
 
 fn number_term(input: &str) -> PResult<'_, Term> {
-    map(ws(integer), number).parse(input)
+    map(ws(fixed_number), number).parse(input)
 }
 
 fn default_var_term(input: &str) -> PResult<'_, Term> {
     map(
-        separated_pair(ws(variable), ws(char('@')), ws(integer)),
+        separated_pair(ws(variable), ws(char('@')), ws(fixed_number)),
         |(name, value)| default_var(name, value),
     )
     .parse(input)
@@ -341,11 +466,11 @@ fn comp_op(input: &str) -> PResult<'_, CompOp> {
 /// range_var: `0 < X < 10`, `X < 10`, `0 < X`, `X > 0` など
 fn range_var_term(input: &str) -> PResult<'_, Term> {
     // 左側: (num op)?
-    let left_bound = opt((ws(integer), comp_op));
+    let left_bound = opt((ws(fixed_number), comp_op));
     // 変数名
     let var_name = ws(variable);
     // 右側: (op num)?
-    let right_bound = opt((comp_op, ws(integer)));
+    let right_bound = opt((comp_op, ws(fixed_number)));
 
     map(
         (left_bound, var_name, right_bound),
@@ -568,7 +693,7 @@ mod tests {
             qs,
             vec![struc(
                 "member".to_string(),
-                vec![v("X"), list(vec![number(1), number(2), number(3)], None),],
+                vec![v("X"), list(vec![number_int(1), number_int(2), number_int(3)], None),],
             )]
         );
     }
@@ -637,14 +762,14 @@ mod tests {
                             assert_eq!(
                                 *min,
                                 Some(Bound {
-                                    value: 0,
+                                    value: FixedPoint::from_int(0),
                                     inclusive: false
                                 })
                             );
                             assert_eq!(
                                 *max,
                                 Some(Bound {
-                                    value: 10,
+                                    value: FixedPoint::from_int(10),
                                     inclusive: false
                                 })
                             );
@@ -671,14 +796,14 @@ mod tests {
                         assert_eq!(
                             *min,
                             Some(Bound {
-                                value: 0,
+                                value: FixedPoint::from_int(0),
                                 inclusive: true
                             })
                         );
                         assert_eq!(
                             *max,
                             Some(Bound {
-                                value: 10,
+                                value: FixedPoint::from_int(10),
                                 inclusive: true
                             })
                         );
@@ -704,7 +829,7 @@ mod tests {
                         assert_eq!(
                             *min,
                             Some(Bound {
-                                value: 0,
+                                value: FixedPoint::from_int(0),
                                 inclusive: false
                             })
                         );
@@ -732,7 +857,7 @@ mod tests {
                         assert_eq!(
                             *max,
                             Some(Bound {
-                                value: 10,
+                                value: FixedPoint::from_int(10),
                                 inclusive: false
                             })
                         );
@@ -775,11 +900,74 @@ mod tests {
                 Term::Struct { args, .. } => match &args[0] {
                     Term::DefaultVar { name, value } => {
                         assert_eq!(name, "X");
-                        assert_eq!(*value, 25);
+                        assert_eq!(*value, FixedPoint::from_int(25));
                     }
                     _ => panic!("Expected DefaultVar"),
                 },
                 _ => panic!("Expected Struct"),
+            },
+            _ => panic!("Expected Fact"),
+        }
+    }
+
+    #[test]
+    fn parse_fixed_point_integer() {
+        let src = "f(42).";
+        let (_, clause) = clause_parser(src).unwrap();
+        match clause {
+            Clause::Fact(Term::Struct { args, .. }) => match &args[0] {
+                Term::Number { value } => assert_eq!(*value, FixedPoint::from_int(42)),
+                _ => panic!("Expected Number"),
+            },
+            _ => panic!("Expected Fact"),
+        }
+    }
+
+    #[test]
+    fn parse_fixed_point_decimal() {
+        let src = "f(100.01).";
+        let (_, clause) = clause_parser(src).unwrap();
+        match clause {
+            Clause::Fact(Term::Struct { args, .. }) => match &args[0] {
+                Term::Number { value } => assert_eq!(*value, FixedPoint::from_hundredths(10001)),
+                _ => panic!("Expected Number"),
+            },
+            _ => panic!("Expected Fact"),
+        }
+    }
+
+    #[test]
+    fn parse_fixed_point_negative_decimal() {
+        let src = "f(-3.5).";
+        let (_, clause) = clause_parser(src).unwrap();
+        match clause {
+            Clause::Fact(Term::Struct { args, .. }) => match &args[0] {
+                Term::Number { value } => assert_eq!(*value, FixedPoint::from_hundredths(-350)),
+                _ => panic!("Expected Number"),
+            },
+            _ => panic!("Expected Fact"),
+        }
+    }
+
+    #[test]
+    fn parse_fixed_point_display() {
+        assert_eq!(format!("{}", FixedPoint::from_int(100)), "100");
+        assert_eq!(format!("{}", FixedPoint::from_hundredths(10001)), "100.01");
+        assert_eq!(format!("{}", FixedPoint::from_hundredths(350)), "3.5");
+        assert_eq!(format!("{}", FixedPoint::from_hundredths(-350)), "-3.5");
+    }
+
+    #[test]
+    fn parse_default_var_decimal() {
+        let src = "hoge(X@2.5).";
+        let (_, clause) = clause_parser(src).unwrap();
+        match clause {
+            Clause::Fact(Term::Struct { args, .. }) => match &args[0] {
+                Term::DefaultVar { name, value } => {
+                    assert_eq!(name, "X");
+                    assert_eq!(*value, FixedPoint::from_hundredths(250));
+                }
+                _ => panic!("Expected DefaultVar"),
             },
             _ => panic!("Expected Fact"),
         }

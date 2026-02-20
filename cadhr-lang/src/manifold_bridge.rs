@@ -29,6 +29,12 @@ pub enum BuiltinFunctor {
     Translate,
     Scale,
     Rotate,
+    // 2Dプロファイル
+    Polygon,
+    Circle,
+    // 押し出し・回転体
+    Extrude,
+    Revolve,
 }
 
 /// functor名がビルトインプリミティブかどうかを判定
@@ -111,8 +117,8 @@ impl<'a> Args<'a> {
 
     fn f64(&self, i: usize) -> Result<f64, ConversionError> {
         match &self.args[i] {
-            Term::Number { value } => Ok(*value as f64),
-            Term::DefaultVar { value, .. } => Ok(*value as f64),
+            Term::Number { value } => Ok(value.to_f64()),
+            Term::DefaultVar { value, .. } => Ok(value.to_f64()),
             Term::Var { name } | Term::RangeVar { name, .. } => {
                 Err(ConversionError::UnboundVariable(name.clone()))
             }
@@ -126,18 +132,22 @@ impl<'a> Args<'a> {
 
     fn u32(&self, i: usize) -> Result<u32, ConversionError> {
         match &self.args[i] {
-            Term::Number { value } if *value >= 0 => Ok(*value as u32),
-            Term::Number { .. } => Err(ConversionError::TypeMismatch {
-                functor: self.functor.to_string(),
-                arg_index: i,
-                expected: "non-negative integer",
-            }),
-            Term::DefaultVar { value, .. } if *value >= 0 => Ok(*value as u32),
-            Term::DefaultVar { .. } => Err(ConversionError::TypeMismatch {
-                functor: self.functor.to_string(),
-                arg_index: i,
-                expected: "non-negative integer",
-            }),
+            Term::Number { value } => match value.to_i64_checked() {
+                Some(v) if v >= 0 => Ok(v as u32),
+                _ => Err(ConversionError::TypeMismatch {
+                    functor: self.functor.to_string(),
+                    arg_index: i,
+                    expected: "non-negative integer",
+                }),
+            },
+            Term::DefaultVar { value, .. } => match value.to_i64_checked() {
+                Some(v) if v >= 0 => Ok(v as u32),
+                _ => Err(ConversionError::TypeMismatch {
+                    functor: self.functor.to_string(),
+                    arg_index: i,
+                    expected: "non-negative integer",
+                }),
+            },
             Term::Var { name } | Term::RangeVar { name, .. } => {
                 Err(ConversionError::UnboundVariable(name.clone()))
             }
@@ -206,9 +216,94 @@ pub enum ManifoldExpr {
         y: f64,
         z: f64,
     },
+
+    // 2Dプロファイル
+    Polygon {
+        points: Vec<f64>,
+    },
+    Circle {
+        radius: f64,
+        segments: u32,
+    },
+
+    // 押し出し・回転体
+    Extrude {
+        profile: Box<ManifoldExpr>,
+        height: f64,
+    },
+    Revolve {
+        profile: Box<ManifoldExpr>,
+        degrees: f64,
+        segments: u32,
+    },
+}
+
+fn extract_polygon_points(list_term: &Term, functor: &str) -> Result<Vec<f64>, ConversionError> {
+    match list_term {
+        Term::List { items, .. } => {
+            let mut points = Vec::with_capacity(items.len() * 2);
+            for (i, item) in items.iter().enumerate() {
+                match item {
+                    Term::Struct { functor: f, args } if f == "p" && args.len() == 2 => {
+                        let x = match &args[0] {
+                            Term::Number { value } => value.to_f64(),
+                            _ => {
+                                return Err(ConversionError::TypeMismatch {
+                                    functor: functor.to_string(),
+                                    arg_index: i,
+                                    expected: "p(number, number)",
+                                })
+                            }
+                        };
+                        let y = match &args[1] {
+                            Term::Number { value } => value.to_f64(),
+                            _ => {
+                                return Err(ConversionError::TypeMismatch {
+                                    functor: functor.to_string(),
+                                    arg_index: i,
+                                    expected: "p(number, number)",
+                                })
+                            }
+                        };
+                        points.push(x);
+                        points.push(y);
+                    }
+                    _ => {
+                        return Err(ConversionError::TypeMismatch {
+                            functor: functor.to_string(),
+                            arg_index: i,
+                            expected: "p(x, y)",
+                        })
+                    }
+                }
+            }
+            Ok(points)
+        }
+        _ => Err(ConversionError::TypeMismatch {
+            functor: functor.to_string(),
+            arg_index: 0,
+            expected: "list of p(x, y)",
+        }),
+    }
 }
 
 impl ManifoldExpr {
+    fn to_polygon_data(&self) -> Option<Vec<f64>> {
+        match self {
+            ManifoldExpr::Polygon { points } => Some(points.clone()),
+            ManifoldExpr::Circle { radius, segments } => {
+                let mut points = Vec::with_capacity(*segments as usize * 2);
+                for i in 0..*segments {
+                    let angle = 2.0 * std::f64::consts::PI * (i as f64) / (*segments as f64);
+                    points.push(radius * angle.cos());
+                    points.push(radius * angle.sin());
+                }
+                Some(points)
+            }
+            _ => None,
+        }
+    }
+
     /// Prolog Term から ManifoldExpr へ変換
     pub fn from_term(term: &Term) -> Result<Self, ConversionError> {
         match term {
@@ -318,6 +413,42 @@ impl ManifoldExpr {
                 z: a.f64(3)?,
             }),
             BuiltinFunctor::Rotate => Err(a.arity_error("4")),
+
+            // 2Dプロファイル
+            BuiltinFunctor::Polygon if a.len() == 1 => {
+                let points = extract_polygon_points(&a.args[0], a.functor)?;
+                Ok(ManifoldExpr::Polygon { points })
+            }
+            BuiltinFunctor::Polygon => Err(a.arity_error("1")),
+
+            BuiltinFunctor::Circle if a.len() == 1 => Ok(ManifoldExpr::Circle {
+                radius: a.f64(0)?,
+                segments: DEFAULT_SEGMENTS,
+            }),
+            BuiltinFunctor::Circle if a.len() == 2 => Ok(ManifoldExpr::Circle {
+                radius: a.f64(0)?,
+                segments: a.u32(1)?,
+            }),
+            BuiltinFunctor::Circle => Err(a.arity_error("1 or 2")),
+
+            // 押し出し・回転体
+            BuiltinFunctor::Extrude if a.len() == 2 => Ok(ManifoldExpr::Extrude {
+                profile: Box::new(a.term(0)?),
+                height: a.f64(1)?,
+            }),
+            BuiltinFunctor::Extrude => Err(a.arity_error("2")),
+
+            BuiltinFunctor::Revolve if a.len() == 2 => Ok(ManifoldExpr::Revolve {
+                profile: Box::new(a.term(0)?),
+                degrees: a.f64(1)?,
+                segments: DEFAULT_SEGMENTS,
+            }),
+            BuiltinFunctor::Revolve if a.len() == 3 => Ok(ManifoldExpr::Revolve {
+                profile: Box::new(a.term(0)?),
+                degrees: a.f64(1)?,
+                segments: a.u32(2)?,
+            }),
+            BuiltinFunctor::Revolve => Err(a.arity_error("2 or 3")),
         }
     }
 
@@ -343,6 +474,29 @@ impl ManifoldExpr {
             ManifoldExpr::Translate { expr, x, y, z } => expr.evaluate().translate(*x, *y, *z),
             ManifoldExpr::Scale { expr, x, y, z } => expr.evaluate().scale(*x, *y, *z),
             ManifoldExpr::Rotate { expr, x, y, z } => expr.evaluate().rotate(*x, *y, *z),
+
+            // 2Dプロファイル (単体プレビュー時は薄いextrudeで3D化)
+            ManifoldExpr::Polygon { points } => {
+                Manifold::extrude(&[points], 0.001, 0, 0.0, 1.0, 1.0)
+            }
+            ManifoldExpr::Circle { .. } => {
+                let data = self.to_polygon_data().unwrap();
+                Manifold::extrude(&[&data], 0.001, 0, 0.0, 1.0, 1.0)
+            }
+
+            // 押し出し・回転体
+            ManifoldExpr::Extrude { profile, height } => {
+                let data = profile.to_polygon_data().unwrap();
+                Manifold::extrude(&[&data], *height, 0, 0.0, 1.0, 1.0)
+            }
+            ManifoldExpr::Revolve {
+                profile,
+                degrees,
+                segments,
+            } => {
+                let data = profile.to_polygon_data().unwrap();
+                Manifold::revolve(&[&data], *segments, *degrees)
+            }
         }
     }
 
@@ -381,11 +535,11 @@ pub fn generate_mesh_from_terms(terms: &[Term]) -> Result<Mesh, ConversionError>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parse::{number, struc, var};
+    use crate::parse::{number_int, struc, var};
 
     #[test]
     fn test_cube_conversion() {
-        let term = struc("cube".into(), vec![number(10), number(20), number(30)]);
+        let term = struc("cube".into(), vec![number_int(10), number_int(20), number_int(30)]);
         let expr = ManifoldExpr::from_term(&term).unwrap();
         match expr {
             ManifoldExpr::Cube { x, y, z } => {
@@ -399,7 +553,7 @@ mod tests {
 
     #[test]
     fn test_sphere_default_segments() {
-        let term = struc("sphere".into(), vec![number(5)]);
+        let term = struc("sphere".into(), vec![number_int(5)]);
         let expr = ManifoldExpr::from_term(&term).unwrap();
         match expr {
             ManifoldExpr::Sphere { radius, segments } => {
@@ -412,7 +566,7 @@ mod tests {
 
     #[test]
     fn test_sphere_explicit_segments() {
-        let term = struc("sphere".into(), vec![number(5), number(16)]);
+        let term = struc("sphere".into(), vec![number_int(5), number_int(16)]);
         let expr = ManifoldExpr::from_term(&term).unwrap();
         match expr {
             ManifoldExpr::Sphere { radius, segments } => {
@@ -425,7 +579,7 @@ mod tests {
 
     #[test]
     fn test_cylinder_default_segments() {
-        let term = struc("cylinder".into(), vec![number(3), number(10)]);
+        let term = struc("cylinder".into(), vec![number_int(3), number_int(10)]);
         let expr = ManifoldExpr::from_term(&term).unwrap();
         match expr {
             ManifoldExpr::Cylinder {
@@ -443,8 +597,8 @@ mod tests {
 
     #[test]
     fn test_union_conversion() {
-        let cube1 = struc("cube".into(), vec![number(1), number(1), number(1)]);
-        let cube2 = struc("cube".into(), vec![number(2), number(2), number(2)]);
+        let cube1 = struc("cube".into(), vec![number_int(1), number_int(1), number_int(1)]);
+        let cube2 = struc("cube".into(), vec![number_int(2), number_int(2), number_int(2)]);
         let union_term = struc("union".into(), vec![cube1, cube2]);
         let expr = ManifoldExpr::from_term(&union_term).unwrap();
         assert!(matches!(expr, ManifoldExpr::Union(_, _)));
@@ -452,10 +606,10 @@ mod tests {
 
     #[test]
     fn test_translate_conversion() {
-        let cube = struc("cube".into(), vec![number(1), number(1), number(1)]);
+        let cube = struc("cube".into(), vec![number_int(1), number_int(1), number_int(1)]);
         let translated = struc(
             "translate".into(),
-            vec![cube, number(5), number(10), number(15)],
+            vec![cube, number_int(5), number_int(10), number_int(15)],
         );
         let expr = ManifoldExpr::from_term(&translated).unwrap();
         match expr {
@@ -470,21 +624,21 @@ mod tests {
 
     #[test]
     fn test_unbound_variable_error() {
-        let term = struc("cube".into(), vec![var("X".into()), number(1), number(1)]);
+        let term = struc("cube".into(), vec![var("X".into()), number_int(1), number_int(1)]);
         let result = ManifoldExpr::from_term(&term);
         assert!(matches!(result, Err(ConversionError::UnboundVariable(_))));
     }
 
     #[test]
     fn test_arity_mismatch() {
-        let term = struc("cube".into(), vec![number(1), number(2)]);
+        let term = struc("cube".into(), vec![number_int(1), number_int(2)]);
         let result = ManifoldExpr::from_term(&term);
         assert!(matches!(result, Err(ConversionError::ArityMismatch { .. })));
     }
 
     #[test]
     fn test_unknown_primitive() {
-        let term = struc("unknown_shape".into(), vec![number(1)]);
+        let term = struc("unknown_shape".into(), vec![number_int(1)]);
         let result = ManifoldExpr::from_term(&term);
         assert!(matches!(result, Err(ConversionError::UnknownPrimitive(_))));
     }
@@ -492,10 +646,10 @@ mod tests {
     #[test]
     fn test_nested_csg() {
         // difference(union(cube(1,1,1), cube(2,2,2)), sphere(1))
-        let cube1 = struc("cube".into(), vec![number(1), number(1), number(1)]);
-        let cube2 = struc("cube".into(), vec![number(2), number(2), number(2)]);
+        let cube1 = struc("cube".into(), vec![number_int(1), number_int(1), number_int(1)]);
+        let cube2 = struc("cube".into(), vec![number_int(2), number_int(2), number_int(2)]);
         let union_term = struc("union".into(), vec![cube1, cube2]);
-        let sphere = struc("sphere".into(), vec![number(1)]);
+        let sphere = struc("sphere".into(), vec![number_int(1)]);
         let diff = struc("difference".into(), vec![union_term, sphere]);
 
         let expr = ManifoldExpr::from_term(&diff).unwrap();
@@ -508,8 +662,8 @@ mod tests {
         use crate::parse::arith_expr;
 
         // cube(1,1,1) + sphere(1) -> union
-        let cube = struc("cube".into(), vec![number(1), number(1), number(1)]);
-        let sphere = struc("sphere".into(), vec![number(1)]);
+        let cube = struc("cube".into(), vec![number_int(1), number_int(1), number_int(1)]);
+        let sphere = struc("sphere".into(), vec![number_int(1)]);
         let add_term = arith_expr(ArithOp::Add, cube, sphere);
 
         let expr = ManifoldExpr::from_term(&add_term).unwrap();
@@ -522,8 +676,8 @@ mod tests {
         use crate::parse::arith_expr;
 
         // cube(1,1,1) - sphere(1) -> difference
-        let cube = struc("cube".into(), vec![number(1), number(1), number(1)]);
-        let sphere = struc("sphere".into(), vec![number(1)]);
+        let cube = struc("cube".into(), vec![number_int(1), number_int(1), number_int(1)]);
+        let sphere = struc("sphere".into(), vec![number_int(1)]);
         let sub_term = arith_expr(ArithOp::Sub, cube, sphere);
 
         let expr = ManifoldExpr::from_term(&sub_term).unwrap();
@@ -536,8 +690,8 @@ mod tests {
         use crate::parse::arith_expr;
 
         // cube(1,1,1) * sphere(1) -> intersection
-        let cube = struc("cube".into(), vec![number(1), number(1), number(1)]);
-        let sphere = struc("sphere".into(), vec![number(1)]);
+        let cube = struc("cube".into(), vec![number_int(1), number_int(1), number_int(1)]);
+        let sphere = struc("sphere".into(), vec![number_int(1)]);
         let mul_term = arith_expr(ArithOp::Mul, cube, sphere);
 
         let expr = ManifoldExpr::from_term(&mul_term).unwrap();
@@ -550,9 +704,9 @@ mod tests {
         use crate::parse::arith_expr;
 
         // (cube(1,1,1) + sphere(1)) - cylinder(1,2)
-        let cube = struc("cube".into(), vec![number(1), number(1), number(1)]);
-        let sphere = struc("sphere".into(), vec![number(1)]);
-        let cylinder = struc("cylinder".into(), vec![number(1), number(2)]);
+        let cube = struc("cube".into(), vec![number_int(1), number_int(1), number_int(1)]);
+        let sphere = struc("sphere".into(), vec![number_int(1)]);
+        let cylinder = struc("cylinder".into(), vec![number_int(1), number_int(2)]);
 
         let union_term = arith_expr(ArithOp::Add, cube, sphere);
         let diff_term = arith_expr(ArithOp::Sub, union_term, cylinder);
@@ -572,11 +726,111 @@ mod tests {
         use crate::parse::arith_expr;
 
         // cube(1,1,1) / sphere(1) -> error
-        let cube = struc("cube".into(), vec![number(1), number(1), number(1)]);
-        let sphere = struc("sphere".into(), vec![number(1)]);
+        let cube = struc("cube".into(), vec![number_int(1), number_int(1), number_int(1)]);
+        let sphere = struc("sphere".into(), vec![number_int(1)]);
         let div_term = arith_expr(ArithOp::Div, cube, sphere);
 
         let result = ManifoldExpr::from_term(&div_term);
         assert!(matches!(result, Err(ConversionError::UnknownPrimitive(_))));
+    }
+
+    fn make_polygon_term(pts: Vec<(i64, i64)>) -> Term {
+        let points: Vec<Term> = pts
+            .into_iter()
+            .map(|(x, y)| struc("p".into(), vec![number_int(x), number_int(y)]))
+            .collect();
+        struc(
+            "polygon".into(),
+            vec![crate::parse::list(points, None)],
+        )
+    }
+
+    #[test]
+    fn test_polygon_conversion() {
+        let term = make_polygon_term(vec![(1, 0), (0, 0), (0, 1), (1, 1)]);
+        let expr = ManifoldExpr::from_term(&term).unwrap();
+        match expr {
+            ManifoldExpr::Polygon { points } => {
+                assert_eq!(points, vec![1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0]);
+            }
+            _ => panic!("Expected Polygon"),
+        }
+    }
+
+    #[test]
+    fn test_circle_default_segments() {
+        let term = struc("circle".into(), vec![number_int(5)]);
+        let expr = ManifoldExpr::from_term(&term).unwrap();
+        match expr {
+            ManifoldExpr::Circle { radius, segments } => {
+                assert_eq!(radius, 5.0);
+                assert_eq!(segments, DEFAULT_SEGMENTS);
+            }
+            _ => panic!("Expected Circle"),
+        }
+    }
+
+    #[test]
+    fn test_extrude_polygon() {
+        let polygon = make_polygon_term(vec![(1, 0), (0, 0), (0, 1), (1, 1)]);
+        let term = struc("extrude".into(), vec![polygon, number_int(3)]);
+        let expr = ManifoldExpr::from_term(&term).unwrap();
+        match expr {
+            ManifoldExpr::Extrude { profile, height } => {
+                assert!(matches!(*profile, ManifoldExpr::Polygon { .. }));
+                assert_eq!(height, 3.0);
+            }
+            _ => panic!("Expected Extrude"),
+        }
+    }
+
+    #[test]
+    fn test_revolve_circle() {
+        let circle = struc("circle".into(), vec![number_int(5)]);
+        let term = struc("revolve".into(), vec![circle, number_int(360)]);
+        let expr = ManifoldExpr::from_term(&term).unwrap();
+        match expr {
+            ManifoldExpr::Revolve {
+                profile,
+                degrees,
+                segments,
+            } => {
+                assert!(matches!(*profile, ManifoldExpr::Circle { .. }));
+                assert_eq!(degrees, 360.0);
+                assert_eq!(segments, DEFAULT_SEGMENTS);
+            }
+            _ => panic!("Expected Revolve"),
+        }
+    }
+
+    #[test]
+    fn test_extrude_circle() {
+        let circle = struc("circle".into(), vec![number_int(5)]);
+        let term = struc("extrude".into(), vec![circle, number_int(10)]);
+        let expr = ManifoldExpr::from_term(&term).unwrap();
+        match expr {
+            ManifoldExpr::Extrude { profile, height } => {
+                assert!(matches!(*profile, ManifoldExpr::Circle { .. }));
+                assert_eq!(height, 10.0);
+            }
+            _ => panic!("Expected Extrude"),
+        }
+    }
+
+    #[test]
+    fn test_polygon_standalone_evaluate() {
+        let term = make_polygon_term(vec![(1, 0), (0, 0), (0, 1), (1, 1)]);
+        let expr = ManifoldExpr::from_term(&term).unwrap();
+        let mesh = expr.to_mesh();
+        assert!(mesh.vertices().len() > 0);
+    }
+
+    #[test]
+    fn test_extrude_evaluate() {
+        let polygon = make_polygon_term(vec![(1, 0), (0, 0), (0, 1), (1, 1)]);
+        let term = struc("extrude".into(), vec![polygon, number_int(3)]);
+        let expr = ManifoldExpr::from_term(&term).unwrap();
+        let mesh = expr.to_mesh();
+        assert!(mesh.vertices().len() > 0);
     }
 }

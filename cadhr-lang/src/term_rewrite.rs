@@ -2,7 +2,7 @@ use std::fmt;
 
 use crate::constraint::{SolveResult, solve_arithmetic};
 use crate::manifold_bridge::{BuiltinFunctor, is_builtin_functor};
-use crate::parse::{ArithOp, Bound, Clause, Term, list, number, range_var, struc, var};
+use crate::parse::{ArithOp, Bound, Clause, FixedPoint, Term, list, number, range_var, struc, var};
 use strum::IntoEnumIterator;
 
 /// Check if a term is a built-in primitive that should not be rewritten
@@ -36,6 +36,10 @@ fn builtin_functor_arities(functor: BuiltinFunctor) -> &'static [usize] {
         BuiltinFunctor::Translate => &[4],
         BuiltinFunctor::Scale => &[4],
         BuiltinFunctor::Rotate => &[4],
+        BuiltinFunctor::Polygon => &[1],
+        BuiltinFunctor::Circle => &[1, 2],
+        BuiltinFunctor::Extrude => &[2],
+        BuiltinFunctor::Revolve => &[2, 3],
     }
 }
 
@@ -130,7 +134,7 @@ fn substitute_in_goals(goals: &mut Vec<Term>, var_name: &str, replacement: &Term
     }
 }
 
-fn collect_default_var_bindings(term: &Term, bindings: &mut Vec<(String, i64)>) {
+fn collect_default_var_bindings(term: &Term, bindings: &mut Vec<(String, FixedPoint)>) {
     match term {
         Term::DefaultVar { name, value } if name != "_" => {
             bindings.push((name.clone(), *value));
@@ -201,7 +205,7 @@ fn apply_default_var_bindings(term: &mut Term, goals: &mut Vec<Term>) {
 }
 
 /// 算術式を評価する。評価できない場合（未束縛変数を含む場合）はNoneを返す
-fn eval_arith(term: &Term) -> Option<i64> {
+fn eval_arith(term: &Term) -> Option<FixedPoint> {
     match term {
         Term::Number { value } => Some(*value),
         Term::InfixExpr { op, left, right } => {
@@ -325,7 +329,7 @@ fn range_is_valid(min: Option<Bound>, max: Option<Bound>) -> bool {
 }
 
 /// 値が範囲内にあるかチェック
-fn value_in_range(value: i64, min: Option<Bound>, max: Option<Bound>) -> bool {
+fn value_in_range(value: FixedPoint, min: Option<Bound>, max: Option<Bound>) -> bool {
     let min_ok = match min {
         None => true,
         Some(b) if b.inclusive => value >= b.value,
@@ -816,13 +820,13 @@ fn rewrite_term_recursive(
                             new_left_terms
                                 .into_iter()
                                 .next()
-                                .unwrap_or(Term::Number { value: 0 }),
+                                .unwrap_or(Term::Number { value: FixedPoint::from_int(0) }),
                         ),
                         right: Box::new(
                             new_right_terms
                                 .into_iter()
                                 .next()
-                                .unwrap_or(Term::Number { value: 0 }),
+                                .unwrap_or(Term::Number { value: FixedPoint::from_int(0) }),
                         ),
                     },
                 });
@@ -939,7 +943,7 @@ pub fn execute(db: &mut [Clause], query: Vec<Term>) -> Result<Vec<Term>, Rewrite
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parse::{database, query, struc, var};
+    use crate::parse::{database, query, struc, var, FixedPoint};
 
     fn run_success(db_src: &str, query_src: &str) -> Vec<String> {
         let mut db = database(db_src).expect("failed to parse db");
@@ -988,19 +992,19 @@ mod tests {
 
     #[test]
     fn test_rangevar_number_in_range() {
-        use crate::parse::{Bound, number, range_var};
+        use crate::parse::{Bound, number_int, range_var};
         let rv = range_var(
             "X".to_string(),
             Some(Bound {
-                value: 0,
+                value: FixedPoint::from_int(0),
                 inclusive: false,
             }),
             Some(Bound {
-                value: 10,
+                value: FixedPoint::from_int(10),
                 inclusive: false,
             }),
         );
-        let n = number(5);
+        let n = number_int(5);
         let mut goals = vec![var("X".to_string())];
         unify(rv, n.clone(), &mut goals).unwrap();
         assert_eq!(goals[0], n);
@@ -1008,62 +1012,62 @@ mod tests {
 
     #[test]
     fn test_rangevar_number_out_of_range() {
-        use crate::parse::{Bound, number, range_var};
+        use crate::parse::{Bound, number_int, range_var};
         let rv = range_var(
             "X".to_string(),
             Some(Bound {
-                value: 0,
+                value: FixedPoint::from_int(0),
                 inclusive: false,
             }),
             Some(Bound {
-                value: 10,
+                value: FixedPoint::from_int(10),
                 inclusive: false,
             }),
         );
-        let n = number(15);
+        let n = number_int(15);
         assert!(unify(rv, n, &mut vec![]).is_err());
     }
 
     #[test]
     fn test_rangevar_number_boundary_exclusive() {
-        use crate::parse::{Bound, number, range_var};
+        use crate::parse::{Bound, number_int, range_var};
         let make_rv = || {
             range_var(
                 "X".to_string(),
                 Some(Bound {
-                    value: 0,
+                    value: FixedPoint::from_int(0),
                     inclusive: false,
                 }),
                 Some(Bound {
-                    value: 10,
+                    value: FixedPoint::from_int(10),
                     inclusive: false,
                 }),
             )
         };
-        assert!(unify(make_rv(), number(0), &mut vec![]).is_err());
-        assert!(unify(make_rv(), number(10), &mut vec![]).is_err());
-        assert!(unify(make_rv(), number(1), &mut vec![]).is_ok());
-        assert!(unify(make_rv(), number(9), &mut vec![]).is_ok());
+        assert!(unify(make_rv(), number_int(0), &mut vec![]).is_err());
+        assert!(unify(make_rv(), number_int(10), &mut vec![]).is_err());
+        assert!(unify(make_rv(), number_int(1), &mut vec![]).is_ok());
+        assert!(unify(make_rv(), number_int(9), &mut vec![]).is_ok());
     }
 
     #[test]
     fn test_rangevar_number_boundary_inclusive() {
-        use crate::parse::{Bound, number, range_var};
+        use crate::parse::{Bound, number_int, range_var};
         let make_rv = || {
             range_var(
                 "X".to_string(),
                 Some(Bound {
-                    value: 0,
+                    value: FixedPoint::from_int(0),
                     inclusive: true,
                 }),
                 Some(Bound {
-                    value: 10,
+                    value: FixedPoint::from_int(10),
                     inclusive: true,
                 }),
             )
         };
-        assert!(unify(make_rv(), number(0), &mut vec![]).is_ok());
-        assert!(unify(make_rv(), number(10), &mut vec![]).is_ok());
+        assert!(unify(make_rv(), number_int(0), &mut vec![]).is_ok());
+        assert!(unify(make_rv(), number_int(10), &mut vec![]).is_ok());
     }
 
     #[test]
@@ -1072,22 +1076,22 @@ mod tests {
         let rv1 = range_var(
             "X".to_string(),
             Some(Bound {
-                value: 0,
+                value: FixedPoint::from_int(0),
                 inclusive: false,
             }),
             Some(Bound {
-                value: 10,
+                value: FixedPoint::from_int(10),
                 inclusive: false,
             }),
         );
         let rv2 = range_var(
             "Y".to_string(),
             Some(Bound {
-                value: 5,
+                value: FixedPoint::from_int(5),
                 inclusive: false,
             }),
             Some(Bound {
-                value: 15,
+                value: FixedPoint::from_int(15),
                 inclusive: false,
             }),
         );
@@ -1098,14 +1102,14 @@ mod tests {
                 assert_eq!(
                     *min,
                     Some(Bound {
-                        value: 5,
+                        value: FixedPoint::from_int(5),
                         inclusive: false
                     })
                 );
                 assert_eq!(
                     *max,
                     Some(Bound {
-                        value: 10,
+                        value: FixedPoint::from_int(10),
                         inclusive: false
                     })
                 );
@@ -1120,22 +1124,22 @@ mod tests {
         let rv1 = range_var(
             "X".to_string(),
             Some(Bound {
-                value: 0,
+                value: FixedPoint::from_int(0),
                 inclusive: false,
             }),
             Some(Bound {
-                value: 5,
+                value: FixedPoint::from_int(5),
                 inclusive: false,
             }),
         );
         let rv2 = range_var(
             "Y".to_string(),
             Some(Bound {
-                value: 10,
+                value: FixedPoint::from_int(10),
                 inclusive: false,
             }),
             Some(Bound {
-                value: 15,
+                value: FixedPoint::from_int(15),
                 inclusive: false,
             }),
         );
@@ -1148,22 +1152,22 @@ mod tests {
         let rv1 = range_var(
             "X".to_string(),
             Some(Bound {
-                value: 0,
+                value: FixedPoint::from_int(0),
                 inclusive: true,
             }),
             Some(Bound {
-                value: 5,
+                value: FixedPoint::from_int(5),
                 inclusive: true,
             }),
         );
         let rv2 = range_var(
             "Y".to_string(),
             Some(Bound {
-                value: 5,
+                value: FixedPoint::from_int(5),
                 inclusive: false,
             }),
             Some(Bound {
-                value: 10,
+                value: FixedPoint::from_int(10),
                 inclusive: false,
             }),
         );
@@ -1174,33 +1178,33 @@ mod tests {
 
     #[test]
     fn test_arith_simple_add() {
-        use crate::parse::number;
-        let expr = crate::parse::arith_expr(crate::parse::ArithOp::Add, number(3), number(5));
-        let n = number(8);
+        use crate::parse::number_int;
+        let expr = crate::parse::arith_expr(crate::parse::ArithOp::Add, number_int(3), number_int(5));
+        let n = number_int(8);
         assert!(unify(expr, n, &mut vec![]).is_ok());
     }
 
     #[test]
     fn test_arith_simple_sub() {
-        use crate::parse::number;
-        let expr = crate::parse::arith_expr(crate::parse::ArithOp::Sub, number(10), number(3));
-        let n = number(7);
+        use crate::parse::number_int;
+        let expr = crate::parse::arith_expr(crate::parse::ArithOp::Sub, number_int(10), number_int(3));
+        let n = number_int(7);
         assert!(unify(expr, n, &mut vec![]).is_ok());
     }
 
     #[test]
     fn test_arith_simple_mul() {
-        use crate::parse::number;
-        let expr = crate::parse::arith_expr(crate::parse::ArithOp::Mul, number(4), number(5));
-        let n = number(20);
+        use crate::parse::number_int;
+        let expr = crate::parse::arith_expr(crate::parse::ArithOp::Mul, number_int(4), number_int(5));
+        let n = number_int(20);
         assert!(unify(expr, n, &mut vec![]).is_ok());
     }
 
     #[test]
     fn test_arith_simple_div() {
-        use crate::parse::number;
-        let expr = crate::parse::arith_expr(crate::parse::ArithOp::Div, number(10), number(3));
-        let n = number(3); // truncated
+        use crate::parse::{number, number_int};
+        let expr = crate::parse::arith_expr(crate::parse::ArithOp::Div, number_int(10), number_int(3));
+        let n = number(FixedPoint::from_hundredths(333)); // 10/3 = 3.33 in fixed point
         assert!(unify(expr, n, &mut vec![]).is_ok());
     }
 
@@ -1271,7 +1275,7 @@ mod tests {
         );
         assert_eq!(
             resolved,
-            vec!["(cube(25, 50, 300) - translate(cube(5, 50, 260), 7, 0, 0))"]
+            vec!["(cube(25, 50, 300) - translate(cube(5, 50, 260), 7.5, 0, 0))"]
         );
     }
 
