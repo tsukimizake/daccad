@@ -158,6 +158,11 @@ pub enum Term {
         items: Vec<Term>,
         tail: Option<Box<Term>>,
     },
+    /// 遅延された算術制約: left = right を後で検証
+    Constraint {
+        left: Box<Term>,
+        right: Box<Term>,
+    },
 }
 
 #[derive(Clone, PartialEq)]
@@ -220,6 +225,9 @@ impl fmt::Debug for Term {
                     write!(f, "{:?}", tail)?;
                 }
                 write!(f, "]")
+            }
+            Term::Constraint { left, right } => {
+                write!(f, "constraint({:?} = {:?})", left, right)
             }
         }
     }

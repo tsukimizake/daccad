@@ -1,6 +1,5 @@
 use std::fmt;
 
-use crate::constraint::{SolveResult, solve_arithmetic};
 use crate::manifold_bridge::{BuiltinFunctor, is_builtin_functor};
 use crate::parse::{ArithOp, Bound, Clause, FixedPoint, Term, list, number, range_var, struc, var};
 use strum::IntoEnumIterator;
@@ -115,6 +114,10 @@ fn substitute_in_place(term: &mut Term, var_name: &str, replacement: &Term) {
             substitute_in_place(left.as_mut(), var_name, replacement);
             substitute_in_place(right.as_mut(), var_name, replacement);
         }
+        Term::Constraint { left, right } => {
+            substitute_in_place(left.as_mut(), var_name, replacement);
+            substitute_in_place(right.as_mut(), var_name, replacement);
+        }
         _ => {}
     }
 }
@@ -156,6 +159,10 @@ fn collect_default_var_bindings(term: &Term, bindings: &mut Vec<(String, FixedPo
             collect_default_var_bindings(left, bindings);
             collect_default_var_bindings(right, bindings);
         }
+        Term::Constraint { left, right } => {
+            collect_default_var_bindings(left, bindings);
+            collect_default_var_bindings(right, bindings);
+        }
         _ => {}
     }
 }
@@ -179,6 +186,10 @@ fn replace_default_vars_with_numbers(term: &mut Term) {
             }
         }
         Term::InfixExpr { left, right, .. } => {
+            replace_default_vars_with_numbers(left);
+            replace_default_vars_with_numbers(right);
+        }
+        Term::Constraint { left, right } => {
             replace_default_vars_with_numbers(left);
             replace_default_vars_with_numbers(right);
         }
@@ -246,6 +257,10 @@ fn eval_arith_in_place(term: &mut Term) {
                     eval_arith_in_place(t.as_mut());
                 }
             }
+            Term::Constraint { left, right } => {
+                eval_arith_in_place(left.as_mut());
+                eval_arith_in_place(right.as_mut());
+            }
             _ => {}
         }
     }
@@ -263,6 +278,9 @@ fn occurs_check(var_name: &str, term: &Term) -> bool {
                 || tail.as_ref().map_or(false, |t| occurs_check(var_name, t))
         }
         Term::InfixExpr { left, right, .. } => {
+            occurs_check(var_name, left) || occurs_check(var_name, right)
+        }
+        Term::Constraint { left, right } => {
             occurs_check(var_name, left) || occurs_check(var_name, right)
         }
         Term::Number { .. } => false,
@@ -348,6 +366,18 @@ fn substitute_in_deferred(deferred: &mut Vec<(Term, Term)>, var_name: &str, repl
     for (t1, t2) in deferred.iter_mut() {
         substitute_in_place(t1, var_name, replacement);
         substitute_in_place(t2, var_name, replacement);
+    }
+}
+
+/// 項が算術式として評価可能な形か（変数と数値とInfixExprのみで構成されているか）
+fn is_potentially_arithmetic(term: &Term) -> bool {
+    match term {
+        Term::Number { .. } => true,
+        Term::Var { .. } | Term::DefaultVar { .. } | Term::RangeVar { .. } => true,
+        Term::InfixExpr { left, right, .. } => {
+            is_potentially_arithmetic(left) && is_potentially_arithmetic(right)
+        }
+        _ => false,
     }
 }
 
@@ -614,49 +644,34 @@ pub fn unify(term1: Term, term2: Term, goals: &mut Vec<Term>) -> Result<(), Unif
         }
     }
 
-    // 最後に残った遅延制約を制約ソルバーで処理
+    // 最後に残った遅延制約を処理
     for (t1, t2) in deferred {
-        match solve_arithmetic(&t1, &t2) {
-            SolveResult::Solved(bindings) => {
-                // 解けた変数を goals に適用
-                for (var_name, value) in bindings {
-                    let replacement = number(value);
-                    substitute_in_goals(goals, &var_name, &replacement);
-                }
-            }
-            SolveResult::Contradiction => {
-                return Err(UnifyError {
-                    message: format!("arithmetic constraint contradiction: {:?} = {:?}", t1, t2),
-                    term1: t1,
-                    term2: t2,
-                });
-            }
-            SolveResult::Unsolvable => {
-                // 評価できなければエラー
-                if eval_arith(&t1).is_none() && matches!(&t1, Term::InfixExpr { .. }) {
+        let v1 = eval_arith(&t1);
+        let v2 = eval_arith(&t2);
+        match (v1, v2) {
+            (Some(n1), Some(n2)) => {
+                if n1 != n2 {
                     return Err(UnifyError {
-                        message: format!("cannot evaluate arithmetic expression: {:?}", t1),
+                        message: format!("number mismatch: {} != {}", n1, n2),
                         term1: t1,
                         term2: t2,
                     });
                 }
-                if eval_arith(&t2).is_none() && matches!(&t2, Term::InfixExpr { .. }) {
+            }
+            _ => {
+                // 両辺が算術式として解決可能な形（変数+数値+演算子のみ）なら
+                // Constraint として goals に押し出す（変数束縛後に再評価される）
+                if is_potentially_arithmetic(&t1) && is_potentially_arithmetic(&t2) {
+                    goals.push(Term::Constraint {
+                        left: Box::new(t1),
+                        right: Box::new(t2),
+                    });
+                } else {
                     return Err(UnifyError {
-                        message: format!("cannot evaluate arithmetic expression: {:?}", t2),
+                        message: format!("cannot unify {:?} with {:?}", t1, t2),
                         term1: t1,
                         term2: t2,
                     });
-                }
-                // 両方評価できたら一致チェック
-                match (&t1, &t2) {
-                    (Term::Number { value: n1 }, Term::Number { value: n2 }) if n1 != n2 => {
-                        return Err(UnifyError {
-                            message: format!("number mismatch: {} != {}", n1, n2),
-                            term1: t1,
-                            term2: t2,
-                        });
-                    }
-                    _ => {}
                 }
             }
         }
@@ -667,6 +682,35 @@ pub fn unify(term1: Term, term2: Term, goals: &mut Vec<Term>) -> Result<(), Unif
         eval_arith_in_place(goal);
     }
 
+    Ok(())
+}
+
+/// goals 内の Constraint を評価し、解けたものは除去、解けないものは残す
+fn try_resolve_constraints(goals: &mut Vec<Term>) -> Result<(), UnifyError> {
+    let mut i = 0;
+    while i < goals.len() {
+        if let Term::Constraint { ref left, ref right } = goals[i] {
+            let v1 = eval_arith(left);
+            let v2 = eval_arith(right);
+            match (v1, v2) {
+                (Some(n1), Some(n2)) => {
+                    if n1 != n2 {
+                        return Err(UnifyError {
+                            message: format!("constraint mismatch: {} != {}", n1, n2),
+                            term1: left.as_ref().clone(),
+                            term2: right.as_ref().clone(),
+                        });
+                    }
+                    goals.remove(i);
+                    continue;
+                }
+                _ => {
+                    // まだ解けない、残す
+                }
+            }
+        }
+        i += 1;
+    }
     Ok(())
 }
 
@@ -714,6 +758,10 @@ fn rename_term_vars(term: &mut Term, suffix: &str) {
             }
         }
         Term::InfixExpr { left, right, .. } => {
+            rename_term_vars(left.as_mut(), suffix);
+            rename_term_vars(right.as_mut(), suffix);
+        }
+        Term::Constraint { left, right } => {
             rename_term_vars(left.as_mut(), suffix);
             rename_term_vars(right.as_mut(), suffix);
         }
@@ -799,6 +847,14 @@ fn rewrite_term_recursive(
                 remaining_body = temp_other_goals.drain(0..remaining_body.len()).collect();
                 *other_goals = temp_other_goals;
             }
+
+            try_resolve_constraints(other_goals).map_err(|e| RewriteError {
+                message: e.message,
+                goal: Term::Constraint {
+                    left: Box::new(e.term1),
+                    right: Box::new(e.term2),
+                },
+            })?;
 
             return Ok(all_resolved);
         }
@@ -936,6 +992,18 @@ pub fn execute(db: &mut [Clause], query: Vec<Term>) -> Result<Vec<Term>, Rewrite
         results.extend(resolved);
         results.extend(other_goals);
     }
+
+    // 最終的に残った Constraint を検証
+    try_resolve_constraints(&mut results).map_err(|e| RewriteError {
+        message: e.message,
+        goal: Term::Constraint {
+            left: Box::new(e.term1),
+            right: Box::new(e.term2),
+        },
+    })?;
+
+    // 解決済み Constraint を結果から除去
+    results.retain(|t| !matches!(t, Term::Constraint { .. }));
 
     Ok(results)
 }
@@ -1652,5 +1720,16 @@ mod tests {
             resolved,
             vec!["(cube(40, 90, 50) - rotate(cube(40, 90, 50), 0, 30, 0))"]
         );
+    }
+
+    #[test]
+    fn constraint_propagation_across_body() {
+        // f(X+Y, Y) :- g(Y). g(3).
+        // query: f(7, Z). → Z=3, X=4
+        let resolved = run_success(
+            "f(X+Y, Y) :- g(Y). g(3).",
+            "f(7, Z).",
+        );
+        assert_eq!(resolved, vec!["g(3)"]);
     }
 }

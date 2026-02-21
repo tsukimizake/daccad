@@ -311,6 +311,9 @@ impl ManifoldExpr {
             Term::InfixExpr { op, left, right } => Self::from_infix_expr(*op, left, right),
             Term::Var { name } => Err(ConversionError::UnboundVariable(name.clone())),
             Term::RangeVar { name, .. } => Err(ConversionError::UnboundVariable(name.clone())),
+            Term::Constraint { .. } => Err(ConversionError::UnknownPrimitive(
+                "constraint should not reach mesh generation".to_string(),
+            )),
             _ => Err(ConversionError::UnknownPrimitive(format!("{:?}", term))),
         }
     }
