@@ -103,14 +103,21 @@ pub(super) fn egui_ui(
                     });
                 }
                 if ui.button("Update Previews").clicked() {
-                    // Reload db.cadhr from disk if a session is open
+                    for (_, target) in preview_targets.iter() {
+                        ev_generate.write(GeneratePreviewRequest {
+                            preview_id: target.preview_id,
+                            database: (**editor_text).clone(),
+                            query: target.query.clone(),
+                        });
+                    }
+                }
+                if ui.button("Reload and Preview").clicked() {
                     if let Some(ref path) = **current_file_path {
                         let db_path = path.join("db.cadhr");
                         if let Ok(content) = std::fs::read_to_string(&db_path) {
                             **editor_text = content;
                         }
                     }
-                    // Re-render all previews with the current editor text
                     for (_, target) in preview_targets.iter() {
                         ev_generate.write(GeneratePreviewRequest {
                             preview_id: target.preview_id,
@@ -194,15 +201,6 @@ pub(super) fn egui_ui(
                             }
                         }
                     });
-                // Reload db.cadhr from disk if a session is open and updates are pending
-                if !updates_to_send.is_empty() {
-                    if let Some(ref path) = **current_file_path {
-                        let db_path = path.join("db.cadhr");
-                        if let Ok(content) = std::fs::read_to_string(&db_path) {
-                            **editor_text = content;
-                        }
-                    }
-                }
                 // Send update requests
                 for (preview_id, query) in updates_to_send {
                     ev_generate.write(GeneratePreviewRequest {
