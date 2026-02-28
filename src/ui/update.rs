@@ -252,6 +252,7 @@ pub(super) fn egui_ui(
                 let mut exports_to_send: Vec<usize> = Vec::new();
                 let mut closes_to_send: Vec<(Entity, usize)> = Vec::new();
                 let mut cp_override_regenerate: Vec<u64> = Vec::new();
+                let mut cp_source_edits: Vec<(f64, SrcSpan)> = Vec::new();
                 egui::ScrollArea::vertical()
                     .auto_shrink([false; 2])
                     .show(right, |ui| {
@@ -262,7 +263,7 @@ pub(super) fn egui_ui(
                         } else {
                             for (i, (entity, target)) in preview_targets.iter_mut().enumerate() {
                                 if let Some((tex_id, size)) = preview_images.get(i) {
-                                    match preview_target_ui(ui, i, target, *tex_id, *size, &mut selected_cp, &mut cp_override_regenerate) {
+                                    match preview_target_ui(ui, i, target, *tex_id, *size, &mut selected_cp, &mut cp_override_regenerate, &mut cp_source_edits) {
                                         PreviewAction::Update => {
                                             updates_to_send
                                                 .push((target.preview_id, target.query.clone()));
@@ -349,7 +350,9 @@ pub(super) fn egui_ui(
                     commands.entity(entity).despawn();
                 }
 
-                // Apply source text edits from parameters panel
+                // Merge control point source edits
+                global_var_edits.extend(cp_source_edits);
+                // Apply source text edits from parameters panel and control points
                 if !global_var_edits.is_empty() {
                     global_var_edits.sort_by(|a, b| b.1.start.cmp(&a.1.start));
                     for (new_val, span) in &global_var_edits {
@@ -871,6 +874,7 @@ fn preview_target_ui(
     size: UVec2,
     selected_cp: &mut SelectedControlPoint,
     cp_override_regenerate: &mut Vec<u64>,
+    cp_source_edits: &mut Vec<(f64, SrcSpan)>,
 ) -> PreviewAction {
     let mut action = PreviewAction::None;
     egui::Frame::default()
@@ -1012,7 +1016,14 @@ fn preview_target_ui(
                                 }
                             }
                             if response.drag_stopped() || response.lost_focus() {
-                                cp_override_regenerate.push(target.preview_id);
+                                if let Some(span) = tracked.source_span {
+                                    cp_source_edits.push((val, span));
+                                    if let Some(ref vname) = cp.var_names[axis_idx] {
+                                        target.control_point_overrides.remove(vname);
+                                    }
+                                } else {
+                                    cp_override_regenerate.push(target.preview_id);
+                                }
                             }
                         }
                     });

@@ -920,7 +920,7 @@ fn collect_editable_vars_from_term(term: &Term, vars: &mut Vec<VarInfo>) {
                 });
             }
         }
-        Term::Struct { args, .. } => {
+        Term::Struct { functor, args } if functor != "control" => {
             for arg in args {
                 collect_editable_vars_from_term(arg, vars);
             }
