@@ -1014,6 +1014,7 @@ fn preview_target_ui(
                                 if let Some(ref vname) = cp.var_names[axis_idx] {
                                     target.control_point_overrides.insert(vname.clone(), val);
                                 }
+                                cp_override_regenerate.push(target.preview_id);
                             }
                             if response.drag_stopped() || response.lost_focus() {
                                 if let Some(span) = tracked.source_span {
@@ -1021,8 +1022,6 @@ fn preview_target_ui(
                                     if let Some(ref vname) = cp.var_names[axis_idx] {
                                         target.control_point_overrides.remove(vname);
                                     }
-                                } else {
-                                    cp_override_regenerate.push(target.preview_id);
                                 }
                             }
                         }
