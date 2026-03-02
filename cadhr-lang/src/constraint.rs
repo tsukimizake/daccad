@@ -336,7 +336,7 @@ impl ArithExpr {
     /// Struct や List など算術式でないものは Err を返す
     pub fn try_from_term(term: &Term) -> Result<Self, ConversionError> {
         match term {
-            Term::Var { name } => Ok(ArithExpr::Var(name.clone())),
+            Term::Var { name, .. } => Ok(ArithExpr::Var(name.clone())),
             Term::AnnotatedVar {
                 name,
                 default_value,

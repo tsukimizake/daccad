@@ -197,6 +197,16 @@ pub fn define_manifold_expr(input: TokenStream) -> TokenStream {
         })
         .collect();
 
+    let display_arms: Vec<TokenStream2> = def
+        .entries
+        .iter()
+        .map(|e| {
+            let functor_name = to_lowercase_functor(e);
+            let variant = &e.variant_name;
+            quote! { ManifoldTag::#variant => #functor_name }
+        })
+        .collect();
+
     let output = quote! {
         #[derive(Debug, Clone)]
         pub enum ManifoldExpr {
@@ -215,6 +225,15 @@ pub fn define_manifold_expr(input: TokenStream) -> TokenStream {
                     #(#from_str_arms,)*
                     _ => Err(()),
                 }
+            }
+        }
+
+        impl ::std::fmt::Display for ManifoldTag {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                let s = match self {
+                    #(#display_arms,)*
+                };
+                f.write_str(s)
             }
         }
 

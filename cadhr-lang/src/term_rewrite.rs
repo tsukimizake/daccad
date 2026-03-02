@@ -27,7 +27,7 @@ fn resolve_inner(term: &Term, env: &Env, depth: usize) -> Term {
         return term.clone();
     }
     match term {
-        Term::Var { name } if name != "_" => match env.get(name) {
+        Term::Var { name, .. } if name != "_" => match env.get(name) {
             Some(val) => resolve_inner(val, env, depth + 1),
             None => term.clone(),
         },
@@ -250,7 +250,7 @@ pub fn eval_arith_in_place(term: &mut Term) {
 /// occurs check: 変数varが項term内に出現するか
 fn occurs_check(var_name: &str, term: &Term) -> bool {
     match term {
-        Term::Var { name } => name == var_name,
+        Term::Var { name, .. } => name == var_name,
         Term::AnnotatedVar { name, .. } => name == var_name,
         Term::Struct { args, .. } => args.iter().any(|arg| occurs_check(var_name, arg)),
         Term::List { items, tail } => {
@@ -405,7 +405,7 @@ pub fn unify(
         }
 
         match (&t1, &t2) {
-            (Term::Var { name: n1 }, Term::Var { name: n2 }) if n1 == n2 => {}
+            (Term::Var { name: n1, .. }, Term::Var { name: n2, .. }) if n1 == n2 => {}
             // AnnotatedVar同士: 範囲の交差を計算
             (
                 Term::AnnotatedVar {
@@ -470,7 +470,7 @@ pub fn unify(
             (_, Term::AnnotatedVar { name, .. }) if name != "_" => {
                 stack.push((t2, t1));
             }
-            (Term::Var { name }, _) if name != "_" => {
+            (Term::Var { name, .. }, _) if name != "_" => {
                 if occurs_check(name, &t2) {
                     return Err(UnifyError {
                         message: format!("occurs check failed: {} occurs in {:?}", name, t2),
@@ -480,12 +480,12 @@ pub fn unify(
                 }
                 env.insert(name.clone(), t2.clone());
             }
-            (_, Term::Var { name }) if name != "_" => {
+            (_, Term::Var { name, .. }) if name != "_" => {
                 stack.push((t2, t1));
             }
             // anonymous変数はどんな項とも単一化成功（束縛なし）
-            (Term::Var { name }, _) | (Term::AnnotatedVar { name, .. }, _) if name == "_" => {}
-            (_, Term::Var { name }) | (_, Term::AnnotatedVar { name, .. }) if name == "_" => {}
+            (Term::Var { name, .. }, _) | (Term::AnnotatedVar { name, .. }, _) if name == "_" => {}
+            (_, Term::Var { name, .. }) | (_, Term::AnnotatedVar { name, .. }) if name == "_" => {}
             (Term::Number { value: v1 }, Term::Number { value: v2 }) => {
                 if v1 != v2 {
                     return Err(UnifyError {
@@ -712,7 +712,7 @@ fn rename_clause_vars(clause: &mut Clause, suffix: &str) {
 
 fn rename_term_vars(term: &mut Term, suffix: &str) {
     match term {
-        Term::Var { name } => {
+        Term::Var { name, .. } => {
             if name != "_" {
                 *name = format!("{}_{}", name, suffix);
             }

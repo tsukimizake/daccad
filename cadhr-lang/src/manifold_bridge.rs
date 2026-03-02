@@ -67,6 +67,11 @@ define_manifold_expr! {
     Revolve { profile: Box<ManifoldExpr>, degrees: TrackedF64, segments: u32 };
     Polyhedron { points: Vec<f64>, faces: Vec<Vec<u32>> };
     Stl { path: String };
+    @name("line_to") @no_variant
+    LineTo { _end: TrackedF64 };
+    @name("bezier_to") @also_arity(3) @no_variant
+    BezierTo { _cp1: TrackedF64, _cp2: TrackedF64, _end: TrackedF64 };
+    Path { points: Vec<f64> };
     @also_arity(3) @no_variant
     Control { x: TrackedF64, y: TrackedF64, z: TrackedF64, name: String };
 }
@@ -175,9 +180,13 @@ fn term_to_tracked_f64(term: &Term) -> Option<TrackedF64> {
             value: 0.0,
             source_span: *span,
         }),
-        Term::Var { .. } => Some(TrackedF64 {
+        Term::Var { span, .. } => Some(TrackedF64 {
             value: 0.0,
-            source_span: None,
+            // 変数名末尾の zero-length span → @value 挿入位置
+            source_span: span.map(|s| SrcSpan {
+                start: s.end,
+                end: s.end,
+            }),
         }),
         _ => None,
     }
@@ -186,7 +195,7 @@ fn term_to_tracked_f64(term: &Term) -> Option<TrackedF64> {
 /// Var/AnnotatedVarから変数名を取り出す
 fn var_name(term: &Term) -> Option<&str> {
     match term {
-        Term::Var { name } | Term::AnnotatedVar { name, .. } => Some(name),
+        Term::Var { name, .. } | Term::AnnotatedVar { name, .. } => Some(name),
         _ => None,
     }
 }
@@ -258,7 +267,7 @@ pub fn extract_control_points(
 
 fn substitute_vars(term: &mut Term, subs: &[(String, FixedPoint)]) {
     match term {
-        Term::Var { name } | Term::AnnotatedVar { name, .. } => {
+        Term::Var { name, .. } | Term::AnnotatedVar { name, .. } => {
             if let Some((_, val)) = subs.iter().find(|(n, _)| n == name) {
                 *term = Term::Number { value: *val };
             }
@@ -308,7 +317,7 @@ pub fn apply_var_overrides(terms: &mut Vec<Term>, overrides: &std::collections::
 
 fn apply_var_overrides_to_term(term: &mut Term, overrides: &std::collections::HashMap<String, f64>) {
     match term {
-        Term::Var { name } | Term::AnnotatedVar { name, .. } => {
+        Term::Var { name, .. } | Term::AnnotatedVar { name, .. } => {
             let base = strip_rename_suffix(name);
             if let Some(&val) = overrides.get(base) {
                 *term = Term::Number {
@@ -360,7 +369,7 @@ impl<'a> Args<'a> {
             });
         }
         match &self.args[i] {
-            Term::Var { name } | Term::AnnotatedVar { name, .. } => {
+            Term::Var { name, .. } | Term::AnnotatedVar { name, .. } => {
                 Err(ConversionError::UnboundVariable(name.clone()))
             }
             _ => Err(ConversionError::TypeMismatch {
@@ -383,7 +392,7 @@ impl<'a> Args<'a> {
             };
         }
         match &self.args[i] {
-            Term::Var { name } | Term::AnnotatedVar { name, .. } => {
+            Term::Var { name, .. } | Term::AnnotatedVar { name, .. } => {
                 Err(ConversionError::UnboundVariable(name.clone()))
             }
             _ => Err(ConversionError::TypeMismatch {
@@ -552,10 +561,106 @@ fn extract_polyhedron_faces(
     }
 }
 
+fn extract_point_2d(term: &Term, tag: ManifoldTag, arg_index: usize) -> Result<(f64, f64), ConversionError> {
+    match term {
+        Term::Struct { functor: f, args } if f == "p" && args.len() == 2 => {
+            let x = term_as_fixed_point(&args[0])
+                .ok_or_else(|| ConversionError::TypeMismatch {
+                    functor: tag.to_string(),
+                    arg_index,
+                    expected: "p(number, number)",
+                })?
+                .0
+                .to_f64();
+            let y = term_as_fixed_point(&args[1])
+                .ok_or_else(|| ConversionError::TypeMismatch {
+                    functor: tag.to_string(),
+                    arg_index,
+                    expected: "p(number, number)",
+                })?
+                .0
+                .to_f64();
+            Ok((x, y))
+        }
+        _ => Err(ConversionError::TypeMismatch {
+            functor: tag.to_string(),
+            arg_index,
+            expected: "p(x, y)",
+        }),
+    }
+}
+
+fn extract_path_points(
+    start_term: &Term,
+    segments_term: &Term,
+) -> Result<Vec<f64>, ConversionError> {
+    let mut current = extract_point_2d(start_term, ManifoldTag::Path, 0)?;
+    let mut points = vec![current.0, current.1];
+
+    let segments = match segments_term {
+        Term::List { items, .. } => items,
+        _ => {
+            return Err(ConversionError::TypeMismatch {
+                functor: "path".to_string(),
+                arg_index: 1,
+                expected: "list of line_to/bezier_to segments",
+            });
+        }
+    };
+
+    for (i, seg) in segments.iter().enumerate() {
+        let (tag, args) = match seg {
+            Term::Struct { functor, args } => (
+                ManifoldTag::from_str(functor).ok(),
+                Some(args.as_slice()),
+            ),
+            _ => (None, None),
+        };
+        match (tag, args) {
+            (Some(ManifoldTag::LineTo), Some([end_term])) => {
+                let end = extract_point_2d(end_term, ManifoldTag::LineTo, i)?;
+                points.push(end.0);
+                points.push(end.1);
+                current = end;
+            }
+            (Some(ManifoldTag::BezierTo), Some([cp_term, end_term])) => {
+                let cp = extract_point_2d(cp_term, ManifoldTag::BezierTo, i)?;
+                let end = extract_point_2d(end_term, ManifoldTag::BezierTo, i)?;
+                for (x, y) in crate::bezier::evaluate_quadratic(current, cp, end, crate::bezier::DEFAULT_STEPS) {
+                    points.push(x);
+                    points.push(y);
+                }
+                current = end;
+            }
+            (Some(ManifoldTag::BezierTo), Some([cp1_term, cp2_term, end_term])) => {
+                let cp1 = extract_point_2d(cp1_term, ManifoldTag::BezierTo, i)?;
+                let cp2 = extract_point_2d(cp2_term, ManifoldTag::BezierTo, i)?;
+                let end = extract_point_2d(end_term, ManifoldTag::BezierTo, i)?;
+                for (x, y) in crate::bezier::evaluate_cubic(current, cp1, cp2, end, crate::bezier::DEFAULT_STEPS) {
+                    points.push(x);
+                    points.push(y);
+                }
+                current = end;
+            }
+            _ => {
+                return Err(ConversionError::TypeMismatch {
+                    functor: "path".to_string(),
+                    arg_index: i + 1,
+                    expected: "line_to(p) or bezier_to(cp,end) or bezier_to(cp1,cp2,end)",
+                });
+            }
+        }
+    }
+
+    Ok(points)
+}
+
 impl ManifoldExpr {
     fn to_polygon_data(&self) -> Option<Vec<f64>> {
         match self {
-            ManifoldExpr::Polygon { points } => Some(points.clone()),
+            ManifoldExpr::Polygon { points } | ManifoldExpr::Path { points } => {
+                Some(points.clone())
+            }
             ManifoldExpr::Circle { radius, segments } => {
                 let r = radius.value;
                 let mut points = Vec::with_capacity(*segments as usize * 2);
@@ -575,7 +680,7 @@ impl ManifoldExpr {
         match term {
             Term::Struct { functor, args } => Self::from_struct(functor, args),
             Term::InfixExpr { op, left, right } => Self::from_infix_expr(*op, left, right),
-            Term::Var { name } => Err(ConversionError::UnboundVariable(name.clone())),
+            Term::Var { name, .. } => Err(ConversionError::UnboundVariable(name.clone())),
             Term::AnnotatedVar { name, .. } => Err(ConversionError::UnboundVariable(name.clone())),
             Term::Constraint { .. } => Err(ConversionError::UnknownPrimitive(
                 "constraint should not reach mesh generation".to_string(),
@@ -690,6 +795,12 @@ impl ManifoldExpr {
             }
             ManifoldTag::Polygon => Err(a.arity_error("1")),
 
+            ManifoldTag::Path if a.len() == 2 => {
+                let points = extract_path_points(&a.args[0], &a.args[1])?;
+                Ok(ManifoldExpr::Path { points })
+            }
+            ManifoldTag::Path => Err(a.arity_error("2")),
+
             ManifoldTag::Circle if a.len() == 1 => Ok(ManifoldExpr::Circle {
                 radius: a.tracked_f64(0)?,
                 segments: DEFAULT_SEGMENTS,
@@ -730,6 +841,12 @@ impl ManifoldExpr {
                 Ok(ManifoldExpr::Stl { path })
             }
             ManifoldTag::Stl => Err(a.arity_error("1")),
+
+            ManifoldTag::LineTo | ManifoldTag::BezierTo => Err(
+                ConversionError::UnknownPrimitive(
+                    format!("{} is a data constructor for path, not a shape primitive", functor),
+                ),
+            ),
 
             ManifoldTag::Control => Err(ConversionError::UnknownPrimitive(
                 "control is a data constructor, not a shape primitive".to_string(),
@@ -776,7 +893,7 @@ impl ManifoldExpr {
                 .evaluate(include_paths)?
                 .rotate(x.value, y.value, z.value)),
 
-            ManifoldExpr::Polygon { points } => {
+            ManifoldExpr::Polygon { points } | ManifoldExpr::Path { points } => {
                 Ok(Manifold::extrude(&[points], 0.001, 0, 0.0, 1.0, 1.0))
             }
             ManifoldExpr::Circle { .. } => {
@@ -1640,6 +1757,153 @@ mod tests {
         // box(10)→cube(10,10,10), box(20)→cube(20,20,20) が残るはず
         assert_eq!(resolved.len(), 2);
         let (mesh, _) = generate_mesh_and_tree_from_terms(&resolved, &[]).unwrap();
+        assert!(mesh.vertices().len() > 0);
+    }
+
+    fn make_path_term(start: (i64, i64), segments: Vec<Term>) -> Term {
+        let start_point = struc("p".into(), vec![number_int(start.0), number_int(start.1)]);
+        struc("path".into(), vec![start_point, crate::parse::list(segments, None)])
+    }
+
+    fn line_to_term(x: i64, y: i64) -> Term {
+        struc(
+            "line_to".into(),
+            vec![struc("p".into(), vec![number_int(x), number_int(y)])],
+        )
+    }
+
+    fn bezier_to_quad_term(cp: (i64, i64), end: (i64, i64)) -> Term {
+        struc(
+            "bezier_to".into(),
+            vec![
+                struc("p".into(), vec![number_int(cp.0), number_int(cp.1)]),
+                struc("p".into(), vec![number_int(end.0), number_int(end.1)]),
+            ],
+        )
+    }
+
+    fn bezier_to_cubic_term(cp1: (i64, i64), cp2: (i64, i64), end: (i64, i64)) -> Term {
+        struc(
+            "bezier_to".into(),
+            vec![
+                struc("p".into(), vec![number_int(cp1.0), number_int(cp1.1)]),
+                struc("p".into(), vec![number_int(cp2.0), number_int(cp2.1)]),
+                struc("p".into(), vec![number_int(end.0), number_int(end.1)]),
+            ],
+        )
+    }
+
+    #[test]
+    fn test_path_line_to_only() {
+        let term = make_path_term(
+            (0, 0),
+            vec![line_to_term(10, 0), line_to_term(10, 10), line_to_term(0, 10)],
+        );
+        let expr = ManifoldExpr::from_term(&term).unwrap();
+        match &expr {
+            ManifoldExpr::Path { points } => {
+                // start + 3 line_to = 4 points = 8 floats
+                assert_eq!(points.len(), 8);
+                assert_eq!(points, &[0.0, 0.0, 10.0, 0.0, 10.0, 10.0, 0.0, 10.0]);
+            }
+            _ => panic!("Expected Path"),
+        }
+    }
+
+    #[test]
+    fn test_path_quadratic_bezier() {
+        let term = make_path_term(
+            (0, 0),
+            vec![bezier_to_quad_term((5, 10), (10, 0))],
+        );
+        let expr = ManifoldExpr::from_term(&term).unwrap();
+        match &expr {
+            ManifoldExpr::Path { points } => {
+                // start(1) + 16 bezier steps = 17 points = 34 floats
+                assert_eq!(points.len(), 34);
+                // first point is start
+                assert_eq!(points[0], 0.0);
+                assert_eq!(points[1], 0.0);
+                // last point is end
+                assert!((points[32] - 10.0).abs() < 1e-9);
+                assert!((points[33] - 0.0).abs() < 1e-9);
+            }
+            _ => panic!("Expected Path"),
+        }
+    }
+
+    #[test]
+    fn test_path_cubic_bezier() {
+        let term = make_path_term(
+            (0, 0),
+            vec![bezier_to_cubic_term((5, 10), (10, 10), (10, 0))],
+        );
+        let expr = ManifoldExpr::from_term(&term).unwrap();
+        match &expr {
+            ManifoldExpr::Path { points } => {
+                assert_eq!(points.len(), 34);
+                assert!((points[32] - 10.0).abs() < 1e-9);
+                assert!((points[33] - 0.0).abs() < 1e-9);
+            }
+            _ => panic!("Expected Path"),
+        }
+    }
+
+    #[test]
+    fn test_path_mixed_segments() {
+        let term = make_path_term(
+            (0, 0),
+            vec![
+                line_to_term(10, 0),
+                bezier_to_quad_term((15, 5), (10, 10)),
+                bezier_to_cubic_term((5, 15), (0, 10), (0, 0)),
+            ],
+        );
+        let expr = ManifoldExpr::from_term(&term).unwrap();
+        match &expr {
+            ManifoldExpr::Path { points } => {
+                // start(1) + line(1) + quad(16) + cubic(16) = 34 points = 68 floats
+                assert_eq!(points.len(), 68);
+            }
+            _ => panic!("Expected Path"),
+        }
+    }
+
+    #[test]
+    fn test_path_evaluate() {
+        let term = make_path_term(
+            (0, 0),
+            vec![
+                line_to_term(10, 0),
+                bezier_to_quad_term((15, 5), (10, 10)),
+                line_to_term(0, 10),
+            ],
+        );
+        let expr = ManifoldExpr::from_term(&term).unwrap();
+        let mesh = expr.to_mesh(&[]).unwrap();
+        assert!(mesh.vertices().len() > 0);
+    }
+
+    #[test]
+    fn test_path_extrude() {
+        let path = make_path_term(
+            (0, 0),
+            vec![
+                line_to_term(10, 0),
+                line_to_term(10, 10),
+                line_to_term(0, 10),
+            ],
+        );
+        let term = struc("extrude".into(), vec![path, number_int(5)]);
+        let expr = ManifoldExpr::from_term(&term).unwrap();
+        match &expr {
+            ManifoldExpr::Extrude { profile, height } => {
+                assert!(matches!(**profile, ManifoldExpr::Path { .. }));
+                assert_eq!(height.value, 5.0);
+            }
+            _ => panic!("Expected Extrude"),
+        }
+        let mesh = expr.to_mesh(&[]).unwrap();
         assert!(mesh.vertices().len() > 0);
     }
 }

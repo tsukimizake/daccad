@@ -139,6 +139,8 @@ pub enum ArithOp {
 pub enum Term {
     Var {
         name: String,
+        /// 変数名のソース上の範囲 (バイトオフセット)。@value挿入位置の算出に使用。
+        span: Option<SrcSpan>,
     },
     /// 既定値・範囲付き変数: X@25, 0<X@20<50, 0<X<50 など
     AnnotatedVar {
@@ -193,7 +195,7 @@ pub fn term_as_fixed_point(term: &Term) -> Option<(FixedPoint, Option<SrcSpan>)>
 impl PartialEq for Term {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Term::Var { name: n1 }, Term::Var { name: n2 }) => n1 == n2,
+            (Term::Var { name: n1, .. }, Term::Var { name: n2, .. }) => n1 == n2,
             (
                 Term::AnnotatedVar {
                     name: n1,
@@ -268,7 +270,7 @@ pub enum Clause {
 impl fmt::Debug for Term {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Term::Var { name } => write!(f, "{}", name),
+            Term::Var { name, .. } => write!(f, "{}", name),
             Term::AnnotatedVar {
                 name,
                 default_value,
@@ -356,7 +358,14 @@ impl fmt::Debug for Clause {
 
 /// Termコンストラクタ
 pub fn var(name: String) -> Term {
-    Term::Var { name }
+    Term::Var { name, span: None }
+}
+
+pub fn var_with_span(name: String, span: SrcSpan) -> Term {
+    Term::Var {
+        name,
+        span: Some(span),
+    }
 }
 
 pub fn default_var(name: String, value: FixedPoint) -> Term {
@@ -632,7 +641,13 @@ fn annotated_var_term(input: &str) -> PResult<'_, Term> {
     // 左側: (num op)?
     let (input, left) = opt((ws(fixed_number), comp_op)).parse(input)?;
     // 変数名
+    let var_name_start = input.as_ptr() as usize;
     let (input, name) = ws(variable).parse(input)?;
+    let var_name_end = input.as_ptr() as usize;
+    let var_name_span = SrcSpan {
+        start: var_name_start,
+        end: var_name_end,
+    };
     // @default_value (optional)
     let (input, default_with_span) = opt(default_value_suffix).parse(input)?;
     // 右側: (op num)?
@@ -647,7 +662,7 @@ fn annotated_var_term(input: &str) -> PResult<'_, Term> {
             value: val,
             inclusive: true,
         }),
-        Some((_, CompOp::Gt | CompOp::Ge)) => return Ok((input, var(name))),
+        Some((_, CompOp::Gt | CompOp::Ge)) => return Ok((input, var_with_span(name, var_name_span))),
         None => None,
     };
 
@@ -660,17 +675,21 @@ fn annotated_var_term(input: &str) -> PResult<'_, Term> {
             value: val,
             inclusive: true,
         }),
-        Some((CompOp::Gt | CompOp::Ge, _)) => return Ok((input, var(name))),
+        Some((CompOp::Gt | CompOp::Ge, _)) => return Ok((input, var_with_span(name, var_name_span))),
         None => None,
     };
 
     let (default_value, span) = match default_with_span {
         Some((val, sp)) => (Some(val), Some(sp)),
-        None => (None, None),
+        // @valueなし → 変数名末尾に zero-length span (挿入位置)
+        None => (None, Some(SrcSpan {
+            start: var_name_span.end,
+            end: var_name_span.end,
+        })),
     };
 
     if min.is_none() && max.is_none() && default_value.is_none() {
-        Ok((input, var(name)))
+        Ok((input, var_with_span(name, var_name_span)))
     } else {
         Ok((
             input,
@@ -822,6 +841,12 @@ pub fn program(input: &str) -> PResult<'_, Vec<Clause>> {
 
 fn fix_spans_in_term(term: &mut Term, base: usize) {
     match term {
+        Term::Var { span, .. } => {
+            if let Some(s) = span {
+                s.start = s.start.wrapping_sub(base);
+                s.end = s.end.wrapping_sub(base);
+            }
+        }
         Term::AnnotatedVar { span, .. } => {
             if let Some(s) = span {
                 s.start = s.start.wrapping_sub(base);

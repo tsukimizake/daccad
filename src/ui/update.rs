@@ -356,10 +356,16 @@ pub(super) fn egui_ui(
                 if !global_var_edits.is_empty() {
                     global_var_edits.sort_by(|a, b| b.1.start.cmp(&a.1.start));
                     for (new_val, span) in &global_var_edits {
-                        let new_val_str = format!("{}", new_val);
                         let src = &mut **editor_text;
                         if span.end <= src.len() {
-                            src.replace_range(span.start..span.end, &new_val_str);
+                            if span.start == span.end {
+                                // zero-length span: 変数名の直後に @value を挿入
+                                let insert_str = format!("@{}", new_val);
+                                src.insert_str(span.start, &insert_str);
+                            } else {
+                                let new_val_str = format!("{}", new_val);
+                                src.replace_range(span.start..span.end, &new_val_str);
+                            }
                         }
                     }
                     refresh_editable_vars(&editor_text, &mut editable_vars);
