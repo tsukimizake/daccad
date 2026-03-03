@@ -61,8 +61,8 @@ pub(super) fn egui_ui(
     mut ev_generate: MessageWriter<GeneratePreviewRequest>,
     mut editable_vars: ResMut<EditableVars>,
     mut selected_cp: ResMut<SelectedControlPoint>,
-    error_message: Res<ErrorMessage>,
-    current_file_path: Res<CurrentFilePath>,
+    mut error_message: ResMut<ErrorMessage>,
+    mut current_file_path: ResMut<CurrentFilePath>,
     meshes: Res<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
@@ -73,42 +73,60 @@ pub(super) fn egui_ui(
 
     // Collect preview targets into a Vec for indexed access
     let mut preview_targets: Vec<(Entity, Mut<PreviewTarget>)> = preview_query.iter_mut().collect();
-    // Toolbar: add a new preview or reload existing
+    // Toolbar: menu bar + preview buttons
     if let Ok(ctx) = contexts.ctx_mut() {
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                // Session operations
-                if ui.button("Open Session").clicked() {
-                    commands
-                        .dialog()
-                        .pick_directory_path::<SessionLoadContents>();
-                }
-                if ui.button("Save Session").clicked() {
-                    if let Some(ref path) = **current_file_path {
-                        save_session(
-                            path,
-                            &editor_text,
-                            preview_targets.iter().map(|(_, t)| t.as_ref()),
-                        );
-                    } else {
+                ui.menu_button("File", |ui| {
+                    if ui.button("New Session").clicked() {
+                        ui.close();
+                        **editor_text = "main :- cube(10, 20, 30).".to_string();
+                        **current_file_path = None;
+                        **next_preview_id = 0;
+                        pending_states.clear();
+                        editable_vars.clear();
+                        *selected_cp = SelectedControlPoint::default();
+                        **error_message = String::new();
+                        for (entity, target) in preview_targets.drain(..) {
+                            free_render_layers.push(target.render_layer);
+                            commands.entity(entity).despawn();
+                        }
+                    }
+                    if ui.button("Open Session").clicked() {
+                        ui.close();
                         commands
                             .dialog()
-                            .set_file_name("untitled")
+                            .pick_directory_path::<SessionLoadContents>();
+                    }
+                    if ui.button("Save Session").clicked() {
+                        ui.close();
+                        if let Some(ref path) = **current_file_path {
+                            save_session(
+                                path,
+                                &editor_text,
+                                preview_targets.iter().map(|(_, t)| t.as_ref()),
+                            );
+                        } else {
+                            commands
+                                .dialog()
+                                .set_file_name("untitled")
+                                .save_file::<SessionSaveContents>(vec![]);
+                        }
+                    }
+                    if ui.button("Save Session As").clicked() {
+                        ui.close();
+                        let file_name = current_file_path
+                            .as_ref()
+                            .as_ref()
+                            .and_then(|p| p.file_name())
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("untitled");
+                        commands
+                            .dialog()
+                            .set_file_name(file_name)
                             .save_file::<SessionSaveContents>(vec![]);
                     }
-                }
-                if ui.button("Save Session As").clicked() {
-                    let file_name = current_file_path
-                        .as_ref()
-                        .as_ref()
-                        .and_then(|p| p.file_name())
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("untitled");
-                    commands
-                        .dialog()
-                        .set_file_name(file_name)
-                        .save_file::<SessionSaveContents>(vec![]);
-                }
+                });
 
                 ui.separator();
 
