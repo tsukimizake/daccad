@@ -70,11 +70,19 @@ fn resolve_inner(term: &Term, env: &Env, depth: usize) -> Term {
         }
         Term::Struct { functor, args } => Term::Struct {
             functor: functor.clone(),
-            args: args.iter().map(|a| resolve_inner(a, env, depth + 1)).collect(),
+            args: args
+                .iter()
+                .map(|a| resolve_inner(a, env, depth + 1))
+                .collect(),
         },
         Term::List { items, tail } => Term::List {
-            items: items.iter().map(|i| resolve_inner(i, env, depth + 1)).collect(),
-            tail: tail.as_ref().map(|t| Box::new(resolve_inner(t, env, depth + 1))),
+            items: items
+                .iter()
+                .map(|i| resolve_inner(i, env, depth + 1))
+                .collect(),
+            tail: tail
+                .as_ref()
+                .map(|t| Box::new(resolve_inner(t, env, depth + 1))),
         },
         Term::Constraint { left, right } => Term::Constraint {
             left: Box::new(resolve_inner(left, env, depth + 1)),
@@ -145,7 +153,6 @@ impl fmt::Display for RewriteError {
 }
 
 impl std::error::Error for RewriteError {}
-
 
 fn collect_default_var_bindings(term: &Term, bindings: &mut Vec<(String, FixedPoint)>) {
     match term {
@@ -355,11 +362,7 @@ fn is_potentially_arithmetic(term: &Term) -> bool {
 
 /// 2つの項を単一化し、変数束縛をenvに蓄積する。
 /// 解決できなかった遅延制約をVec<Term>として返す。
-pub fn unify(
-    term1: Term,
-    term2: Term,
-    env: &mut Env,
-) -> Result<Vec<Term>, UnifyError> {
+pub fn unify(term1: Term, term2: Term, env: &mut Env) -> Result<Vec<Term>, UnifyError> {
     let mut stack = vec![(term1, term2)];
     let mut deferred: Vec<(Term, Term)> = Vec::new();
 
@@ -958,6 +961,17 @@ fn resolve_builtin_arg(
         }
         other => {
             let mut resolved = rewrite_term_recursive(db, clause_counter, other, other_goals)?;
+            if resolved.len() > 1 {
+                let mut shape = Vec::new();
+                for t in resolved {
+                    if matches!(&t, Term::Struct { functor, .. } if functor == "control") {
+                        other_goals.push(t);
+                    } else {
+                        shape.push(t);
+                    }
+                }
+                resolved = shape;
+            }
             if resolved.len() != 1 {
                 return Err(RewriteError {
                     message: "builtin argument resolved to multiple terms".to_string(),
@@ -1058,7 +1072,10 @@ mod tests {
         let t2 = struc("f".to_string(), vec![struc("a".to_string(), vec![])]);
         let mut env = Env::new();
         unify(t1, t2, &mut env).unwrap();
-        assert_eq!(resolve(&var("X".to_string()), &env), struc("a".to_string(), vec![]));
+        assert_eq!(
+            resolve(&var("X".to_string()), &env),
+            struc("a".to_string(), vec![])
+        );
     }
 
     #[test]
@@ -1731,6 +1748,17 @@ mod tests {
             resolved,
             vec!["(cube(40, 90, 50) - rotate(cube(40, 90, 50), 0, 30, 0))"]
         );
+    }
+
+    #[test]
+    fn builtin_arg_rule_with_control_separation() {
+        let resolved = run_success(
+            "blade_cut :- path(p(0, 0), [line_to(p(10, 0)), line_to(p(10, 20))]), control(X@0, Y@20, 0). main :- linear_extrude(blade_cut, 100).",
+            "main.",
+        );
+        assert_eq!(resolved.len(), 2);
+        assert!(resolved[0].starts_with("linear_extrude(path("));
+        assert!(resolved[1].starts_with("control("));
     }
 
     #[test]

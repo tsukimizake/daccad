@@ -60,10 +60,18 @@ define_manifold_expr! {
     Rotate { expr: Box<ManifoldExpr>, x: TrackedF64, y: TrackedF64, z: TrackedF64 };
     @name("p") @no_variant
     Point { _x: TrackedF64, _y: TrackedF64 };
-    Polygon { points: Vec<f64> };
+    @name("sketchXY")
+    SketchXY { points: Vec<f64> };
+    @name("sketchYZ")
+    SketchYZ { points: Vec<f64> };
+    @name("sketchXZ")
+    SketchXZ { points: Vec<f64> };
     @also_arity(1)
     Circle { radius: TrackedF64, segments: u32 };
-    Extrude { profile: Box<ManifoldExpr>, height: TrackedF64 };
+    @name("linear_extrude")
+    LinearExtrude { profile: Box<ManifoldExpr>, height: TrackedF64 };
+    @name("complex_extrude")
+    ComplexExtrude { profile: Box<ManifoldExpr>, height: TrackedF64, twist: TrackedF64, scale_x: TrackedF64, scale_y: TrackedF64 };
     @also_arity(2)
     Revolve { profile: Box<ManifoldExpr>, degrees: TrackedF64, segments: u32 };
     Polyhedron { points: Vec<f64>, faces: Vec<Vec<u32>> };
@@ -428,6 +436,13 @@ impl<'a> Args<'a> {
     }
 }
 
+fn apply_plane_rotation(m: Manifold, profile: &ManifoldExpr) -> Manifold {
+    match profile.plane_rotation() {
+        Some((rx, ry, rz)) => m.rotate(rx, ry, rz),
+        None => m,
+    }
+}
+
 fn extract_polygon_points(list_term: &Term, functor: &str) -> Result<Vec<f64>, ConversionError> {
     match list_term {
         Term::List { items, .. } => {
@@ -659,9 +674,10 @@ fn extract_path_points(
 impl ManifoldExpr {
     fn to_polygon_data(&self) -> Option<Vec<f64>> {
         match self {
-            ManifoldExpr::Polygon { points } | ManifoldExpr::Path { points } => {
-                Some(points.clone())
-            }
+            ManifoldExpr::SketchXY { points }
+            | ManifoldExpr::SketchYZ { points }
+            | ManifoldExpr::SketchXZ { points }
+            | ManifoldExpr::Path { points } => Some(points.clone()),
             ManifoldExpr::Circle { radius, segments } => {
                 let r = radius.value;
                 let mut points = Vec::with_capacity(*segments as usize * 2);
@@ -672,6 +688,15 @@ impl ManifoldExpr {
                 }
                 Some(points)
             }
+            _ => None,
+        }
+    }
+
+    /// スケッチ平面に応じた回転角度 (rx, ry, rz) を返す
+    fn plane_rotation(&self) -> Option<(f64, f64, f64)> {
+        match self {
+            ManifoldExpr::SketchYZ { .. } => Some((90.0, 0.0, 90.0)),
+            ManifoldExpr::SketchXZ { .. } => Some((-90.0, 0.0, 0.0)),
             _ => None,
         }
     }
@@ -796,11 +821,27 @@ impl ManifoldExpr {
                 "p is a data constructor, not a shape primitive".to_string(),
             )),
 
-            ManifoldTag::Polygon if a.len() == 1 => {
+            ManifoldTag::SketchXY if a.len() == 1 => {
                 let points = extract_polygon_points(&a.args[0], a.functor)?;
-                Ok(ManifoldExpr::Polygon { points })
+                Ok(ManifoldExpr::SketchXY { points })
             }
-            ManifoldTag::Polygon => Err(a.arity_error("1")),
+            ManifoldTag::SketchXY => Err(a.arity_error("1")),
+
+            ManifoldTag::SketchYZ if a.len() == 1 => {
+                let points = extract_polygon_points(&a.args[0], a.functor)?;
+                Ok(ManifoldExpr::SketchYZ { points })
+            }
+            ManifoldTag::SketchYZ => Err(a.arity_error("1")),
+
+            ManifoldTag::SketchXZ if a.len() == 1 => {
+                let mut points = extract_polygon_points(&a.args[0], a.functor)?;
+                // Rx(-90°)で+Y押し出しにするため、第2座標(Z)を反転
+                for y in points.iter_mut().skip(1).step_by(2) {
+                    *y = -*y;
+                }
+                Ok(ManifoldExpr::SketchXZ { points })
+            }
+            ManifoldTag::SketchXZ => Err(a.arity_error("1")),
 
             ManifoldTag::Path if a.len() == 2 => {
                 let points = extract_path_points(&a.args[0], &a.args[1])?;
@@ -818,11 +859,20 @@ impl ManifoldExpr {
             }),
             ManifoldTag::Circle => Err(a.arity_error("1 or 2")),
 
-            ManifoldTag::Extrude if a.len() == 2 => Ok(ManifoldExpr::Extrude {
+            ManifoldTag::LinearExtrude if a.len() == 2 => Ok(ManifoldExpr::LinearExtrude {
                 profile: Box::new(a.term(0)?),
                 height: a.tracked_f64(1)?,
             }),
-            ManifoldTag::Extrude => Err(a.arity_error("2")),
+            ManifoldTag::LinearExtrude => Err(a.arity_error("2")),
+
+            ManifoldTag::ComplexExtrude if a.len() == 5 => Ok(ManifoldExpr::ComplexExtrude {
+                profile: Box::new(a.term(0)?),
+                height: a.tracked_f64(1)?,
+                twist: a.tracked_f64(2)?,
+                scale_x: a.tracked_f64(3)?,
+                scale_y: a.tracked_f64(4)?,
+            }),
+            ManifoldTag::ComplexExtrude => Err(a.arity_error("5")),
 
             ManifoldTag::Revolve if a.len() == 2 => Ok(ManifoldExpr::Revolve {
                 profile: Box::new(a.term(0)?),
@@ -904,8 +954,14 @@ impl ManifoldExpr {
                 .evaluate(include_paths)?
                 .rotate(x.value, y.value, z.value)),
 
-            ManifoldExpr::Polygon { points } | ManifoldExpr::Path { points } => {
+            ManifoldExpr::SketchXY { points }
+            | ManifoldExpr::Path { points } => {
                 Ok(Manifold::extrude(&[points], 0.001, 0, 0.0, 1.0, 1.0))
+            }
+            ManifoldExpr::SketchYZ { points } | ManifoldExpr::SketchXZ { points } => {
+                let m = Manifold::extrude(&[points], 0.001, 0, 0.0, 1.0, 1.0);
+                let (rx, ry, rz) = self.plane_rotation().unwrap();
+                Ok(m.rotate(rx, ry, rz))
             }
             ManifoldExpr::Circle { .. } => {
                 let data = self
@@ -918,16 +974,30 @@ impl ManifoldExpr {
                 Ok(Manifold::extrude(&[&data], 0.001, 0, 0.0, 1.0, 1.0))
             }
 
-            ManifoldExpr::Extrude { profile, height } => {
+            ManifoldExpr::LinearExtrude { profile, height } => {
                 let data =
                     profile
                         .to_polygon_data()
                         .ok_or_else(|| ConversionError::TypeMismatch {
-                            functor: "extrude".to_string(),
+                            functor: "linear_extrude".to_string(),
                             arg_index: 0,
                             expected: "polygon data",
                         })?;
-                Ok(Manifold::extrude(&[&data], height.value, 0, 0.0, 1.0, 1.0))
+                let m = Manifold::extrude(&[&data], height.value, 0, 0.0, 1.0, 1.0);
+                Ok(apply_plane_rotation(m, profile))
+            }
+            ManifoldExpr::ComplexExtrude { profile, height, twist, scale_x, scale_y } => {
+                let data =
+                    profile
+                        .to_polygon_data()
+                        .ok_or_else(|| ConversionError::TypeMismatch {
+                            functor: "complex_extrude".to_string(),
+                            arg_index: 0,
+                            expected: "polygon data",
+                        })?;
+                let n_divisions = (height.value.abs() as u32).max(1);
+                let m = Manifold::extrude(&[&data], height.value, n_divisions, twist.value, scale_x.value, scale_y.value);
+                Ok(apply_plane_rotation(m, profile))
             }
             ManifoldExpr::Revolve {
                 profile,
@@ -942,7 +1012,8 @@ impl ManifoldExpr {
                             arg_index: 0,
                             expected: "polygon data",
                         })?;
-                Ok(Manifold::revolve(&[&data], *segments, degrees.value))
+                let m = Manifold::revolve(&[&data], *segments, degrees.value);
+                Ok(apply_plane_rotation(m, profile))
             }
 
             ManifoldExpr::Polyhedron { points, faces } => {
@@ -1042,7 +1113,10 @@ pub fn collect_tracked_spans_from_expr(expr: &ManifoldExpr) -> Vec<(String, Trac
         ManifoldExpr::Rotate { x, y, z, .. } => {
             vec![("x".into(), *x), ("y".into(), *y), ("z".into(), *z)]
         }
-        ManifoldExpr::Extrude { height, .. } => vec![("height".into(), *height)],
+        ManifoldExpr::LinearExtrude { height, .. } => vec![("height".into(), *height)],
+        ManifoldExpr::ComplexExtrude { height, twist, scale_x, scale_y, .. } => {
+            vec![("height".into(), *height), ("twist".into(), *twist), ("scale_x".into(), *scale_x), ("scale_y".into(), *scale_y)]
+        }
         ManifoldExpr::Revolve { degrees, .. } => vec![("degrees".into(), *degrees)],
         ManifoldExpr::Circle { radius, .. } => vec![("radius".into(), *radius)],
         _ => vec![],
@@ -1090,7 +1164,8 @@ fn build_evaluated_node(
         ManifoldExpr::Translate { expr: e, .. }
         | ManifoldExpr::Scale { expr: e, .. }
         | ManifoldExpr::Rotate { expr: e, .. }
-        | ManifoldExpr::Extrude { profile: e, .. }
+        | ManifoldExpr::LinearExtrude { profile: e, .. }
+        | ManifoldExpr::ComplexExtrude { profile: e, .. }
         | ManifoldExpr::Revolve { profile: e, .. } => {
             vec![build_evaluated_node(e, include_paths)?]
         }
@@ -1407,7 +1482,7 @@ mod tests {
             .into_iter()
             .map(|(x, y)| struc("p".into(), vec![number_int(x), number_int(y)]))
             .collect();
-        struc("polygon".into(), vec![crate::parse::list(points, None)])
+        struc("sketchXY".into(), vec![crate::parse::list(points, None)])
     }
 
     #[test]
@@ -1415,7 +1490,7 @@ mod tests {
         let term = make_polygon_term(vec![(1, 0), (0, 0), (0, 1), (1, 1)]);
         let expr = ManifoldExpr::from_term(&term).unwrap();
         match expr {
-            ManifoldExpr::Polygon { points } => {
+            ManifoldExpr::SketchXY { points } => {
                 assert_eq!(points, vec![1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0]);
             }
             _ => panic!("Expected Polygon"),
@@ -1438,14 +1513,14 @@ mod tests {
     #[test]
     fn test_extrude_polygon() {
         let polygon = make_polygon_term(vec![(1, 0), (0, 0), (0, 1), (1, 1)]);
-        let term = struc("extrude".into(), vec![polygon, number_int(3)]);
+        let term = struc("linear_extrude".into(), vec![polygon, number_int(3)]);
         let expr = ManifoldExpr::from_term(&term).unwrap();
         match expr {
-            ManifoldExpr::Extrude { profile, height } => {
-                assert!(matches!(*profile, ManifoldExpr::Polygon { .. }));
+            ManifoldExpr::LinearExtrude { profile, height } => {
+                assert!(matches!(*profile, ManifoldExpr::SketchXY { .. }));
                 assert_eq!(height.value, 3.0);
             }
-            _ => panic!("Expected Extrude"),
+            _ => panic!("Expected LinearExtrude"),
         }
     }
 
@@ -1471,14 +1546,14 @@ mod tests {
     #[test]
     fn test_extrude_circle() {
         let circle = struc("circle".into(), vec![number_int(5)]);
-        let term = struc("extrude".into(), vec![circle, number_int(10)]);
+        let term = struc("linear_extrude".into(), vec![circle, number_int(10)]);
         let expr = ManifoldExpr::from_term(&term).unwrap();
         match expr {
-            ManifoldExpr::Extrude { profile, height } => {
+            ManifoldExpr::LinearExtrude { profile, height } => {
                 assert!(matches!(*profile, ManifoldExpr::Circle { .. }));
                 assert_eq!(height.value, 10.0);
             }
-            _ => panic!("Expected Extrude"),
+            _ => panic!("Expected LinearExtrude"),
         }
     }
 
@@ -1493,7 +1568,7 @@ mod tests {
     #[test]
     fn test_extrude_evaluate() {
         let polygon = make_polygon_term(vec![(1, 0), (0, 0), (0, 1), (1, 1)]);
-        let term = struc("extrude".into(), vec![polygon, number_int(3)]);
+        let term = struc("linear_extrude".into(), vec![polygon, number_int(3)]);
         let expr = ManifoldExpr::from_term(&term).unwrap();
         let mesh = expr.to_mesh(&[]).unwrap();
         assert!(mesh.vertices().len() > 0);
@@ -1590,7 +1665,7 @@ mod tests {
         use crate::term_rewrite::execute;
 
         let mut db = database(
-            "main :- extrude(polygon([p(0, 0), p(0, 40), p(30, 0)]), X@10), control(X, 0, 0, \"width\")."
+            "main :- linear_extrude(sketchXY([p(0, 0), p(0, 40), p(30, 0)]), X@10), control(X, 0, 0, \"width\")."
         ).unwrap();
         let (_, q) = parse_query("main.").unwrap();
         let mut resolved = execute(&mut db, q).unwrap();
@@ -1613,7 +1688,7 @@ mod tests {
 
         // X@なし: controlのVar座標が0にフォールバックし、extrude側にも0が代入される
         let mut db = database(
-            "main :- extrude(polygon([p(0, 0), p(0, 40), p(30, 0)]), X), control(X, -10, -10).",
+            "main :- linear_extrude(sketchXY([p(0, 0), p(0, 40), p(30, 0)]), X), control(X, -10, -10).",
         )
         .unwrap();
         let (_, q) = parse_query("main.").unwrap();
@@ -1635,7 +1710,7 @@ mod tests {
         use crate::term_rewrite::execute;
 
         let mut db = database(
-            "main :- polygon([p(0,0), p(0,40), p(30,0)]) |> extrude(X+1), control(X, -10, -10).",
+            "main :- sketchXY([p(0,0), p(0,40), p(30,0)]) |> linear_extrude(X+1), control(X, -10, -10).",
         )
         .unwrap();
         let (_, q) = parse_query("main.").unwrap();
@@ -1652,7 +1727,7 @@ mod tests {
         use crate::parse::{database, query as parse_query};
         use crate::term_rewrite::execute;
 
-        let src = "main :- polygon([p(0,0), p(0,40), p(30,0)]) |> extrude(X+1), control(X, -10, -10).";
+        let src = "main :- sketchXY([p(0,0), p(0,40), p(30,0)]) |> linear_extrude(X+1), control(X, -10, -10).";
         let mut db = database(src).unwrap();
         let (_, q) = parse_query("main.").unwrap();
 
@@ -1672,7 +1747,7 @@ mod tests {
         assert_eq!(cps2.len(), 1);
         assert_eq!(cps2[0].var_names[0], Some("X".to_string()));
         assert_eq!(cps2[0].x.value, 5.0);
-        // 残りのtermsでextrude(polygon(...), 6)になっていること
+        // 残りのtermsでextrude(sketchXY(...), 6)になっていること
         assert_eq!(resolved2.len(), 1);
         let (mesh, _) = generate_mesh_and_tree_from_terms(&resolved2, &[]).unwrap();
         assert!(mesh.vertices().len() > 0);
@@ -1906,14 +1981,14 @@ mod tests {
                 line_to_term(0, 10),
             ],
         );
-        let term = struc("extrude".into(), vec![path, number_int(5)]);
+        let term = struc("linear_extrude".into(), vec![path, number_int(5)]);
         let expr = ManifoldExpr::from_term(&term).unwrap();
         match &expr {
-            ManifoldExpr::Extrude { profile, height } => {
+            ManifoldExpr::LinearExtrude { profile, height } => {
                 assert!(matches!(**profile, ManifoldExpr::Path { .. }));
                 assert_eq!(height.value, 5.0);
             }
-            _ => panic!("Expected Extrude"),
+            _ => panic!("Expected LinearExtrude"),
         }
         let mesh = expr.to_mesh(&[]).unwrap();
         assert!(mesh.vertices().len() > 0);
