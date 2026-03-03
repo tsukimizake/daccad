@@ -277,6 +277,12 @@ pub(super) fn egui_ui(
                         if end < text.len() {
                             job.append(&text[end..], 0.0, default_format);
                         }
+                    } else if error_message.message.is_empty() {
+                        let ok_format = egui::TextFormat {
+                            background: egui::Color32::from_rgba_unmultiplied(0, 80, 0, 100),
+                            ..default_format
+                        };
+                        job.append(text, 0.0, ok_format);
                     } else {
                         job.append(text, 0.0, default_format);
                     }

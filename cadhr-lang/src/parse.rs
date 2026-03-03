@@ -947,6 +947,17 @@ fn fix_spans_in_clause(clause: &mut Clause, base: usize) {
     }
 }
 
+pub fn parse_error_span(input: &str, err: &nom::Err<nom::error::Error<&str>>) -> Option<SrcSpan> {
+    let base = input.as_ptr() as usize;
+    let rest = match err {
+        nom::Err::Error(e) | nom::Err::Failure(e) => e.input,
+        nom::Err::Incomplete(_) => return None,
+    };
+    let start = rest.as_ptr() as usize - base;
+    let end = (start + rest.len()).min(input.len());
+    Some(SrcSpan { start, end })
+}
+
 pub fn database(input: &str) -> Result<Vec<Clause>, nom::Err<nom::error::Error<&str>>> {
     let base = input.as_ptr() as usize;
     match program(input) {

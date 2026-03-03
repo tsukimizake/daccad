@@ -6,7 +6,7 @@ use bevy_async_ecs::AsyncWorld;
 
 use crate::events::{CadhrLangOutput, GeneratePreviewRequest, PreviewGenerated};
 use cadhr_lang::manifold_bridge::{extract_control_points, generate_mesh_and_tree_from_terms};
-use cadhr_lang::parse::{SrcSpan, database, query as parse_query};
+use cadhr_lang::parse::{SrcSpan, database, parse_error_span, query as parse_query};
 use cadhr_lang::term_rewrite::{CadhrError, execute};
 use manifold_rs::Mesh as RsMesh;
 
@@ -46,9 +46,15 @@ fn spawn_mesh_job(async_world: AsyncWorld, req: GeneratePreviewRequest) {
             // so they're available even when mesh generation fails
             let resolve_result = (|| -> Result<(Vec<cadhr_lang::parse::Term>, Vec<cadhr_lang::manifold_bridge::ControlPoint>), (String, Option<SrcSpan>)> {
                 let (_, query_terms) =
-                    parse_query(&query).map_err(|e| (format!("Query parse error: {:?}", e), None))?;
+                    parse_query(&query).map_err(|e| {
+                        let span = parse_error_span(&query, &e);
+                        (format!("Query parse error: {:?}", e), span)
+                    })?;
                 let mut db =
-                    database(&db_src).map_err(|e| (format!("Database parse error: {:?}", e), None))?;
+                    database(&db_src).map_err(|e| {
+                        let span = parse_error_span(&db_src, &e);
+                        (format!("Database parse error: {:?}", e), span)
+                    })?;
                 logs.push(format!("Query terms: {:?}", query_terms));
                 logs.push(format!("Database clauses: {:#?}", db));
                 let mut resolved =
