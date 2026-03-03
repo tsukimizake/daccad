@@ -87,7 +87,7 @@ pub(super) fn egui_ui(
                         pending_states.clear();
                         editable_vars.clear();
                         *selected_cp = SelectedControlPoint::default();
-                        **error_message = String::new();
+                        *error_message = ErrorMessage::default();
                         for (entity, target) in preview_targets.drain(..) {
                             free_render_layers.push(target.render_layer);
                             commands.entity(entity).despawn();
@@ -196,12 +196,15 @@ pub(super) fn egui_ui(
 
     // Error message panel at the bottom
     if let Ok(ctx) = contexts.ctx_mut() {
-        if !error_message.is_empty() {
+        if !error_message.message.is_empty() {
             egui::TopBottomPanel::bottom("error_panel")
                 .min_height(24.0)
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
-                        ui.colored_label(egui::Color32::from_rgb(255, 100, 100), &**error_message);
+                        ui.colored_label(
+                            egui::Color32::from_rgb(255, 100, 100),
+                            &error_message.message,
+                        );
                     });
                 });
         }
@@ -249,10 +252,41 @@ pub(super) fn egui_ui(
 
                 // Text editor
                 let size_left = left.available_size();
+                let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
+                    let text = buf.as_str();
+                    let mut job = egui::text::LayoutJob::default();
+                    job.wrap.max_width = wrap_width;
+
+                    let default_format = egui::TextFormat {
+                        font_id: egui::TextFormat::default().font_id,
+                        color: ui.visuals().text_color(),
+                        ..Default::default()
+                    };
+                    let error_format = egui::TextFormat {
+                        background: egui::Color32::from_rgba_unmultiplied(255, 80, 80, 100),
+                        ..default_format.clone()
+                    };
+
+                    if let Some(span) = error_message.span {
+                        let start = span.start.min(text.len());
+                        let end = span.end.min(text.len());
+                        if 0 < start {
+                            job.append(&text[..start], 0.0, default_format.clone());
+                        }
+                        job.append(&text[start..end], 0.0, error_format);
+                        if end < text.len() {
+                            job.append(&text[end..], 0.0, default_format);
+                        }
+                    } else {
+                        job.append(text, 0.0, default_format);
+                    }
+                    ui.fonts_mut(|f| f.layout_job(job))
+                };
                 let text_response = left.add_sized(
                     size_left,
                     egui::TextEdit::multiline(&mut **editor_text)
-                        .hint_text("ここにテキストを入力してください"),
+                        .hint_text("ここにテキストを入力してください")
+                        .layouter(&mut layouter),
                 );
 
                 // Refresh editable vars when text changes
@@ -278,7 +312,16 @@ pub(super) fn egui_ui(
                         } else {
                             for (i, (entity, target)) in preview_targets.iter_mut().enumerate() {
                                 if let Some((tex_id, size)) = preview_images.get(i) {
-                                    match preview_target_ui(ui, i, target, *tex_id, *size, &mut selected_cp, &mut cp_override_regenerate, &mut cp_source_edits) {
+                                    match preview_target_ui(
+                                        ui,
+                                        i,
+                                        target,
+                                        *tex_id,
+                                        *size,
+                                        &mut selected_cp,
+                                        &mut cp_override_regenerate,
+                                        &mut cp_source_edits,
+                                    ) {
                                         PreviewAction::Update => {
                                             updates_to_send
                                                 .push((target.preview_id, target.query.clone()));
@@ -332,7 +375,10 @@ pub(super) fn egui_ui(
                 }
                 // Regenerate previews that had control point overrides changed
                 for preview_id in cp_override_regenerate {
-                    if let Some((_, target)) = preview_targets.iter().find(|(_, t)| t.preview_id == preview_id) {
+                    if let Some((_, target)) = preview_targets
+                        .iter()
+                        .find(|(_, t)| t.preview_id == preview_id)
+                    {
                         ev_generate.write(GeneratePreviewRequest {
                             preview_id,
                             database: (**editor_text).clone(),
@@ -447,9 +493,7 @@ fn update_control_spheres(
 
     // Despawn extras if count decreased
     for i in cp_count..existing_count {
-        commands
-            .entity(target.control_sphere_entities[i])
-            .despawn();
+        commands.entity(target.control_sphere_entities[i]).despawn();
     }
     target.control_sphere_entities.truncate(cp_count);
 }
@@ -917,9 +961,7 @@ fn preview_target_ui(
                 if ui.button("Close").clicked() {
                     action = PreviewAction::Close;
                 }
-                if !target.control_point_overrides.is_empty()
-                    && ui.button("Reset CPs").clicked()
-                {
+                if !target.control_point_overrides.is_empty() && ui.button("Reset CPs").clicked() {
                     target.control_point_overrides.clear();
                     cp_override_regenerate.push(target.preview_id);
                 }
@@ -956,8 +998,7 @@ fn preview_target_ui(
             let w = avail_w;
             let h = w * aspect;
             let image_response = ui.add(
-                egui::Image::from_texture((tex_id, egui::vec2(w, h)))
-                    .sense(egui::Sense::click()),
+                egui::Image::from_texture((tex_id, egui::vec2(w, h))).sense(egui::Sense::click()),
             );
 
             // Click-to-select control point
@@ -1019,18 +1060,17 @@ fn preview_target_ui(
                         .unwrap_or_else(|| format!("Control {}", selected_cp.index));
                     ui.label(label);
                     ui.horizontal(|ui| {
-                        for (axis_idx, (axis_label, tracked)) in [
-                            ("X:", &mut cp.x),
-                            ("Y:", &mut cp.y),
-                            ("Z:", &mut cp.z),
-                        ].iter_mut().enumerate() {
+                        for (axis_idx, (axis_label, tracked)) in
+                            [("X:", &mut cp.x), ("Y:", &mut cp.y), ("Z:", &mut cp.z)]
+                                .iter_mut()
+                                .enumerate()
+                        {
                             ui.label(*axis_label);
                             let mut val = cp.var_names[axis_idx]
                                 .as_ref()
                                 .and_then(|vn| target.control_point_overrides.get(vn).copied())
                                 .unwrap_or(tracked.value);
-                            let response = ui
-                                .add(egui::DragValue::new(&mut val).speed(0.5));
+                            let response = ui.add(egui::DragValue::new(&mut val).speed(0.5));
                             if response.changed() {
                                 if let Some(ref vname) = cp.var_names[axis_idx] {
                                     target.control_point_overrides.insert(vname.clone(), val);
@@ -1107,7 +1147,10 @@ pub(super) fn handle_cadhr_lang_output(
 ) {
     for output in ev_output.read() {
         if output.is_error {
-            **error_message = output.message.clone();
+            *error_message = ErrorMessage {
+                message: output.message.clone(),
+                span: output.error_span,
+            };
             if let Some(pid) = output.preview_id {
                 for mut target in preview_query.iter_mut() {
                     if target.preview_id == pid {
@@ -1115,13 +1158,13 @@ pub(super) fn handle_cadhr_lang_output(
                             .control_points
                             .iter()
                             .flat_map(|cp| {
-                                [(&cp.x, 0), (&cp.y, 1), (&cp.z, 2)]
-                                    .into_iter()
-                                    .filter_map(|(tracked, ai)| {
+                                [(&cp.x, 0), (&cp.y, 1), (&cp.z, 2)].into_iter().filter_map(
+                                    |(tracked, ai)| {
                                         cp.var_names[ai]
                                             .as_ref()
                                             .map(|vn| (vn.clone(), tracked.value))
-                                    })
+                                    },
+                                )
                             })
                             .collect();
                         break;
@@ -1130,7 +1173,7 @@ pub(super) fn handle_cadhr_lang_output(
             }
         } else {
             bevy::log::info!("CadhrLang: {}", output.message);
-            **error_message = String::new();
+            *error_message = ErrorMessage::default();
         }
     }
 }

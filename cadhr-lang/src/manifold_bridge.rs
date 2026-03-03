@@ -154,6 +154,15 @@ impl fmt::Display for ConversionError {
 
 impl std::error::Error for ConversionError {}
 
+impl crate::term_rewrite::CadhrError for ConversionError {
+    fn error_message(&self) -> String {
+        self.to_string()
+    }
+    fn span(&self) -> Option<SrcSpan> {
+        None
+    }
+}
+
 // ============================================================
 // ControlPoint: ドラッグ可能なコントロールポイント
 // ============================================================
@@ -220,7 +229,7 @@ pub fn extract_control_points(
     let mut var_substitutions: Vec<(String, FixedPoint)> = Vec::new();
 
     terms.retain(|term| {
-        if let Term::Struct { functor, args } = term {
+        if let Term::Struct { functor, args, .. } = term {
             if functor == "control" && (args.len() == 3 || args.len() == 4) {
                 let x = term_to_tracked_f64(&args[0]);
                 let y = term_to_tracked_f64(&args[1]);
@@ -228,7 +237,7 @@ pub fn extract_control_points(
                 let name = if args.len() == 4 {
                     match &args[3] {
                         Term::StringLit { value } => Some(value.clone()),
-                        Term::Struct { functor, args } if args.is_empty() => {
+                        Term::Struct { functor, args, .. } if args.is_empty() => {
                             Some(functor.clone())
                         }
                         _ => None,
@@ -449,7 +458,7 @@ fn extract_polygon_points(list_term: &Term, functor: &str) -> Result<Vec<f64>, C
             let mut points = Vec::with_capacity(items.len() * 2);
             for (i, item) in items.iter().enumerate() {
                 match item {
-                    Term::Struct { functor: f, args } if f == "p" && args.len() == 2 => {
+                    Term::Struct { functor: f, args, .. } if f == "p" && args.len() == 2 => {
                         for arg in args.iter() {
                             match term_as_fixed_point(arg) {
                                 Some((fp, _)) => points.push(fp.to_f64()),
@@ -488,7 +497,7 @@ fn extract_polyhedron_points(list_term: &Term, functor: &str) -> Result<Vec<f64>
             let mut points = Vec::with_capacity(items.len() * 3);
             for (i, item) in items.iter().enumerate() {
                 match item {
-                    Term::Struct { functor: f, args } if f == "p" && args.len() == 3 => {
+                    Term::Struct { functor: f, args, .. } if f == "p" && args.len() == 3 => {
                         for arg in args.iter() {
                             match term_as_fixed_point(arg) {
                                 Some((fp, _)) => points.push(fp.to_f64()),
@@ -579,7 +588,7 @@ fn extract_polyhedron_faces(
 
 fn extract_point_2d(term: &Term, tag: ManifoldTag, arg_index: usize) -> Result<(f64, f64), ConversionError> {
     match term {
-        Term::Struct { functor: f, args } if f == "p" && args.len() == 2 => {
+        Term::Struct { functor: f, args, .. } if f == "p" && args.len() == 2 => {
             let x = term_as_fixed_point(&args[0])
                 .ok_or_else(|| ConversionError::TypeMismatch {
                     functor: tag.to_string(),
@@ -626,7 +635,7 @@ fn extract_path_points(
 
     for (i, seg) in segments.iter().enumerate() {
         let (tag, args) = match seg {
-            Term::Struct { functor, args } => (
+            Term::Struct { functor, args, .. } => (
                 ManifoldTag::from_str(functor).ok(),
                 Some(args.as_slice()),
             ),
@@ -704,7 +713,7 @@ impl ManifoldExpr {
     /// Prolog Term から ManifoldExpr へ変換
     pub fn from_term(term: &Term) -> Result<Self, ConversionError> {
         match term {
-            Term::Struct { functor, args } => Self::from_struct(functor, args),
+            Term::Struct { functor, args, .. } => Self::from_struct(functor, args),
             Term::InfixExpr { op, left, right } => Self::from_infix_expr(*op, left, right),
             Term::Var { name, .. } => Err(ConversionError::UnboundVariable(name.clone())),
             Term::AnnotatedVar { name, .. } => Err(ConversionError::UnboundVariable(name.clone())),

@@ -6,8 +6,8 @@ use bevy_async_ecs::AsyncWorld;
 
 use crate::events::{CadhrLangOutput, GeneratePreviewRequest, PreviewGenerated};
 use cadhr_lang::manifold_bridge::{extract_control_points, generate_mesh_and_tree_from_terms};
-use cadhr_lang::parse::{database, query as parse_query};
-use cadhr_lang::term_rewrite::execute;
+use cadhr_lang::parse::{SrcSpan, database, query as parse_query};
+use cadhr_lang::term_rewrite::{CadhrError, execute};
 use manifold_rs::Mesh as RsMesh;
 
 pub struct CadhrLangPlugin;
@@ -44,15 +44,18 @@ fn spawn_mesh_job(async_world: AsyncWorld, req: GeneratePreviewRequest) {
 
             // Parse and resolve: extract control points before mesh generation
             // so they're available even when mesh generation fails
-            let resolve_result = (|| -> Result<(Vec<cadhr_lang::parse::Term>, Vec<cadhr_lang::manifold_bridge::ControlPoint>), String> {
+            let resolve_result = (|| -> Result<(Vec<cadhr_lang::parse::Term>, Vec<cadhr_lang::manifold_bridge::ControlPoint>), (String, Option<SrcSpan>)> {
                 let (_, query_terms) =
-                    parse_query(&query).map_err(|e| format!("Query parse error: {:?}", e))?;
+                    parse_query(&query).map_err(|e| (format!("Query parse error: {:?}", e), None))?;
                 let mut db =
-                    database(&db_src).map_err(|e| format!("Database parse error: {:?}", e))?;
+                    database(&db_src).map_err(|e| (format!("Database parse error: {:?}", e), None))?;
                 logs.push(format!("Query terms: {:?}", query_terms));
                 logs.push(format!("Database clauses: {:#?}", db));
                 let mut resolved =
-                    execute(&mut db, query_terms).map_err(|e| format!("Rewrite error: {}", e))?;
+                    execute(&mut db, query_terms).map_err(|e| {
+                        let span = e.span();
+                        (format!("Rewrite error: {}", e), span)
+                    })?;
                 logs.push(format!("Resolved terms: {:?}", resolved));
                 let control_points = extract_control_points(&mut resolved, &req.control_point_overrides);
                 Ok((resolved, control_points))
@@ -65,20 +68,22 @@ fn spawn_mesh_job(async_world: AsyncWorld, req: GeneratePreviewRequest) {
                         preview_id: None,
                         message: log_message,
                         is_error: false,
+                        error_span: None,
                     })
                     .await;
             }
 
             let (resolved, control_points) = match resolve_result {
                 Ok(pair) => pair,
-                Err(e) => {
+                Err((e, span)) => {
                     bevy::log::error!("Failed to resolve: {}", e);
                     async_world
                         .send_message(CadhrLangOutput {
                             preview_id: Some(preview_id),
                             message: e,
                             is_error: true,
-                            })
+                            error_span: span,
+                        })
                         .await;
                     return;
                 }
@@ -102,9 +107,14 @@ fn spawn_mesh_job(async_world: AsyncWorld, req: GeneratePreviewRequest) {
             }
 
             let mesh_result = generate_mesh_and_tree_from_terms(&resolved, &req.include_paths)
-                .map_err(|e| format!("Mesh error: {}", e))
+                .map_err(|e| {
+                    let span = e.span();
+                    (format!("Mesh error: {}", e), span)
+                })
                 .and_then(|(rs_mesh, evaluated_nodes)| {
-                    rs_mesh_to_bevy_mesh(&rs_mesh).map(|m| (m, evaluated_nodes))
+                    rs_mesh_to_bevy_mesh(&rs_mesh)
+                        .map(|m| (m, evaluated_nodes))
+                        .map_err(|e| (e, None))
                 });
 
             match mesh_result {
@@ -119,13 +129,14 @@ fn spawn_mesh_job(async_world: AsyncWorld, req: GeneratePreviewRequest) {
                         })
                         .await;
                 }
-                Err(e) => {
+                Err((e, span)) => {
                     bevy::log::error!("Failed to generate mesh: {}", e);
                     async_world
                         .send_message(CadhrLangOutput {
                             preview_id: Some(preview_id),
                             message: e,
                             is_error: true,
+                            error_span: span,
                         })
                         .await;
                 }

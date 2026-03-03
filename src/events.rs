@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use cadhr_lang::manifold_bridge::{ControlPoint, EvaluatedNode};
+use cadhr_lang::parse::SrcSpan;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -29,4 +30,5 @@ pub struct CadhrLangOutput {
     pub preview_id: Option<u64>,
     pub message: String,
     pub is_error: bool,
+    pub error_span: Option<SrcSpan>,
 }

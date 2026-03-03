@@ -120,8 +120,11 @@ impl Default for FreeRenderLayers {
     }
 }
 
-#[derive(Resource, Default, Clone, Deref, DerefMut)]
-pub struct ErrorMessage(pub String);
+#[derive(Resource, Default, Clone)]
+pub struct ErrorMessage {
+    pub message: String,
+    pub span: Option<cadhr_lang::parse::SrcSpan>,
+}
 
 #[derive(Resource, Default, Clone, Deref, DerefMut)]
 pub struct CurrentFilePath(pub Option<PathBuf>);

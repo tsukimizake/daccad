@@ -162,6 +162,7 @@ pub enum Term {
     Struct {
         functor: String,
         args: Vec<Term>,
+        span: Option<SrcSpan>,
     },
     List {
         items: Vec<Term>,
@@ -188,6 +189,36 @@ pub fn term_as_fixed_point(term: &Term) -> Option<(FixedPoint, Option<SrcSpan>)>
             span,
             ..
         } => Some((*value, *span)),
+        _ => None,
+    }
+}
+
+pub fn first_span(term: &Term) -> Option<SrcSpan> {
+    match term {
+        Term::Var { span, .. } | Term::AnnotatedVar { span, .. } | Term::Struct { span, .. } => {
+            if span.is_some() {
+                return *span;
+            }
+            if let Term::Struct { args, .. } = term {
+                for arg in args {
+                    if let Some(s) = first_span(arg) {
+                        return Some(s);
+                    }
+                }
+            }
+            None
+        }
+        Term::InfixExpr { left, right, .. } | Term::Constraint { left, right } => {
+            first_span(left).or_else(|| first_span(right))
+        }
+        Term::List { items, tail } => {
+            for item in items {
+                if let Some(s) = first_span(item) {
+                    return Some(s);
+                }
+            }
+            tail.as_ref().and_then(|t| first_span(t))
+        }
         _ => None,
     }
 }
@@ -229,10 +260,12 @@ impl PartialEq for Term {
                 Term::Struct {
                     functor: f1,
                     args: a1,
+                    ..
                 },
                 Term::Struct {
                     functor: f2,
                     args: a2,
+                    ..
                 },
             ) => f1 == f2 && a1 == a2,
             (
@@ -300,7 +333,7 @@ impl fmt::Debug for Term {
                 };
                 write!(f, "({:?} {} {:?})", left, op_str, right)
             }
-            Term::Struct { functor, args } => {
+            Term::Struct { functor, args, .. } => {
                 write!(f, "{}", functor)?;
                 if !args.is_empty() {
                     write!(f, "(")?;
@@ -415,7 +448,19 @@ pub fn number_int(value: i64) -> Term {
 }
 
 pub fn struc(functor: String, args: Vec<Term>) -> Term {
-    Term::Struct { functor, args }
+    Term::Struct {
+        functor,
+        args,
+        span: None,
+    }
+}
+
+pub fn struc_with_span(functor: String, args: Vec<Term>, span: SrcSpan) -> Term {
+    Term::Struct {
+        functor,
+        args,
+        span: Some(span),
+    }
 }
 
 pub fn list(items: Vec<Term>, tail: Option<Term>) -> Term {
@@ -723,21 +768,23 @@ fn string_literal(input: &str) -> PResult<'_, Term> {
 }
 
 fn atom_term(input: &str) -> PResult<'_, Term> {
-    ws(map(
-        pair(
-            atom,
-            opt(ws(delimited(
-                char('('),
-                separated_list0(ws(char(',')), term),
-                cut(ws(char(')'))),
-            ))),
-        ),
-        |(name, maybe_args)| match maybe_args {
-            Some(args) => struc(name, args),
-            None => struc(name, vec![]),
-        },
-    ))
-    .parse(input)
+    let (input, _) = space_or_comment0(input)?;
+    let start = input.as_ptr() as usize;
+    let (input, name) = atom(input)?;
+    let (input, maybe_args) = opt(ws(delimited(
+        char('('),
+        separated_list0(ws(char(',')), term),
+        cut(ws(char(')'))),
+    )))
+    .parse(input)?;
+    let end = input.as_ptr() as usize;
+    let (input, _) = space_or_comment0(input)?;
+    let span = SrcSpan { start, end };
+    let t = match maybe_args {
+        Some(args) => struc_with_span(name, args, span),
+        None => struc_with_span(name, vec![], span),
+    };
+    Ok((input, t))
 }
 
 fn primary_term(input: &str) -> PResult<'_, Term> {
@@ -799,14 +846,20 @@ fn pipe_expr(input: &str) -> PResult<'_, Term> {
     let (input, rest) = many0(preceded(ws(tag("|>")), simple_term)).parse(input)?;
 
     let result = rest.into_iter().fold(first, |acc, rhs| {
-        // rhs should be a Struct; prepend acc as first argument
         match rhs {
-            Term::Struct { functor, args } => {
+            Term::Struct {
+                functor,
+                args,
+                span,
+            } => {
                 let mut new_args = vec![acc];
                 new_args.extend(args);
-                struc(functor, new_args)
+                Term::Struct {
+                    functor,
+                    args: new_args,
+                    span,
+                }
             }
-            // If rhs is not a struct, wrap it as a unary call
             other => struc("apply".to_string(), vec![other, acc]),
         }
     });
@@ -853,7 +906,11 @@ fn fix_spans_in_term(term: &mut Term, base: usize) {
                 s.end = s.end.wrapping_sub(base);
             }
         }
-        Term::Struct { args, .. } => {
+        Term::Struct { args, span, .. } => {
+            if let Some(s) = span {
+                s.start = s.start.wrapping_sub(base);
+                s.end = s.end.wrapping_sub(base);
+            }
             for arg in args.iter_mut() {
                 fix_spans_in_term(arg, base);
             }
@@ -945,7 +1002,7 @@ fn collect_editable_vars_from_term(term: &Term, vars: &mut Vec<VarInfo>) {
                 });
             }
         }
-        Term::Struct { functor, args } if functor != "control" => {
+        Term::Struct { functor, args, .. } if functor != "control" => {
             for arg in args {
                 collect_editable_vars_from_term(arg, vars);
             }
@@ -1062,7 +1119,7 @@ mod tests {
 
         match clause {
             Clause::Fact(term) => match &term {
-                Term::Struct { functor, args } => {
+                Term::Struct { functor, args, .. } => {
                     assert_eq!(functor, "parent");
                     assert_eq!(args.len(), 2);
                 }
@@ -1079,7 +1136,7 @@ mod tests {
 
         match clause {
             Clause::Fact(term) => match &term {
-                Term::Struct { functor, args } => {
+                Term::Struct { functor, args, .. } => {
                     assert_eq!(functor, "hello");
                     assert_eq!(args.len(), 0);
                 }
@@ -1096,7 +1153,7 @@ mod tests {
 
         match clause {
             Clause::Fact(term) => match &term {
-                Term::Struct { functor, args } => {
+                Term::Struct { functor, args, .. } => {
                     assert_eq!(functor, "hoge");
                     assert_eq!(args.len(), 1);
                     match &args[0] {
@@ -1221,7 +1278,7 @@ mod tests {
         match clause {
             Clause::Rule { head, body } => {
                 match &head {
-                    Term::Struct { functor, args } => {
+                    Term::Struct { functor, args, .. } => {
                         assert_eq!(functor, "hoge");
                         assert!(matches!(&args[0], Term::AnnotatedVar { .. }));
                     }
@@ -1324,12 +1381,12 @@ mod tests {
 
         match clause {
             Clause::Fact(term) => match &term {
-                Term::Struct { functor, args } => {
+                Term::Struct { functor, args, .. } => {
                     assert_eq!(functor, "translate");
                     assert_eq!(args.len(), 4);
                     // First arg should be scale(cube(1,1,1), 2)
                     match &args[0] {
-                        Term::Struct { functor, args } => {
+                        Term::Struct { functor, args, .. } => {
                             assert_eq!(functor, "scale");
                             assert_eq!(args.len(), 2);
                             // First arg of scale should be cube(1,1,1)
@@ -1362,7 +1419,7 @@ mod tests {
                     assert_eq!(*op, ArithOp::Add);
                     // left should be translate(cube(10,20,30), 10, 0, 0)
                     match left.as_ref() {
-                        Term::Struct { functor, args } => {
+                        Term::Struct { functor, args, .. } => {
                             assert_eq!(functor, "translate");
                             assert_eq!(args.len(), 4);
                             match &args[0] {
@@ -1376,7 +1433,7 @@ mod tests {
                     }
                     // right should be cube(100,1,1)
                     match right.as_ref() {
-                        Term::Struct { functor, args } => {
+                        Term::Struct { functor, args, .. } => {
                             assert_eq!(functor, "cube");
                             assert_eq!(args.len(), 3);
                         }
@@ -1420,7 +1477,7 @@ mod tests {
 
         match clause {
             Clause::Fact(term) => match &term {
-                Term::Struct { functor, args } => {
+                Term::Struct { functor, args, .. } => {
                     assert_eq!(functor, "hoge");
                     assert_eq!(args.len(), 1);
                     match &args[0] {

@@ -5,7 +5,8 @@ use std::fmt;
 use crate::constraint::{ArithEq, ArithExpr, solve_constraints};
 use crate::manifold_bridge::{BUILTIN_FUNCTORS, is_builtin_functor, is_builtin_functor_with_arity};
 use crate::parse::{
-    ArithOp, Bound, Clause, FixedPoint, Term, annotated_var, list, number, struc, var,
+    ArithOp, Bound, Clause, FixedPoint, SrcSpan, Term, annotated_var, first_span, list, number,
+    struc, var,
 };
 
 pub type Env = HashMap<String, Term>;
@@ -68,12 +69,13 @@ fn resolve_inner(term: &Term, env: &Env, depth: usize) -> Term {
                 new_term
             }
         }
-        Term::Struct { functor, args } => Term::Struct {
+        Term::Struct { functor, args, span } => Term::Struct {
             functor: functor.clone(),
             args: args
                 .iter()
                 .map(|a| resolve_inner(a, env, depth + 1))
                 .collect(),
+            span: *span,
         },
         Term::List { items, tail } => Term::List {
             items: items
@@ -153,6 +155,29 @@ impl fmt::Display for RewriteError {
 }
 
 impl std::error::Error for RewriteError {}
+
+pub trait CadhrError: std::error::Error {
+    fn error_message(&self) -> String;
+    fn span(&self) -> Option<SrcSpan>;
+}
+
+impl CadhrError for UnifyError {
+    fn error_message(&self) -> String {
+        self.message.clone()
+    }
+    fn span(&self) -> Option<SrcSpan> {
+        first_span(&self.term1).or_else(|| first_span(&self.term2))
+    }
+}
+
+impl CadhrError for RewriteError {
+    fn error_message(&self) -> String {
+        self.message.clone()
+    }
+    fn span(&self) -> Option<SrcSpan> {
+        first_span(&self.goal)
+    }
+}
 
 fn collect_default_var_bindings(term: &Term, bindings: &mut Vec<(String, FixedPoint)>) {
     match term {
@@ -511,10 +536,12 @@ pub fn unify(term1: Term, term2: Term, env: &mut Env) -> Result<Vec<Term>, Unify
                 Term::Struct {
                     functor: f1,
                     args: args1,
+                    ..
                 },
                 Term::Struct {
                     functor: f2,
                     args: args2,
+                    ..
                 },
             ) => {
                 if f1 != f2 {
@@ -796,6 +823,7 @@ fn rewrite_term_recursive(
     if let Term::Struct {
         ref functor,
         ref args,
+        ..
     } = term
     {
         if is_builtin_functor_with_arity(functor, args.len()) {
@@ -892,15 +920,13 @@ fn rewrite_term_recursive(
                 })
             }
         }
-        Term::Struct { functor, args } => {
-            // ビルトインファンクターの場合はそのまま返す
+        Term::Struct { functor, args, span } => {
             if is_builtin_functor(&functor) {
-                return Ok(vec![Term::Struct { functor, args }]);
+                return Ok(vec![Term::Struct { functor, args, span }]);
             }
-            // 非ビルトインでルールにもマッチしない場合はエラー
             Err(RewriteError {
                 message: "no clause matches goal".to_string(),
-                goal: Term::Struct { functor, args },
+                goal: Term::Struct { functor, args, span },
             })
         }
         // その他の項（Number, Var, List など）はそのまま
@@ -940,7 +966,7 @@ fn resolve_builtin_arg(
                 tail,
             })
         }
-        Term::Struct { functor, args } if is_builtin_functor(&functor) => {
+        Term::Struct { functor, args, span } if is_builtin_functor(&functor) => {
             let resolved_args = args
                 .into_iter()
                 .map(|arg| resolve_builtin_arg(db, clause_counter, arg, other_goals))
@@ -948,6 +974,7 @@ fn resolve_builtin_arg(
             Ok(Term::Struct {
                 functor,
                 args: resolved_args,
+                span,
             })
         }
         Term::InfixExpr { op, left, right } => {
@@ -991,8 +1018,8 @@ fn resolve_builtin_fact_args(
     term: Term,
     other_goals: &mut Vec<Term>,
 ) -> Result<Term, RewriteError> {
-    let (functor, args) = match term {
-        Term::Struct { functor, args } if is_builtin_functor(&functor) => (functor, args),
+    let (functor, args, span) = match term {
+        Term::Struct { functor, args, span } if is_builtin_functor(&functor) => (functor, args, span),
         other => return Ok(other),
     };
 
@@ -1004,6 +1031,7 @@ fn resolve_builtin_fact_args(
     Ok(Term::Struct {
         functor,
         args: resolved_args,
+        span,
     })
 }
 
