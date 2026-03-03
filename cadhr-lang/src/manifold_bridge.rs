@@ -54,6 +54,7 @@ define_manifold_expr! {
     Union(Box<ManifoldExpr>, Box<ManifoldExpr>);
     Difference(Box<ManifoldExpr>, Box<ManifoldExpr>);
     Intersection(Box<ManifoldExpr>, Box<ManifoldExpr>);
+    Hull(Box<ManifoldExpr>, Box<ManifoldExpr>);
     Translate { expr: Box<ManifoldExpr>, x: TrackedF64, y: TrackedF64, z: TrackedF64 };
     Scale { expr: Box<ManifoldExpr>, x: TrackedF64, y: TrackedF64, z: TrackedF64 };
     Rotate { expr: Box<ManifoldExpr>, x: TrackedF64, y: TrackedF64, z: TrackedF64 };
@@ -761,6 +762,12 @@ impl ManifoldExpr {
             )),
             ManifoldTag::Intersection => Err(a.arity_error("2")),
 
+            ManifoldTag::Hull if a.len() == 2 => Ok(ManifoldExpr::Hull(
+                Box::new(a.term(0)?),
+                Box::new(a.term(1)?),
+            )),
+            ManifoldTag::Hull => Err(a.arity_error("2")),
+
             ManifoldTag::Translate if a.len() == 4 => Ok(ManifoldExpr::Translate {
                 expr: Box::new(a.term(0)?),
                 x: a.tracked_f64(1)?,
@@ -882,6 +889,10 @@ impl ManifoldExpr {
             ManifoldExpr::Intersection(a, b) => Ok(a
                 .evaluate(include_paths)?
                 .intersection(&b.evaluate(include_paths)?)),
+            ManifoldExpr::Hull(a, b) => Ok(a
+                .evaluate(include_paths)?
+                .union(&b.evaluate(include_paths)?)
+                .hull()),
 
             ManifoldExpr::Translate { expr, x, y, z } => Ok(expr
                 .evaluate(include_paths)?
@@ -1069,7 +1080,8 @@ fn build_evaluated_node(
     let children = match expr {
         ManifoldExpr::Union(a, b)
         | ManifoldExpr::Difference(a, b)
-        | ManifoldExpr::Intersection(a, b) => {
+        | ManifoldExpr::Intersection(a, b)
+        | ManifoldExpr::Hull(a, b) => {
             vec![
                 build_evaluated_node(a, include_paths)?,
                 build_evaluated_node(b, include_paths)?,
