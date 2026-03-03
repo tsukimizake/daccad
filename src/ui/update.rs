@@ -1,8 +1,8 @@
 use crate::events::{CadhrLangOutput, GeneratePreviewRequest, PreviewGenerated};
 use crate::ui::{
-    CurrentFilePath, EditableVars, EditorText, ErrorMessage, FreeRenderLayers, NextPreviewId,
-    PendingPreviewStates, PreviewState, PreviewTarget, SelectedControlPoint, SessionLoadContents,
-    SessionPreviews, SessionSaveContents, ThreeMfFileContents,
+    AutoReload, CurrentFilePath, EditableVars, EditorText, ErrorMessage, FreeRenderLayers,
+    NextPreviewId, PendingPreviewStates, PreviewState, PreviewTarget, SelectedControlPoint,
+    SessionLoadContents, SessionPreviews, SessionSaveContents, ThreeMfFileContents,
 };
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::RenderTarget;
@@ -63,6 +63,7 @@ pub(super) fn egui_ui(
     mut selected_cp: ResMut<SelectedControlPoint>,
     mut error_message: ResMut<ErrorMessage>,
     mut current_file_path: ResMut<CurrentFilePath>,
+    mut auto_reload: ResMut<AutoReload>,
     meshes: Res<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
@@ -126,6 +127,20 @@ pub(super) fn egui_ui(
                             .set_file_name(file_name)
                             .save_file::<SessionSaveContents>(vec![]);
                     }
+                    ui.separator();
+                    let mut enabled = auto_reload.enabled;
+                    if ui.checkbox(&mut enabled, "Auto Reload").clicked() {
+                        auto_reload.enabled = enabled;
+                        if enabled {
+                            // 有効化時に現在のファイルの更新時刻を記録
+                            auto_reload.last_modified =
+                                current_file_path.as_ref().as_ref().and_then(|p| {
+                                    std::fs::metadata(p.join("db.cadhr"))
+                                        .and_then(|m| m.modified())
+                                        .ok()
+                                });
+                        }
+                    }
                 });
 
                 ui.separator();
@@ -154,24 +169,6 @@ pub(super) fn egui_ui(
                     });
                 }
                 if ui.button("Update Previews").clicked() {
-                    for (_, target) in preview_targets.iter() {
-                        ev_generate.write(GeneratePreviewRequest {
-                            preview_id: target.preview_id,
-                            database: (**editor_text).clone(),
-                            query: target.query.clone(),
-                            include_paths: (**current_file_path).iter().cloned().collect(),
-                            control_point_overrides: target.control_point_overrides.clone(),
-                        });
-                    }
-                }
-                if ui.button("Reload and Preview").clicked() {
-                    if let Some(ref path) = **current_file_path {
-                        let db_path = path.join("db.cadhr");
-                        if let Ok(content) = std::fs::read_to_string(&db_path) {
-                            **editor_text = content;
-                        }
-                    }
-                    refresh_editable_vars(&editor_text, &mut editable_vars);
                     for (_, target) in preview_targets.iter() {
                         ev_generate.write(GeneratePreviewRequest {
                             preview_id: target.preview_id,
@@ -1382,4 +1379,44 @@ fn bevy_mesh_to_threemf(mesh: &Mesh) -> Option<Vec<u8>> {
     }
 
     Some(buffer.into_inner())
+}
+
+pub(super) fn auto_reload_system(
+    mut auto_reload: ResMut<AutoReload>,
+    current_file_path: Res<CurrentFilePath>,
+    mut editor_text: ResMut<EditorText>,
+    mut editable_vars: ResMut<EditableVars>,
+    preview_query: Query<&PreviewTarget>,
+    mut ev_generate: MessageWriter<GeneratePreviewRequest>,
+) {
+    if !auto_reload.enabled {
+        return;
+    }
+    let Some(ref path) = **current_file_path else {
+        return;
+    };
+    let db_path = path.join("db.cadhr");
+    let Ok(metadata) = std::fs::metadata(&db_path) else {
+        return;
+    };
+    let Ok(file_modified) = metadata.modified() else {
+        return;
+    };
+    if auto_reload.last_modified == Some(file_modified) {
+        return;
+    }
+    auto_reload.last_modified = Some(file_modified);
+    if let Ok(content) = std::fs::read_to_string(&db_path) {
+        **editor_text = content;
+        refresh_editable_vars(&editor_text, &mut editable_vars);
+        for target in preview_query.iter() {
+            ev_generate.write(GeneratePreviewRequest {
+                preview_id: target.preview_id,
+                database: (**editor_text).clone(),
+                query: target.query.clone(),
+                include_paths: (**current_file_path).iter().cloned().collect(),
+                control_point_overrides: target.control_point_overrides.clone(),
+            });
+        }
+    }
 }

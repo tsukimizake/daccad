@@ -5,6 +5,7 @@ use derived_deref::{Deref, DerefMut};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 pub mod setup;
 pub mod update;
@@ -59,8 +60,9 @@ impl Plugin for UiPlugin {
         use bevy_egui::{EguiPlugin, EguiPrimaryContextPass};
         use setup::*;
         use update::{
-            egui_ui, handle_cadhr_lang_output, on_preview_generated, restore_last_session,
-            session_loaded, session_saved, threemf_saved, update_preview_transforms,
+            auto_reload_system, egui_ui, handle_cadhr_lang_output, on_preview_generated,
+            restore_last_session, session_loaded, session_saved, threemf_saved,
+            update_preview_transforms,
         };
 
         app.add_plugins(EguiPlugin::default())
@@ -81,7 +83,7 @@ impl Plugin for UiPlugin {
                     handle_cadhr_lang_output,
                 ),
             )
-            .add_systems(Update, (session_saved, session_loaded, threemf_saved))
+            .add_systems(Update, (session_saved, session_loaded, threemf_saved, auto_reload_system))
             .insert_resource(EditorText("main :- cube(10, 20, 30).".to_string()))
             .insert_resource(NextPreviewId::default())
             .insert_resource(FreeRenderLayers::default())
@@ -89,7 +91,8 @@ impl Plugin for UiPlugin {
             .insert_resource(CurrentFilePath::default())
             .insert_resource(PendingPreviewStates::default())
             .insert_resource(EditableVars::default())
-            .insert_resource(SelectedControlPoint::default());
+            .insert_resource(SelectedControlPoint::default())
+            .insert_resource(AutoReload::default());
     }
 }
 
@@ -125,3 +128,18 @@ pub struct CurrentFilePath(pub Option<PathBuf>);
 
 #[derive(Resource, Default, Clone, Deref, DerefMut)]
 pub struct PendingPreviewStates(pub HashMap<u64, PreviewState>);
+
+#[derive(Resource)]
+pub struct AutoReload {
+    pub enabled: bool,
+    pub last_modified: Option<SystemTime>,
+}
+
+impl Default for AutoReload {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            last_modified: None,
+        }
+    }
+}
