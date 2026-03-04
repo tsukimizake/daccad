@@ -262,12 +262,14 @@ pub(super) fn egui_ui(
                         color: ui.visuals().text_color(),
                         ..Default::default()
                     };
-                    let error_format = egui::TextFormat {
-                        background: egui::Color32::from_rgba_unmultiplied(255, 80, 80, 100),
-                        ..default_format.clone()
-                    };
+                    let error_bg = egui::Color32::from_rgba_unmultiplied(255, 80, 80, 100);
+                    let ok_bg = egui::Color32::from_rgba_unmultiplied(0, 80, 0, 100);
 
                     if let Some(span) = error_message.span {
+                        let error_format = egui::TextFormat {
+                            background: error_bg,
+                            ..default_format.clone()
+                        };
                         let start = span.start.min(text.len());
                         let end = span.end.min(text.len());
                         if 0 < start {
@@ -279,7 +281,7 @@ pub(super) fn egui_ui(
                         }
                     } else if error_message.message.is_empty() {
                         let ok_format = egui::TextFormat {
-                            background: egui::Color32::from_rgba_unmultiplied(0, 80, 0, 100),
+                            background: ok_bg,
                             ..default_format
                         };
                         job.append(text, 0.0, ok_format);
