@@ -2,10 +2,7 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
-use syn::{
-    Ident, Token, Type, braced, parenthesized,
-    parse_macro_input,
-};
+use syn::{Ident, Token, Type, braced, parenthesized, parse_macro_input};
 
 // ── Parsed representation ──
 
@@ -241,9 +238,6 @@ pub fn define_manifold_expr(input: TokenStream) -> TokenStream {
             #(#functor_entries),*
         ];
 
-        pub fn is_builtin_functor(functor: &str) -> bool {
-            BUILTIN_FUNCTORS.iter().any(|(name, _)| *name == functor)
-        }
     };
 
     output.into()

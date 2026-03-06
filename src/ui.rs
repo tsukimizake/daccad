@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use bevy_file_dialog::prelude::*;
+use cadhr_lang::bom::BomEntry;
 use cadhr_lang::manifold_bridge::{ControlPoint, EvaluatedNode};
 use derived_deref::{Deref, DerefMut};
 use serde::{Deserialize, Serialize};
@@ -13,6 +14,7 @@ pub mod update;
 pub struct UiPlugin;
 
 pub struct ThreeMfFileContents;
+pub struct BomJsonFileContents;
 
 pub struct SessionSaveContents;
 pub struct SessionLoadContents;
@@ -53,6 +55,7 @@ pub struct PreviewTarget {
     pub control_points: Vec<ControlPoint>,
     pub control_sphere_entities: Vec<Entity>,
     pub control_point_overrides: HashMap<String, f64>,
+    pub bom_entries: Vec<BomEntry>,
 }
 
 impl Plugin for UiPlugin {
@@ -60,9 +63,9 @@ impl Plugin for UiPlugin {
         use bevy_egui::{EguiPlugin, EguiPrimaryContextPass};
         use setup::*;
         use update::{
-            auto_reload_system, egui_ui, handle_cadhr_lang_output, on_preview_generated,
-            restore_last_session, session_loaded, session_saved, threemf_saved,
-            update_preview_transforms,
+            auto_reload_system, bom_json_saved, egui_ui, handle_cadhr_lang_output,
+            on_preview_generated, restore_last_session, session_loaded, session_saved,
+            threemf_saved, update_preview_transforms,
         };
 
         app.add_plugins(EguiPlugin::default())
@@ -70,7 +73,8 @@ impl Plugin for UiPlugin {
                 FileDialogPlugin::new()
                     .with_save_file::<SessionSaveContents>()
                     .with_pick_directory::<SessionLoadContents>()
-                    .with_save_file::<ThreeMfFileContents>(),
+                    .with_save_file::<ThreeMfFileContents>()
+                    .with_save_file::<BomJsonFileContents>(),
             )
             .add_systems(Startup, (setup, restore_last_session))
             .add_systems(EguiPrimaryContextPass, setup_fonts.run_if(run_once))
@@ -83,7 +87,7 @@ impl Plugin for UiPlugin {
                     handle_cadhr_lang_output,
                 ),
             )
-            .add_systems(Update, (session_saved, session_loaded, threemf_saved, auto_reload_system))
+            .add_systems(Update, (session_saved, session_loaded, threemf_saved, bom_json_saved, auto_reload_system))
             .insert_resource(EditorText("main :- cube(10, 20, 30).".to_string()))
             .insert_resource(NextPreviewId::default())
             .insert_resource(FreeRenderLayers::default())

@@ -1,0 +1,192 @@
+use crate::parse::Term;
+use crate::term_processor::{BuiltinFunctorSet, TermProcessor};
+
+inventory::submit! {
+    BuiltinFunctorSet {
+        functors: &[("bom", &[2_usize] as &[usize])],
+        resolve_args: false,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum BomPropertyValue {
+    Num(f64),
+    Str(String),
+}
+
+impl BomPropertyValue {
+    pub fn to_json_value(&self) -> serde_json::Value {
+        match self {
+            BomPropertyValue::Num(n) => serde_json::json!(*n),
+            BomPropertyValue::Str(s) => serde_json::json!(s),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BomEntry {
+    pub name: String,
+    pub properties: Vec<(String, BomPropertyValue)>,
+}
+
+impl BomEntry {
+    pub fn to_json_value(&self) -> serde_json::Value {
+        let mut props = serde_json::Map::new();
+        for (key, val) in &self.properties {
+            props.insert(key.clone(), val.to_json_value());
+        }
+        serde_json::json!({
+            "name": self.name,
+            "properties": props,
+        })
+    }
+}
+
+pub fn bom_entries_to_json(entries: &[BomEntry]) -> String {
+    let arr: Vec<serde_json::Value> = entries.iter().map(|e| e.to_json_value()).collect();
+    serde_json::to_string_pretty(&arr).unwrap()
+}
+
+#[derive(Debug, Clone)]
+pub enum BomError {
+    InvalidName(String),
+    InvalidProperty(String),
+}
+
+impl std::fmt::Display for BomError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BomError::InvalidName(s) => write!(f, "BOM: invalid name: {}", s),
+            BomError::InvalidProperty(s) => write!(f, "BOM: invalid property: {}", s),
+        }
+    }
+}
+
+pub struct BomExtractor;
+
+impl TermProcessor for BomExtractor {
+    type Output = Vec<BomEntry>;
+    type Error = BomError;
+
+    fn process(&self, terms: &[Term]) -> Result<Self::Output, Self::Error> {
+        terms
+            .iter()
+            .filter_map(|term| match term {
+                Term::Struct { functor, args, .. } if functor == "bom" && args.len() == 2 => {
+                    Some(bom_entry_from_args(args))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+fn bom_entry_from_args(args: &[Term]) -> Result<BomEntry, BomError> {
+    let name = match &args[0] {
+        Term::StringLit { value } => value.clone(),
+        other => return Err(BomError::InvalidName(format!("{:?}", other))),
+    };
+
+    let properties = match &args[1] {
+        Term::List { items, .. } => items
+            .iter()
+            .map(property_from_term)
+            .collect::<Result<Vec<_>, _>>()?,
+        other => return Err(BomError::InvalidProperty(format!("{:?}", other))),
+    };
+
+    Ok(BomEntry { name, properties })
+}
+
+fn property_from_term(term: &Term) -> Result<(String, BomPropertyValue), BomError> {
+    match term {
+        Term::Struct { functor, args, .. } if args.len() == 1 => {
+            let value = match &args[0] {
+                Term::Number { value } => BomPropertyValue::Num(value.to_f64()),
+                Term::StringLit { value } => BomPropertyValue::Str(value.clone()),
+                other => {
+                    return Err(BomError::InvalidProperty(format!(
+                        "{}({:?})",
+                        functor, other
+                    )));
+                }
+            };
+            Ok((functor.clone(), value))
+        }
+        other => Err(BomError::InvalidProperty(format!("{:?}", other))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parse::{database, query};
+    use crate::term_rewrite::execute;
+
+    #[test]
+    fn test_bom_extraction() {
+        let db_src = "";
+        let query_src = r#"bom("aluminum", [len(100)])."#;
+        let (_, query_terms) = query(query_src).unwrap();
+        let mut db = database(db_src).unwrap();
+        let resolved = execute(&mut db, query_terms).unwrap();
+
+        let entries = BomExtractor.process(&resolved).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "aluminum");
+        assert_eq!(
+            entries[0].properties,
+            vec![("len".to_string(), BomPropertyValue::Num(100.0))]
+        );
+    }
+
+    #[test]
+    fn test_bom_with_string_property() {
+        let db_src = "";
+        let query_src = r#"bom("bolt", [material("steel"), count(4)])."#;
+        let (_, query_terms) = query(query_src).unwrap();
+        let mut db = database(db_src).unwrap();
+        let resolved = execute(&mut db, query_terms).unwrap();
+
+        let entries = BomExtractor.process(&resolved).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "bolt");
+        assert_eq!(entries[0].properties.len(), 2);
+        assert_eq!(
+            entries[0].properties[0],
+            (
+                "material".to_string(),
+                BomPropertyValue::Str("steel".to_string())
+            )
+        );
+        assert_eq!(
+            entries[0].properties[1],
+            ("count".to_string(), BomPropertyValue::Num(4.0))
+        );
+    }
+
+    #[test]
+    fn test_bom_mixed_with_mesh_terms() {
+        let db_src = "";
+        let query_src = r#"cube(10, 20, 30), bom("plate", [thickness(5)])."#;
+        let (_, query_terms) = query(query_src).unwrap();
+        let mut db = database(db_src).unwrap();
+        let resolved = execute(&mut db, query_terms).unwrap();
+
+        let entries = BomExtractor.process(&resolved).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "plate");
+    }
+
+    #[test]
+    fn test_no_bom_terms() {
+        let db_src = "";
+        let query_src = "cube(10, 20, 30).";
+        let (_, query_terms) = query(query_src).unwrap();
+        let mut db = database(db_src).unwrap();
+        let resolved = execute(&mut db, query_terms).unwrap();
+
+        let entries = BomExtractor.process(&resolved).unwrap();
+        assert!(entries.is_empty());
+    }
+}

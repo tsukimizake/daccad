@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use cadhr_lang::bom::BomEntry;
 use cadhr_lang::manifold_bridge::{ControlPoint, EvaluatedNode};
 use cadhr_lang::parse::SrcSpan;
 use std::collections::HashMap;
@@ -22,6 +23,7 @@ pub struct PreviewGenerated {
     pub mesh: Mesh,
     pub evaluated_nodes: Vec<EvaluatedNode>,
     pub control_points: Vec<ControlPoint>,
+    pub bom_entries: Vec<BomEntry>,
 }
 
 // CadhrLang -> UI: error or log message from cadhr-lang execution

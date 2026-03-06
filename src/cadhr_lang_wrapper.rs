@@ -5,8 +5,10 @@ use bevy::{mesh::Indices, prelude::*};
 use bevy_async_ecs::AsyncWorld;
 
 use crate::events::{CadhrLangOutput, GeneratePreviewRequest, PreviewGenerated};
-use cadhr_lang::manifold_bridge::{extract_control_points, generate_mesh_and_tree_from_terms};
+use cadhr_lang::bom::BomExtractor;
+use cadhr_lang::manifold_bridge::{MeshGenerator, extract_control_points};
 use cadhr_lang::parse::{SrcSpan, database, parse_error_span, query as parse_query};
+use cadhr_lang::term_processor::TermProcessor;
 use cadhr_lang::term_rewrite::{CadhrError, execute};
 use manifold_rs::Mesh as RsMesh;
 
@@ -95,6 +97,13 @@ fn spawn_mesh_job(async_world: AsyncWorld, req: GeneratePreviewRequest) {
                 }
             };
 
+            let bom_entries = BomExtractor
+                .process(&resolved)
+                .unwrap_or_else(|e| {
+                    bevy::log::warn!("BOM extraction warning: {}", e);
+                    vec![]
+                });
+
             if resolved.is_empty() {
                 let empty_mesh = Mesh::new(
                     PrimitiveTopology::TriangleList,
@@ -107,12 +116,17 @@ fn spawn_mesh_job(async_world: AsyncWorld, req: GeneratePreviewRequest) {
                         mesh: empty_mesh,
                         evaluated_nodes: vec![],
                         control_points,
+                        bom_entries,
                     })
                     .await;
                 return;
             }
 
-            let mesh_result = generate_mesh_and_tree_from_terms(&resolved, &req.include_paths)
+            let mesh_generator = MeshGenerator {
+                include_paths: req.include_paths.clone(),
+            };
+            let mesh_result = mesh_generator
+                .process(&resolved)
                 .map_err(|e| {
                     let span = e.span();
                     (format!("Mesh error: {}", e), span)
@@ -132,6 +146,7 @@ fn spawn_mesh_job(async_world: AsyncWorld, req: GeneratePreviewRequest) {
                             mesh,
                             evaluated_nodes,
                             control_points,
+                            bom_entries,
                         })
                         .await;
                 }

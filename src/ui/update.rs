@@ -1,8 +1,9 @@
 use crate::events::{CadhrLangOutput, GeneratePreviewRequest, PreviewGenerated};
 use crate::ui::{
-    AutoReload, CurrentFilePath, EditableVars, EditorText, ErrorMessage, FreeRenderLayers,
-    NextPreviewId, PendingPreviewStates, PreviewState, PreviewTarget, SelectedControlPoint,
-    SessionLoadContents, SessionPreviews, SessionSaveContents, ThreeMfFileContents,
+    AutoReload, BomJsonFileContents, CurrentFilePath, EditableVars, EditorText, ErrorMessage,
+    FreeRenderLayers, NextPreviewId, PendingPreviewStates, PreviewState, PreviewTarget,
+    SelectedControlPoint, SessionLoadContents, SessionPreviews, SessionSaveContents,
+    ThreeMfFileContents,
 };
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::RenderTarget;
@@ -88,9 +89,9 @@ pub(super) fn egui_ui(
                         editable_vars.clear();
                         *selected_cp = SelectedControlPoint::default();
                         *error_message = ErrorMessage::default();
-                        for (entity, target) in preview_targets.drain(..) {
+                        for (target_id, target) in preview_targets.drain(..) {
                             free_render_layers.push(target.render_layer);
-                            commands.entity(entity).despawn();
+                            commands.entity(target_id).despawn();
                         }
                     }
                     if ui.button("Open Session").clicked() {
@@ -307,6 +308,7 @@ pub(super) fn egui_ui(
                 // Collect actions to process after iterating
                 let mut updates_to_send: Vec<(u64, String)> = Vec::new();
                 let mut exports_to_send: Vec<usize> = Vec::new();
+                let mut bom_exports_to_send: Vec<usize> = Vec::new();
                 let mut closes_to_send: Vec<(Entity, usize)> = Vec::new();
                 let mut cp_override_regenerate: Vec<u64> = Vec::new();
                 let mut cp_source_edits: Vec<(f64, SrcSpan)> = Vec::new();
@@ -318,7 +320,7 @@ pub(super) fn egui_ui(
                                 "プレビューはまだありません。上の『Add Preview』を押してください。",
                             );
                         } else {
-                            for (i, (entity, target)) in preview_targets.iter_mut().enumerate() {
+                            for (i, (target_id, target)) in preview_targets.iter_mut().enumerate() {
                                 if let Some((tex_id, size)) = preview_images.get(i) {
                                     match preview_target_ui(
                                         ui,
@@ -337,8 +339,11 @@ pub(super) fn egui_ui(
                                         PreviewAction::Export3MF => {
                                             exports_to_send.push(i);
                                         }
+                                        PreviewAction::ExportBOM => {
+                                            bom_exports_to_send.push(i);
+                                        }
                                         PreviewAction::Close => {
-                                            closes_to_send.push((*entity, target.render_layer));
+                                            closes_to_send.push((*target_id, target.render_layer));
                                         }
                                         PreviewAction::None => {}
                                     }
@@ -398,20 +403,39 @@ pub(super) fn egui_ui(
                 }
                 // Handle export requests
                 for idx in exports_to_send {
+                    let Some((_, target)) = preview_targets.get(idx) else {
+                        continue;
+                    };
+                    let Some(threemf_data) = meshes
+                        .get(&target.mesh_handle)
+                        .and_then(|mesh| bevy_mesh_to_threemf(mesh))
+                    else {
+                        continue;
+                    };
+                    let file_name = export_3mf_file_name(
+                        current_file_path.as_ref().as_ref().map(|p| p.as_path()),
+                        &target.query,
+                    );
+                    commands
+                        .dialog()
+                        .add_filter("3MF", &["3mf"])
+                        .set_file_name(file_name)
+                        .save_file::<ThreeMfFileContents>(threemf_data);
+                }
+                for idx in bom_exports_to_send {
                     if let Some(target) = preview_targets.get(idx) {
-                        if let Some(mesh) = meshes.get(&target.1.mesh_handle) {
-                            if let Some(threemf_data) = bevy_mesh_to_threemf(mesh) {
-                                let file_name = export_3mf_file_name(
-                                    current_file_path.as_ref().as_ref().map(|p| p.as_path()),
-                                    &target.1.query,
-                                );
-                                commands
-                                    .dialog()
-                                    .add_filter("3MF", &["3mf"])
-                                    .set_file_name(file_name)
-                                    .save_file::<ThreeMfFileContents>(threemf_data);
-                            }
-                        }
+                        let json = cadhr_lang::bom::bom_entries_to_json(&target.1.bom_entries);
+                        let filename = target.1.query.clone() + "_bom";
+                        let file_name = export_3mf_file_name(
+                            current_file_path.as_ref().as_ref().map(|p| p.as_path()),
+                            &filename,
+                        )
+                        .replace(".3mf", ".json");
+                        commands
+                            .dialog()
+                            .add_filter("JSON", &["json"])
+                            .set_file_name(file_name)
+                            .save_file::<BomJsonFileContents>(json.into_bytes());
                     }
                 }
                 for (entity, render_layer) in closes_to_send {
@@ -527,6 +551,7 @@ pub(super) fn on_preview_generated(
                 }
                 target.evaluated_nodes = ev.evaluated_nodes.clone();
                 target.control_points = ev.control_points.clone();
+                target.bom_entries = ev.bom_entries.clone();
                 target.base_camera_distance = camera_distance_from_mesh(&ev.mesh);
 
                 // Update control sphere entities
@@ -729,6 +754,7 @@ pub(super) fn on_preview_generated(
                     control_points: ev.control_points.clone(),
                     control_sphere_entities,
                     control_point_overrides: pending_state.control_point_overrides.clone(),
+                    bom_entries: ev.bom_entries.clone(),
                 }
             });
     }
@@ -741,6 +767,7 @@ enum PreviewAction {
     None,
     Update,
     Export3MF,
+    ExportBOM,
     Close,
 }
 
@@ -965,6 +992,9 @@ fn preview_target_ui(
                 }
                 if ui.button("Export 3MF").clicked() {
                     action = PreviewAction::Export3MF;
+                }
+                if !target.bom_entries.is_empty() && ui.button("Export BOM").clicked() {
+                    action = PreviewAction::ExportBOM;
                 }
                 if ui.button("Close").clicked() {
                     action = PreviewAction::Close;
@@ -1329,6 +1359,16 @@ pub(super) fn threemf_saved(mut ev_saved: MessageReader<DialogFileSaved<ThreeMfF
             bevy::log::info!("3MF file saved to: {:?}", ev.path);
         } else {
             bevy::log::error!("Failed to save 3MF file: {:?}", ev.result);
+        }
+    }
+}
+
+pub(super) fn bom_json_saved(mut ev_saved: MessageReader<DialogFileSaved<BomJsonFileContents>>) {
+    for ev in ev_saved.read() {
+        if ev.result.is_ok() {
+            bevy::log::info!("BOM JSON saved to: {:?}", ev.path);
+        } else {
+            bevy::log::error!("Failed to save BOM JSON: {:?}", ev.result);
         }
     }
 }

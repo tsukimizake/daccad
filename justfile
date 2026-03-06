@@ -1,4 +1,4 @@
 default: 
   cargo run
-test:
-  cargo test cadhr-lang
+test arg:
+  cargo test cadhr-lang -- {{arg}}

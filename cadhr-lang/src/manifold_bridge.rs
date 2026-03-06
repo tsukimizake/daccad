@@ -85,10 +85,11 @@ define_manifold_expr! {
     Control { x: TrackedF64, y: TrackedF64, z: TrackedF64, name: String };
 }
 
-pub fn is_builtin_functor_with_arity(functor: &str, arity: usize) -> bool {
-    BUILTIN_FUNCTORS
-        .iter()
-        .any(|(name, arities)| *name == functor && arities.contains(&arity))
+inventory::submit! {
+    crate::term_processor::BuiltinFunctorSet {
+        functors: BUILTIN_FUNCTORS,
+        resolve_args: true,
+    }
 }
 
 /// 変換エラー
@@ -1191,61 +1192,56 @@ fn build_evaluated_node(
     })
 }
 
-/// 複数のTermからMeshとEvaluatedNodeツリーを生成する
+pub struct MeshGenerator {
+    pub include_paths: Vec<PathBuf>,
+}
+
+impl crate::term_processor::TermProcessor for MeshGenerator {
+    type Output = (Mesh, Vec<EvaluatedNode>);
+    type Error = ConversionError;
+
+    fn process(&self, terms: &[Term]) -> Result<Self::Output, Self::Error> {
+        // 未知の functor は無視する（BOM等の他processor用term）
+        let exprs: Vec<ManifoldExpr> = terms
+            .iter()
+            .filter_map(|t| match ManifoldExpr::from_term(t) {
+                Ok(e) => Some(Ok(e)),
+                Err(ConversionError::UnknownPrimitive(_)) => None,
+                Err(e) => Some(Err(e)),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        if exprs.is_empty() {
+            return Err(ConversionError::UnknownPrimitive(
+                "no mesh terms found".to_string(),
+            ));
+        }
+
+        let nodes: Vec<EvaluatedNode> = exprs
+            .iter()
+            .map(|e| build_evaluated_node(e, &self.include_paths))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let manifold = exprs
+            .iter()
+            .map(|e| e.evaluate(&self.include_paths))
+            .reduce(|acc, m| Ok(acc?.union(&m?)))
+            .unwrap()?;
+
+        let with_normals = manifold.calculate_normals(0, 30.0);
+        Ok((with_normals.to_mesh(), nodes))
+    }
+}
+
 pub fn generate_mesh_and_tree_from_terms(
     terms: &[Term],
     include_paths: &[PathBuf],
 ) -> Result<(Mesh, Vec<EvaluatedNode>), ConversionError> {
-    if terms.is_empty() {
-        return Err(ConversionError::UnknownPrimitive(
-            "empty term list".to_string(),
-        ));
+    use crate::term_processor::TermProcessor;
+    MeshGenerator {
+        include_paths: include_paths.to_vec(),
     }
-
-    let exprs: Vec<ManifoldExpr> = terms
-        .iter()
-        .map(ManifoldExpr::from_term)
-        .collect::<Result<Vec<_>, _>>()?;
-
-    let nodes: Vec<EvaluatedNode> = exprs
-        .iter()
-        .map(|e| build_evaluated_node(e, include_paths))
-        .collect::<Result<Vec<_>, _>>()?;
-
-    let manifold = exprs
-        .iter()
-        .map(|e| e.evaluate(include_paths))
-        .reduce(|acc, m| Ok(acc?.union(&m?)))
-        .unwrap()?;
-
-    let with_normals = manifold.calculate_normals(0, 30.0);
-    Ok((with_normals.to_mesh(), nodes))
-}
-
-/// 複数のTermからMeshを生成する（全てをunionする）
-pub fn generate_mesh_from_terms(
-    terms: &[Term],
-    include_paths: &[PathBuf],
-) -> Result<Mesh, ConversionError> {
-    if terms.is_empty() {
-        return Err(ConversionError::UnknownPrimitive(
-            "empty term list".to_string(),
-        ));
-    }
-
-    let exprs: Vec<ManifoldExpr> = terms
-        .iter()
-        .map(ManifoldExpr::from_term)
-        .collect::<Result<Vec<_>, _>>()?;
-
-    let manifold = exprs
-        .iter()
-        .map(|e| e.evaluate(include_paths))
-        .reduce(|acc, m| Ok(acc?.union(&m?)))
-        .unwrap()?;
-
-    let with_normals = manifold.calculate_normals(0, 30.0);
-    Ok(with_normals.to_mesh())
+    .process(terms)
 }
 
 #[cfg(test)]

@@ -3,10 +3,12 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::constraint::{ArithEq, ArithExpr, solve_constraints};
-use crate::manifold_bridge::{BUILTIN_FUNCTORS, is_builtin_functor, is_builtin_functor_with_arity};
 use crate::parse::{
     ArithOp, Bound, Clause, FixedPoint, SrcSpan, Term, annotated_var, first_span, list, number,
     struc, var,
+};
+use crate::term_processor::{
+    all_builtin_functors, is_builtin_functor, is_builtin_functor_with_arity, should_resolve_args,
 };
 
 pub type Env = HashMap<String, Term>;
@@ -25,7 +27,10 @@ pub fn resolve(term: &Term, env: &Env) -> Term {
 
 fn resolve_inner(term: &Term, env: &Env, depth: usize) -> Term {
     if depth > RESOLVE_DEPTH_LIMIT {
-        return term.clone();
+        panic!(
+            "resolve depth limit exceeded, possible cyclic bindings in env: {:?}",
+            env
+        );
     }
     match term {
         Term::Var { name, .. } if name != "_" => match env.get(name) {
@@ -49,6 +54,10 @@ fn resolve_inner(term: &Term, env: &Env, depth: usize) -> Term {
                     span: *span,
                 }
             }
+            Some(Term::AnnotatedVar { name: n2, .. }) if n2 == name => {
+                // intersection結果が同名のAnnotatedVar → そのまま返す（自己参照回避）
+                env.get(name).unwrap().clone()
+            }
             Some(val) => resolve_inner(val, env, depth + 1),
             None => {
                 // default_valueがあればNumberとして解決し、envに無い場合はそのまま
@@ -69,7 +78,11 @@ fn resolve_inner(term: &Term, env: &Env, depth: usize) -> Term {
                 new_term
             }
         }
-        Term::Struct { functor, args, span } => Term::Struct {
+        Term::Struct {
+            functor,
+            args,
+            span,
+        } => Term::Struct {
             functor: functor.clone(),
             args: args
                 .iter()
@@ -95,13 +108,11 @@ fn resolve_inner(term: &Term, env: &Env, depth: usize) -> Term {
 }
 
 /// Check if a term is a built-in primitive that should not be rewritten
-fn is_builtin_primitive(term: &Term) -> bool {
+fn is_builtin_term(term: &Term) -> bool {
     match term {
         Term::Struct { functor, .. } => is_builtin_functor(functor),
         // InfixExpr (+, -, *) with CAD primitives as operands is also builtin
-        Term::InfixExpr { left, right, .. } => {
-            is_builtin_primitive(left) && is_builtin_primitive(right)
-        }
+        Term::InfixExpr { left, right, .. } => is_builtin_term(left) && is_builtin_term(right),
         _ => false,
     }
 }
@@ -114,8 +125,8 @@ fn builtin_fact(functor: &str, arity: usize) -> Clause {
 }
 
 fn builtin_cad_facts() -> Vec<Clause> {
-    BUILTIN_FUNCTORS
-        .iter()
+    all_builtin_functors()
+        .into_iter()
         .flat_map(|(name, arities)| {
             arities
                 .iter()
@@ -181,13 +192,22 @@ impl CadhrError for RewriteError {
 
 fn collect_default_var_bindings(term: &Term, bindings: &mut Vec<(String, FixedPoint)>) {
     match term {
+        Term::Var { .. } => {}
+        Term::StringLit { .. } => {}
+        Term::Number { .. } => {}
         Term::AnnotatedVar {
             name,
             default_value: Some(value),
             ..
-        } if name != "_" => {
-            bindings.push((name.clone(), *value));
+        } => {
+            if name != "_" {
+                bindings.push((name.clone(), *value));
+            }
         }
+        Term::AnnotatedVar {
+            default_value: None,
+            ..
+        } => {}
         Term::Struct { args, .. } => {
             for arg in args {
                 collect_default_var_bindings(arg, bindings);
@@ -209,7 +229,6 @@ fn collect_default_var_bindings(term: &Term, bindings: &mut Vec<(String, FixedPo
             collect_default_var_bindings(left, bindings);
             collect_default_var_bindings(right, bindings);
         }
-        _ => {}
     }
 }
 
@@ -827,8 +846,13 @@ fn rewrite_term_recursive(
     } = term
     {
         if is_builtin_functor_with_arity(functor, args.len()) {
-            let resolved = resolve_builtin_fact_args(db, clause_counter, term, other_goals)?;
-            return Ok(vec![resolved]);
+            if should_resolve_args(functor) {
+                let resolved =
+                    resolve_builtin_fact_args(db, clause_counter, term, other_goals)?;
+                return Ok(vec![resolved]);
+            } else {
+                return Ok(vec![term]);
+            }
         }
     }
 
@@ -837,9 +861,15 @@ fn rewrite_term_recursive(
         try_rewrite_single_with_result(db, clause_counter, &term, other_goals)
     {
         if body.is_empty() {
-            // CADビルトインfactにマッチしたときだけ、引数内の節参照を解決する
-            let resolved_term =
-                resolve_builtin_fact_args(db, clause_counter, resolved_term, other_goals)?;
+            let functor_name = match &resolved_term {
+                Term::Struct { functor, .. } => Some(functor.as_str()),
+                _ => None,
+            };
+            let resolved_term = if functor_name.is_some_and(|f| should_resolve_args(f)) {
+                resolve_builtin_fact_args(db, clause_counter, resolved_term, other_goals)?
+            } else {
+                resolved_term
+            };
             return Ok(vec![resolved_term]);
         } else {
             // Ruleにマッチ: bodyの各項を再帰的に解決
@@ -911,7 +941,7 @@ fn rewrite_term_recursive(
                 right: Box::new(new_right),
             };
             // 書き換え後の項がビルトインプリミティブならOK
-            if is_builtin_primitive(&new_term) {
+            if is_builtin_term(&new_term) {
                 Ok(vec![new_term])
             } else {
                 Err(RewriteError {
@@ -920,18 +950,30 @@ fn rewrite_term_recursive(
                 })
             }
         }
-        Term::Struct { functor, args, span } => {
+        Term::Struct {
+            functor,
+            args,
+            span,
+        } => {
             if is_builtin_functor(&functor) {
-                return Ok(vec![Term::Struct { functor, args, span }]);
+                return Ok(vec![Term::Struct {
+                    functor,
+                    args,
+                    span,
+                }]);
             }
             Err(RewriteError {
                 message: "no clause matches goal".to_string(),
-                goal: Term::Struct { functor, args, span },
+                goal: Term::Struct {
+                    functor,
+                    args,
+                    span,
+                },
             })
         }
         // その他の項（Number, Var, List など）はそのまま
         other => {
-            if is_builtin_primitive(&other) {
+            if is_builtin_term(&other) {
                 Ok(vec![other])
             } else {
                 Err(RewriteError {
@@ -966,7 +1008,11 @@ fn resolve_builtin_arg(
                 tail,
             })
         }
-        Term::Struct { functor, args, span } if is_builtin_functor(&functor) => {
+        Term::Struct {
+            functor,
+            args,
+            span,
+        } if is_builtin_functor(&functor) => {
             let resolved_args = args
                 .into_iter()
                 .map(|arg| resolve_builtin_arg(db, clause_counter, arg, other_goals))
@@ -1019,7 +1065,11 @@ fn resolve_builtin_fact_args(
     other_goals: &mut Vec<Term>,
 ) -> Result<Term, RewriteError> {
     let (functor, args, span) = match term {
-        Term::Struct { functor, args, span } if is_builtin_functor(&functor) => (functor, args, span),
+        Term::Struct {
+            functor,
+            args,
+            span,
+        } if is_builtin_functor(&functor) => (functor, args, span),
         other => return Ok(other),
     };
 
