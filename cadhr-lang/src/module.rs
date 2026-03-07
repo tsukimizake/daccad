@@ -3,6 +3,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use crate::parse::{Clause, Term, database};
+use crate::term_processor::is_builtin_functor;
 
 #[derive(Debug)]
 pub enum ModuleError {
@@ -77,6 +78,10 @@ fn find_module_file(module_path: &str, include_paths: &[PathBuf]) -> Option<Path
         let candidate = dir.join(&file_name);
         if candidate.is_file() {
             return Some(candidate);
+        }
+        let dir_candidate = dir.join(module_path).join("db.cadhr");
+        if dir_candidate.is_file() {
+            return Some(dir_candidate);
         }
     }
     None
@@ -185,11 +190,18 @@ fn prefix_term(term: &Term, module_name: &str) -> Term {
             functor,
             args,
             span,
-        } => Term::Struct {
-            functor: format!("{}::{}", module_name, functor),
-            args: args.iter().map(|a| prefix_term(a, module_name)).collect(),
-            span: *span,
-        },
+        } => {
+            let prefixed_functor = if is_builtin_functor(functor) {
+                functor.clone()
+            } else {
+                format!("{}::{}", module_name, functor)
+            };
+            Term::Struct {
+                functor: prefixed_functor,
+                args: args.iter().map(|a| prefix_term(a, module_name)).collect(),
+                span: *span,
+            }
+        }
         Term::List { items, tail } => Term::List {
             items: items.iter().map(|i| prefix_term(i, module_name)).collect(),
             tail: tail.as_ref().map(|t| Box::new(prefix_term(t, module_name))),

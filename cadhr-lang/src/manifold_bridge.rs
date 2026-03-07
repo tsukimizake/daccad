@@ -81,6 +81,8 @@ define_manifold_expr! {
     @name("bezier_to") @also_arity(3) @no_variant
     BezierTo { _cp1: TrackedF64, _cp2: TrackedF64, _end: TrackedF64 };
     Path { points: Vec<f64> };
+    @name("sweep_extrude")
+    SweepExtrude { profile_data: Vec<(f64, f64)>, path_data: Vec<(f64, f64)> };
     @name("color")
     ColorWrap { expr: Box<ManifoldExpr>, r: TrackedF64, g: TrackedF64, b: TrackedF64 };
     @also_arity(3) @no_variant
@@ -683,6 +685,10 @@ fn extract_path_points(
     Ok(points)
 }
 
+fn flat_to_pairs(flat: &[f64]) -> Vec<(f64, f64)> {
+    flat.chunks_exact(2).map(|c| (c[0], c[1])).collect()
+}
+
 impl ManifoldExpr {
     fn to_polygon_data(&self) -> Option<Vec<f64>> {
         match self {
@@ -911,6 +917,27 @@ impl ManifoldExpr {
             }
             ManifoldTag::Stl => Err(a.arity_error("1")),
 
+            ManifoldTag::SweepExtrude if a.len() == 2 => {
+                let profile_expr = a.term(0)?;
+                let path_expr = a.term(1)?;
+                let profile_data = flat_to_pairs(
+                    &profile_expr.to_polygon_data().ok_or_else(|| ConversionError::TypeMismatch {
+                        functor: "sweep_extrude".to_string(),
+                        arg_index: 0,
+                        expected: "polygon data",
+                    })?,
+                );
+                let path_data = flat_to_pairs(
+                    &path_expr.to_polygon_data().ok_or_else(|| ConversionError::TypeMismatch {
+                        functor: "sweep_extrude".to_string(),
+                        arg_index: 1,
+                        expected: "path data",
+                    })?,
+                );
+                Ok(ManifoldExpr::SweepExtrude { profile_data, path_data })
+            }
+            ManifoldTag::SweepExtrude => Err(a.arity_error("2")),
+
             ManifoldTag::LineTo | ManifoldTag::BezierTo => Err(
                 ConversionError::UnknownPrimitive(
                     format!("{} is a data constructor for path, not a shape primitive", functor),
@@ -1034,6 +1061,13 @@ impl ManifoldExpr {
                         })?;
                 let m = Manifold::revolve(&[&data], *segments, degrees.value);
                 Ok(apply_plane_rotation(m, profile))
+            }
+
+            ManifoldExpr::SweepExtrude { profile_data, path_data } => {
+                let (verts, indices) =
+                    crate::sweep::sweep_extrude_mesh(profile_data, path_data)?;
+                let mesh = Mesh::new(&verts, &indices);
+                Ok(Manifold::from_mesh(mesh))
             }
 
             ManifoldExpr::Polyhedron { points, faces } => {
@@ -2042,6 +2076,35 @@ mod tests {
             }
             _ => panic!("Expected LinearExtrude"),
         }
+        let mesh = expr.to_mesh(&[]).unwrap();
+        assert!(mesh.vertices().len() > 0);
+    }
+
+    #[test]
+    fn test_sweep_extrude_line() {
+        let profile = make_polygon_term(vec![(0, 0), (5, 0), (5, 5), (0, 5)]);
+        let path = make_path_term(
+            (0, 0),
+            vec![line_to_term(0, 20)],
+        );
+        let term = struc("sweep_extrude".into(), vec![profile, path]);
+        let expr = ManifoldExpr::from_term(&term).unwrap();
+        assert!(matches!(&expr, ManifoldExpr::SweepExtrude { .. }));
+        let mesh = expr.to_mesh(&[]).unwrap();
+        assert!(mesh.vertices().len() > 0);
+    }
+
+    #[test]
+    fn test_sweep_extrude_curve() {
+        let profile = make_polygon_term(vec![(0, 0), (3, 0), (0, 3)]);
+        let path = make_path_term(
+            (0, 0),
+            vec![
+                bezier_to_cubic_term((5, 0), (10, 10), (10, 20)),
+            ],
+        );
+        let term = struc("sweep_extrude".into(), vec![profile, path]);
+        let expr = ManifoldExpr::from_term(&term).unwrap();
         let mesh = expr.to_mesh(&[]).unwrap();
         assert!(mesh.vertices().len() > 0);
     }
