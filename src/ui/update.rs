@@ -1,4 +1,16 @@
 use crate::events::{CadhrLangOutput, GeneratePreviewRequest, PreviewGenerated};
+
+fn snap_to_char_boundary(s: &str, idx: usize) -> usize {
+    if idx >= s.len() {
+        s.len()
+    } else {
+        let mut i = idx;
+        while !s.is_char_boundary(i) {
+            i += 1;
+        }
+        i
+    }
+}
 use crate::ui::{
     AutoReload, BomJsonFileContents, CurrentFilePath, EditableVars, EditorText, ErrorMessage,
     FreeRenderLayers, NextPreviewId, PendingPreviewStates, PreviewState, PreviewTarget,
@@ -279,8 +291,8 @@ pub(super) fn egui_ui(
                             background: error_bg,
                             ..default_format.clone()
                         };
-                        let start = span.start.min(text.len());
-                        let end = span.end.min(text.len());
+                        let start = snap_to_char_boundary(text, span.start.min(text.len()));
+                        let end = snap_to_char_boundary(text, span.end.min(text.len()));
                         if 0 < start {
                             job.append(&text[..start], 0.0, default_format.clone());
                         }
