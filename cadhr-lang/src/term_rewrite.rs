@@ -756,6 +756,7 @@ fn rename_clause_vars(clause: &mut Clause, suffix: &str) {
                 rename_term_vars(t, suffix);
             }
         }
+        Clause::Use { .. } => {}
     }
 }
 
@@ -812,6 +813,7 @@ fn try_rewrite_single_with_result(
         let (head, body) = match &renamed {
             Clause::Fact(t) => (t.clone(), vec![]),
             Clause::Rule { head, body } => (head.clone(), body.clone()),
+            Clause::Use { .. } => continue,
         };
 
         let mut env = Env::new();

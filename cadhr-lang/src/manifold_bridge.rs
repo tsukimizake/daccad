@@ -81,6 +81,8 @@ define_manifold_expr! {
     @name("bezier_to") @also_arity(3) @no_variant
     BezierTo { _cp1: TrackedF64, _cp2: TrackedF64, _end: TrackedF64 };
     Path { points: Vec<f64> };
+    @name("color")
+    ColorWrap { expr: Box<ManifoldExpr>, r: TrackedF64, g: TrackedF64, b: TrackedF64 };
     @also_arity(3) @no_variant
     Control { x: TrackedF64, y: TrackedF64, z: TrackedF64, name: String };
 }
@@ -915,6 +917,14 @@ impl ManifoldExpr {
                 ),
             ),
 
+            ManifoldTag::ColorWrap if a.len() == 4 => Ok(ManifoldExpr::ColorWrap {
+                expr: Box::new(a.term(0)?),
+                r: a.tracked_f64(1)?,
+                g: a.tracked_f64(2)?,
+                b: a.tracked_f64(3)?,
+            }),
+            ManifoldTag::ColorWrap => Err(a.arity_error("4")),
+
             ManifoldTag::Control => Err(ConversionError::UnknownPrimitive(
                 "control is a data constructor, not a shape primitive".to_string(),
             )),
@@ -1040,6 +1050,8 @@ impl ManifoldExpr {
                 Ok(Manifold::from_mesh(mesh))
             }
 
+            ManifoldExpr::ColorWrap { expr, .. } => expr.evaluate(include_paths),
+
             ManifoldExpr::Stl { path } => {
                 let raw = Path::new(path);
                 let resolved = if raw.is_absolute() {
@@ -1129,6 +1141,9 @@ pub fn collect_tracked_spans_from_expr(expr: &ManifoldExpr) -> Vec<(String, Trac
         }
         ManifoldExpr::Revolve { degrees, .. } => vec![("degrees".into(), *degrees)],
         ManifoldExpr::Circle { radius, .. } => vec![("radius".into(), *radius)],
+        ManifoldExpr::ColorWrap { r, g, b, .. } => {
+            vec![("r".into(), *r), ("g".into(), *g), ("b".into(), *b)]
+        }
         _ => vec![],
     }
 }
@@ -1176,7 +1191,8 @@ fn build_evaluated_node(
         | ManifoldExpr::Rotate { expr: e, .. }
         | ManifoldExpr::LinearExtrude { profile: e, .. }
         | ManifoldExpr::ComplexExtrude { profile: e, .. }
-        | ManifoldExpr::Revolve { profile: e, .. } => {
+        | ManifoldExpr::Revolve { profile: e, .. }
+        | ManifoldExpr::ColorWrap { expr: e, .. } => {
             vec![build_evaluated_node(e, include_paths)?]
         }
         _ => vec![],
@@ -1197,7 +1213,7 @@ pub struct MeshGenerator {
 }
 
 impl crate::term_processor::TermProcessor for MeshGenerator {
-    type Output = (Mesh, Vec<EvaluatedNode>);
+    type Output = (Mesh, Vec<EvaluatedNode>, Option<[f64; 3]>);
     type Error = ConversionError;
 
     fn process(&self, terms: &[Term]) -> Result<Self::Output, Self::Error> {
@@ -1217,6 +1233,8 @@ impl crate::term_processor::TermProcessor for MeshGenerator {
             ));
         }
 
+        let color = extract_color_from_exprs(&exprs);
+
         let nodes: Vec<EvaluatedNode> = exprs
             .iter()
             .map(|e| build_evaluated_node(e, &self.include_paths))
@@ -1229,14 +1247,43 @@ impl crate::term_processor::TermProcessor for MeshGenerator {
             .unwrap()?;
 
         let with_normals = manifold.calculate_normals(0, 30.0);
-        Ok((with_normals.to_mesh(), nodes))
+        Ok((with_normals.to_mesh(), nodes, color))
+    }
+}
+
+/// ManifoldExpr群から最初に見つかったcolor指定を抽出する (R, G, B: 0.0〜1.0)
+pub fn extract_color_from_exprs(exprs: &[ManifoldExpr]) -> Option<[f64; 3]> {
+    for expr in exprs {
+        if let Some(c) = extract_color_recursive(expr) {
+            return Some(c);
+        }
+    }
+    None
+}
+
+fn extract_color_recursive(expr: &ManifoldExpr) -> Option<[f64; 3]> {
+    match expr {
+        ManifoldExpr::ColorWrap { r, g, b, .. } => Some([r.value, g.value, b.value]),
+        ManifoldExpr::Translate { expr: e, .. }
+        | ManifoldExpr::Scale { expr: e, .. }
+        | ManifoldExpr::Rotate { expr: e, .. }
+        | ManifoldExpr::LinearExtrude { profile: e, .. }
+        | ManifoldExpr::ComplexExtrude { profile: e, .. }
+        | ManifoldExpr::Revolve { profile: e, .. } => extract_color_recursive(e),
+        ManifoldExpr::Union(a, b)
+        | ManifoldExpr::Difference(a, b)
+        | ManifoldExpr::Intersection(a, b)
+        | ManifoldExpr::Hull(a, b) => {
+            extract_color_recursive(a).or_else(|| extract_color_recursive(b))
+        }
+        _ => None,
     }
 }
 
 pub fn generate_mesh_and_tree_from_terms(
     terms: &[Term],
     include_paths: &[PathBuf],
-) -> Result<(Mesh, Vec<EvaluatedNode>), ConversionError> {
+) -> Result<(Mesh, Vec<EvaluatedNode>, Option<[f64; 3]>), ConversionError> {
     use crate::term_processor::TermProcessor;
     MeshGenerator {
         include_paths: include_paths.to_vec(),
@@ -1682,7 +1729,7 @@ mod tests {
         assert_eq!(cps[0].x.value, 10.0);
         // 残りのgeometryでメッシュ生成が成功する
         assert_eq!(resolved.len(), 1);
-        let (mesh, _) = generate_mesh_and_tree_from_terms(&resolved, &[]).unwrap();
+        let (mesh, _, _) = generate_mesh_and_tree_from_terms(&resolved, &[]).unwrap();
         assert!(mesh.vertices().len() > 0);
     }
 
@@ -1754,13 +1801,13 @@ mod tests {
         assert_eq!(cps2[0].x.value, 5.0);
         // 残りのtermsでextrude(sketchXY(...), 6)になっていること
         assert_eq!(resolved2.len(), 1);
-        let (mesh, _) = generate_mesh_and_tree_from_terms(&resolved2, &[]).unwrap();
+        let (mesh, _, _) = generate_mesh_and_tree_from_terms(&resolved2, &[]).unwrap();
         assert!(mesh.vertices().len() > 0);
     }
 
     #[test]
     fn test_control_is_builtin_functor() {
-        assert!(is_builtin_functor("control"));
+        assert!(crate::term_processor::is_builtin_functor("control"));
     }
 
     #[test]
@@ -1822,7 +1869,7 @@ mod tests {
         assert_eq!(cps.len(), 1);
         assert_eq!(resolved.len(), 1);
         // cube(X+10, 20, 30) where X=5 → cube(15, 20, 30)
-        let (mesh, _) = generate_mesh_and_tree_from_terms(&resolved, &[]).unwrap();
+        let (mesh, _, _) = generate_mesh_and_tree_from_terms(&resolved, &[]).unwrap();
         assert!(mesh.vertices().len() > 0);
     }
 
@@ -1848,7 +1895,7 @@ mod tests {
         assert_eq!(cps.len(), 1);
         // box(10)→cube(10,10,10), box(20)→cube(20,20,20) が残るはず
         assert_eq!(resolved.len(), 2);
-        let (mesh, _) = generate_mesh_and_tree_from_terms(&resolved, &[]).unwrap();
+        let (mesh, _, _) = generate_mesh_and_tree_from_terms(&resolved, &[]).unwrap();
         assert!(mesh.vertices().len() > 0);
     }
 

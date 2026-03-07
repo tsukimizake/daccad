@@ -22,3 +22,6 @@ stl_io = { version = "0.8", optional = true }
 cadhr-lang-macros = { path = "../cadhr-lang-macros" }
 inventory = "0.3"
 serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3.26.0"

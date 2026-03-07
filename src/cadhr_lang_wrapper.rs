@@ -7,6 +7,7 @@ use bevy_async_ecs::AsyncWorld;
 use crate::events::{CadhrLangOutput, GeneratePreviewRequest, PreviewGenerated};
 use cadhr_lang::bom::BomExtractor;
 use cadhr_lang::manifold_bridge::{MeshGenerator, extract_control_points};
+use cadhr_lang::module::resolve_modules;
 use cadhr_lang::parse::{SrcSpan, database, parse_error_span, query as parse_query};
 use cadhr_lang::term_processor::TermProcessor;
 use cadhr_lang::term_rewrite::{CadhrError, execute};
@@ -52,11 +53,17 @@ fn spawn_mesh_job(async_world: AsyncWorld, req: GeneratePreviewRequest) {
                         let span = parse_error_span(&query, &e);
                         (format!("Query parse error: {:?}", e), span)
                     })?;
-                let mut db =
+                let db =
                     database(&db_src).map_err(|e| {
                         let span = parse_error_span(&db_src, &e);
                         (format!("Database parse error: {:?}", e), span)
                     })?;
+                let mut db = resolve_modules(
+                    db,
+                    &req.include_paths,
+                    &mut std::collections::HashSet::new(),
+                )
+                .map_err(|e| (format!("Module error: {}", e), None))?;
                 logs.push(format!("Query terms: {:?}", query_terms));
                 logs.push(format!("Database clauses: {:#?}", db));
                 let mut resolved =
@@ -117,6 +124,7 @@ fn spawn_mesh_job(async_world: AsyncWorld, req: GeneratePreviewRequest) {
                         evaluated_nodes: vec![],
                         control_points,
                         bom_entries,
+                        color: None,
                     })
                     .await;
                 return;
@@ -131,14 +139,14 @@ fn spawn_mesh_job(async_world: AsyncWorld, req: GeneratePreviewRequest) {
                     let span = e.span();
                     (format!("Mesh error: {}", e), span)
                 })
-                .and_then(|(rs_mesh, evaluated_nodes)| {
+                .and_then(|(rs_mesh, evaluated_nodes, color)| {
                     rs_mesh_to_bevy_mesh(&rs_mesh)
-                        .map(|m| (m, evaluated_nodes))
+                        .map(|m| (m, evaluated_nodes, color))
                         .map_err(|e| (e, None))
                 });
 
             match mesh_result {
-                Ok((mesh, evaluated_nodes)) => {
+                Ok((mesh, evaluated_nodes, color)) => {
                     async_world
                         .send_message(PreviewGenerated {
                             preview_id,
@@ -147,6 +155,7 @@ fn spawn_mesh_job(async_world: AsyncWorld, req: GeneratePreviewRequest) {
                             evaluated_nodes,
                             control_points,
                             bom_entries,
+                            color,
                         })
                         .await;
                 }

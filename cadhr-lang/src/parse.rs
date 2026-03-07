@@ -298,6 +298,11 @@ impl PartialEq for Term {
 pub enum Clause {
     Fact(Term),
     Rule { head: Term, body: Vec<Term> },
+    Use {
+        path: String,
+        expose: Vec<String>,
+        span: Option<SrcSpan>,
+    },
 }
 
 impl fmt::Debug for Term {
@@ -384,6 +389,13 @@ impl fmt::Debug for Clause {
                     write!(f, "{:?}", term)?;
                 }
                 write!(f, ".")
+            }
+            Clause::Use { path, expose, .. } => {
+                write!(f, "#use(\"{}\"", path)?;
+                if !expose.is_empty() {
+                    write!(f, ", expose({:?})", expose)?;
+                }
+                write!(f, ").")
             }
         }
     }
@@ -771,6 +783,15 @@ fn atom_term(input: &str) -> PResult<'_, Term> {
     let (input, _) = space_or_comment0(input)?;
     let start = input.as_ptr() as usize;
     let (input, name) = atom(input)?;
+    let (input, name) = if let Ok((input2, _)) = tag::<&str, &str, nom::error::Error<&str>>("::")(input) {
+        if let Ok((input2, qualified_name)) = atom(input2) {
+            (input2, format!("{}::{}", name, qualified_name))
+        } else {
+            (input, name)
+        }
+    } else {
+        (input, name)
+    };
     let (input, maybe_args) = opt(ws(delimited(
         char('('),
         separated_list0(ws(char(',')), term),
@@ -874,16 +895,65 @@ fn goals(input: &str) -> PResult<'_, Vec<Term>> {
     separated_list1(ws(char(',')), term).parse(input)
 }
 
-pub(super) fn clause_parser(input: &str) -> PResult<'_, Clause> {
-    ws(terminated(
-        alt((
-            map(
-                separated_pair(term, ws(tag(":-")), goals),
-                |(head, body)| Clause::Rule { head, body },
-            ),
-            map(term, Clause::Fact),
+fn use_expose_list(input: &str) -> PResult<'_, Vec<String>> {
+    preceded(
+        ws(tag("expose")),
+        ws(delimited(
+            char('('),
+            ws(delimited(
+                char('['),
+                separated_list0(ws(char(',')), atom),
+                cut(ws(char(']'))),
+            )),
+            cut(ws(char(')'))),
         )),
-        cut(ws(char('.'))),
+    )
+    .parse(input)
+}
+
+fn use_directive(input: &str) -> PResult<'_, Clause> {
+    let (input, _) = space_or_comment0(input)?;
+    let start = input.as_ptr() as usize;
+    let (input, _) = tag("#use")(input)?;
+    let (input, _) = char('(').parse(input)?;
+    let (input, path) = ws(delimited(
+        char('"'),
+        map(many0(alt((
+            map(tag("\\\""), |_: &str| '"'),
+            map(tag("\\\\"), |_: &str| '\\'),
+            nom::character::complete::none_of("\"\\"),
+        ))), |chars| chars.into_iter().collect::<String>()),
+        cut(char('"')),
+    ))
+    .parse(input)?;
+    let (input, expose) = opt(preceded(ws(char(',')), use_expose_list)).parse(input)?;
+    let (input, _) = char(')').parse(input)?;
+    let end = input.as_ptr() as usize;
+    let (input, _) = char('.').parse(input)?;
+    let span = SrcSpan { start, end };
+    Ok((
+        input,
+        Clause::Use {
+            path,
+            expose: expose.unwrap_or_default(),
+            span: Some(span),
+        },
+    ))
+}
+
+pub(super) fn clause_parser(input: &str) -> PResult<'_, Clause> {
+    alt((
+        use_directive,
+        ws(terminated(
+            alt((
+                map(
+                    separated_pair(term, ws(tag(":-")), goals),
+                    |(head, body)| Clause::Rule { head, body },
+                ),
+                map(term, Clause::Fact),
+            )),
+            cut(ws(char('.'))),
+        )),
     ))
     .parse(input)
 }
@@ -942,6 +1012,12 @@ fn fix_spans_in_clause(clause: &mut Clause, base: usize) {
             fix_spans_in_term(head, base);
             for t in body.iter_mut() {
                 fix_spans_in_term(t, base);
+            }
+        }
+        Clause::Use { span, .. } => {
+            if let Some(s) = span {
+                s.start = s.start.wrapping_sub(base);
+                s.end = s.end.wrapping_sub(base);
             }
         }
     }
@@ -1049,6 +1125,7 @@ pub fn collect_editable_vars(clauses: &[Clause]) -> Vec<VarInfo> {
                     collect_editable_vars_from_term(t, &mut vars);
                 }
             }
+            Clause::Use { .. } => {}
         }
     }
     vars
@@ -1569,5 +1646,65 @@ mod tests {
         assert!(vars[1].max.is_some());
         assert_eq!(vars[2].name, "Z");
         assert_eq!(vars[2].value, FixedPoint::from_int(30));
+    }
+
+    #[test]
+    fn parse_use_simple() {
+        let src = r#"#use("bolts")."#;
+        let (_, clause) = clause_parser(src).unwrap();
+        match clause {
+            Clause::Use { path, expose, .. } => {
+                assert_eq!(path, "bolts");
+                assert!(expose.is_empty());
+            }
+            _ => panic!("Expected Use, got {:?}", clause),
+        }
+    }
+
+    #[test]
+    fn parse_use_with_expose() {
+        let src = r#"#use("bolts", expose([m5, m6]))."#;
+        let (_, clause) = clause_parser(src).unwrap();
+        match clause {
+            Clause::Use { path, expose, .. } => {
+                assert_eq!(path, "bolts");
+                assert_eq!(expose, vec!["m5", "m6"]);
+            }
+            _ => panic!("Expected Use, got {:?}", clause),
+        }
+    }
+
+    #[test]
+    fn parse_use_with_subpath() {
+        let src = r#"#use("sub/parts")."#;
+        let (_, clause) = clause_parser(src).unwrap();
+        match clause {
+            Clause::Use { path, .. } => assert_eq!(path, "sub/parts"),
+            _ => panic!("Expected Use"),
+        }
+    }
+
+    #[test]
+    fn parse_qualified_functor() {
+        let src = "bolts::m5(X).";
+        let (_, clause) = clause_parser(src).unwrap();
+        match clause {
+            Clause::Fact(Term::Struct { functor, args, .. }) => {
+                assert_eq!(functor, "bolts::m5");
+                assert_eq!(args.len(), 1);
+            }
+            _ => panic!("Expected qualified Struct, got {:?}", clause),
+        }
+    }
+
+    #[test]
+    fn parse_database_with_use() {
+        let src = r#"
+            #use("bolts").
+            main(X) :- bolts::m5(X).
+        "#;
+        let db = database(src).unwrap();
+        assert_eq!(db.len(), 2);
+        assert!(matches!(&db[0], Clause::Use { path, .. } if path == "bolts"));
     }
 }
