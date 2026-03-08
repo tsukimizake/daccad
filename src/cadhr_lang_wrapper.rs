@@ -124,7 +124,6 @@ fn spawn_mesh_job(async_world: AsyncWorld, req: GeneratePreviewRequest) {
                         evaluated_nodes: vec![],
                         control_points,
                         bom_entries,
-                        color: None,
                     })
                     .await;
                 return;
@@ -139,14 +138,14 @@ fn spawn_mesh_job(async_world: AsyncWorld, req: GeneratePreviewRequest) {
                     let span = e.span();
                     (format!("Mesh error: {}", e), span)
                 })
-                .and_then(|(rs_mesh, evaluated_nodes, color)| {
+                .and_then(|(rs_mesh, evaluated_nodes)| {
                     rs_mesh_to_bevy_mesh(&rs_mesh)
-                        .map(|m| (m, evaluated_nodes, color))
+                        .map(|m| (m, evaluated_nodes))
                         .map_err(|e| (e, None))
                 });
 
             match mesh_result {
-                Ok((mesh, evaluated_nodes, color)) => {
+                Ok((mesh, evaluated_nodes)) => {
                     async_world
                         .send_message(PreviewGenerated {
                             preview_id,
@@ -155,7 +154,6 @@ fn spawn_mesh_job(async_world: AsyncWorld, req: GeneratePreviewRequest) {
                             evaluated_nodes,
                             control_points,
                             bom_entries,
-                            color,
                         })
                         .await;
                 }

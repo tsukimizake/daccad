@@ -44,15 +44,6 @@ const CONTROL_SPHERE_HIT_RADIUS: f64 = 1.5;
 const CONTROL_SPHERE_COLOR: Color = Color::srgb(1.0, 0.9, 0.0);
 const CONTROL_SPHERE_SELECTED_COLOR: Color = Color::srgb(0.0, 1.0, 0.5);
 const CAMERA_DISTANCE_FACTOR: f32 = 2.4 * 3.0;
-const DEFAULT_MESH_COLOR: Color = Color::srgb(0.7, 0.2, 0.2);
-
-fn color_from_opt(c: Option<[f64; 3]>) -> Color {
-    match c {
-        Some([r, g, b]) => Color::srgb(r as f32, g as f32, b as f32),
-        None => DEFAULT_MESH_COLOR,
-    }
-}
-
 fn refresh_editable_vars(editor_text: &str, editable_vars: &mut EditableVars) {
     if let Ok(clauses) = cadhr_lang::parse::database(editor_text) {
         **editable_vars = cadhr_lang::parse::collect_editable_vars(&clauses);
@@ -574,14 +565,6 @@ pub(super) fn on_preview_generated(
                 target.bom_entries = ev.bom_entries.clone();
                 target.base_camera_distance = camera_distance_from_mesh(&ev.mesh);
 
-                if target.color != ev.color {
-                    target.color = ev.color;
-                    let new_color = color_from_opt(ev.color);
-                    if let Some(mat) = materials.get_mut(&target.material_handle) {
-                        mat.base_color = new_color;
-                    }
-                }
-
                 // Update control sphere entities
                 let render_layer = target.render_layer;
                 let both_layers = RenderLayers::from_layers(&[0, render_layer]);
@@ -610,9 +593,8 @@ pub(super) fn on_preview_generated(
         // New preview: spawn entities
         let mesh_handle = meshes.add(ev.mesh.clone());
 
-        let base_color = color_from_opt(ev.color);
-        let material_handle = materials.add(StandardMaterial {
-            base_color,
+        let material = materials.add(StandardMaterial {
+            base_color: Color::srgb(0.7, 0.2, 0.2),
             ..default()
         });
 
@@ -698,7 +680,7 @@ pub(super) fn on_preview_generated(
                 // Mesh
                 parent.spawn((
                     Mesh3d(mesh_handle.clone()),
-                    MeshMaterial3d(material_handle.clone()),
+                    MeshMaterial3d(material.clone()),
                     Transform::from_xyz(0.0, 0.0, 0.0),
                     both_layers.clone(),
                 ));
@@ -783,8 +765,6 @@ pub(super) fn on_preview_generated(
                     control_sphere_entities,
                     control_point_overrides: pending_state.control_point_overrides.clone(),
                     bom_entries: ev.bom_entries.clone(),
-                    color: ev.color,
-                    material_handle,
                 }
             });
     }

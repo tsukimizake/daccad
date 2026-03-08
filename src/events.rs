@@ -24,7 +24,6 @@ pub struct PreviewGenerated {
     pub evaluated_nodes: Vec<EvaluatedNode>,
     pub control_points: Vec<ControlPoint>,
     pub bom_entries: Vec<BomEntry>,
-    pub color: Option<[f64; 3]>,
 }
 
 // CadhrLang -> UI: error or log message from cadhr-lang execution
