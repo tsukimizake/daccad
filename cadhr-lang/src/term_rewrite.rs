@@ -43,15 +43,16 @@ fn resolve_inner(term: &Term, env: &Env, depth: usize) -> Term {
             min,
             max,
             span,
+            editable,
         } if name != "_" => match env.get(name) {
             Some(Term::Number { value: new_val }) => {
-                // Number束縛 → AnnotatedVarのdefault_valueを更新（span保持）
                 Term::AnnotatedVar {
                     name: name.clone(),
                     default_value: Some(*new_val),
                     min: *min,
                     max: *max,
                     span: *span,
+                    editable: *editable,
                 }
             }
             Some(Term::AnnotatedVar { name: n2, .. }) if n2 == name => {
@@ -1440,24 +1441,24 @@ mod tests {
 
     #[test]
     fn default_var_matches_annotated_value() {
-        let resolved = run_success("f(25).", "f(X@25).");
-        assert_eq!(resolved, vec!["f(X@25)"]);
+        let resolved = run_success("f(25).", "f(X=25).");
+        assert_eq!(resolved, vec!["f(X=25)"]);
     }
 
     #[test]
     fn default_var_conflict_fails() {
-        run_failure("f(30).", "f(X@25).");
+        run_failure("f(30).", "f(X=25).");
     }
 
     #[test]
     fn default_var_propagates_within_rule_body() {
         let resolved = run_success(
-            "cut(W) :- cube(W, 50, 260). main :- cube(X@25, 50, 300) - (cut(W@5) |> translate(X / 2 - W, 0, 0)).",
+            "cut(W) :- cube(W, 50, 260). main :- cube(X=25, 50, 300) - (cut(W=5) |> translate(X / 2 - W, 0, 0)).",
             "main.",
         );
         assert_eq!(
             resolved,
-            vec!["(cube(X_2@25, 50, 300) - translate(cube(5, 50, 260), 7.5, 0, 0))"]
+            vec!["(cube(X_2=25, 50, 300) - translate(cube(5, 50, 260), 7.5, 0, 0))"]
         );
     }
 
@@ -1833,7 +1834,7 @@ mod tests {
     #[test]
     fn builtin_arg_rule_with_control_separation() {
         let resolved = run_success(
-            "blade_cut :- path(p(0, 0), [line_to(p(10, 0)), line_to(p(10, 20))]), control(X@0, Y@20, 0). main :- linear_extrude(blade_cut, 100).",
+            "blade_cut :- path(p(0, 0), [line_to(p(10, 0)), line_to(p(10, 20))]), control(X=0, Y=20, 0). main :- linear_extrude(blade_cut, 100).",
             "main.",
         );
         assert_eq!(resolved.len(), 2);

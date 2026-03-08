@@ -203,7 +203,7 @@ fn term_to_tracked_f64(term: &Term) -> Option<TrackedF64> {
         }),
         Term::Var { span, .. } => Some(TrackedF64 {
             value: 0.0,
-            // 変数名末尾の zero-length span → @value 挿入位置
+            // 変数名末尾の zero-length span → =value 挿入位置
             source_span: span.map(|s| SrcSpan {
                 start: s.end,
                 end: s.end,
@@ -1703,7 +1703,7 @@ mod tests {
         use crate::term_rewrite::execute;
 
         let mut db = database(
-            "main :- linear_extrude(sketchXY([p(0, 0), p(0, 40), p(30, 0)]), X@10), control(X, 0, 0, \"width\")."
+            "main :- linear_extrude(sketchXY([p(0, 0), p(0, 40), p(30, 0)]), X=10), control(X, 0, 0, \"width\")."
         ).unwrap();
         let (_, q) = parse_query("main.").unwrap();
         let mut resolved = execute(&mut db, q).unwrap();
@@ -1711,7 +1711,7 @@ mod tests {
 
         assert_eq!(cps.len(), 1);
         assert_eq!(cps[0].name.as_deref(), Some("width"));
-        // X@10 のデフォルト値がcontrolにも伝播
+        // X=10 のデフォルト値がcontrolにも伝播
         assert_eq!(cps[0].x.value, 10.0);
         // 残りのgeometryでメッシュ生成が成功する
         assert_eq!(resolved.len(), 1);
@@ -1724,7 +1724,7 @@ mod tests {
         use crate::parse::{database, query as parse_query};
         use crate::term_rewrite::execute;
 
-        // X@なし: controlのVar座標が0にフォールバックし、extrude側にも0が代入される
+        // X=なし: controlのVar座標が0にフォールバックし、extrude側にも0が代入される
         let mut db = database(
             "main :- linear_extrude(sketchXY([p(0, 0), p(0, 40), p(30, 0)]), X), control(X, -10, -10).",
         )

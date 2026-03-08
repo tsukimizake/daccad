@@ -139,16 +139,18 @@ pub enum ArithOp {
 pub enum Term {
     Var {
         name: String,
-        /// 変数名のソース上の範囲 (バイトオフセット)。@value挿入位置の算出に使用。
+        /// 変数名のソース上の範囲 (バイトオフセット)。=value挿入位置の算出に使用。
         span: Option<SrcSpan>,
     },
-    /// 既定値・範囲付き変数: X@25, 0<X@20<50, 0<X<50 など
+    /// 既定値・範囲付き変数: X=25, X:=25, 0<X:=20<50, 0<X<50 など
+    /// editable=true (:=) の場合のみ Parameters パネルに表示される
     AnnotatedVar {
         name: String,
         default_value: Option<FixedPoint>,
         min: Option<Bound>,
         max: Option<Bound>,
         span: Option<SrcSpan>,
+        editable: bool,
     },
     Number {
         value: FixedPoint,
@@ -314,6 +316,7 @@ impl fmt::Debug for Term {
                 default_value,
                 min,
                 max,
+                editable,
                 ..
             } => {
                 if let Some(b) = min {
@@ -321,7 +324,7 @@ impl fmt::Debug for Term {
                 }
                 write!(f, "{}", name)?;
                 if let Some(dv) = default_value {
-                    write!(f, "@{}", dv)?;
+                    write!(f, "{}{}", if *editable { ":=" } else { "=" }, dv)?;
                 }
                 if let Some(b) = max {
                     write!(f, " {} {}", if b.inclusive { "<=" } else { "<" }, b.value)?;
@@ -420,6 +423,7 @@ pub fn default_var(name: String, value: FixedPoint) -> Term {
         min: None,
         max: None,
         span: None,
+        editable: false,
     }
 }
 
@@ -430,6 +434,7 @@ pub fn default_var_with_span(name: String, value: FixedPoint, span: SrcSpan) -> 
         min: None,
         max: None,
         span: Some(span),
+        editable: false,
     }
 }
 
@@ -446,6 +451,7 @@ pub fn annotated_var(
         min,
         max,
         span,
+        editable: false,
     }
 }
 
@@ -489,6 +495,7 @@ pub fn range_var(name: String, min: Option<Bound>, max: Option<Bound>) -> Term {
         min,
         max,
         span: None,
+        editable: false,
     }
 }
 
@@ -674,8 +681,12 @@ fn comp_op(input: &str) -> PResult<'_, CompOp> {
     .parse(input)
 }
 
-fn default_value_suffix(input: &str) -> PResult<'_, (FixedPoint, SrcSpan)> {
-    let (input, _) = ws(char('@')).parse(input)?;
+fn default_value_suffix(input: &str) -> PResult<'_, (FixedPoint, SrcSpan, bool)> {
+    let (input, editable) = ws(alt((
+        map(tag(":="), |_| true),
+        map(char('='), |_| false),
+    )))
+    .parse(input)?;
     let (input, _) = space_or_comment0(input)?;
     let value_start = input.as_ptr() as usize;
     let (input, value) = fixed_number(input)?;
@@ -688,12 +699,13 @@ fn default_value_suffix(input: &str) -> PResult<'_, (FixedPoint, SrcSpan)> {
                 start: value_start,
                 end: value_end,
             },
+            editable,
         ),
     ))
 }
 
-/// annotated_var: `X@25`, `0<X@20<50`, `0<X<10`, `X<10`, `0<X` など
-/// left_bound? Variable (@default_value)? right_bound?
+/// annotated_var: `X=25`, `X:=25`, `0<X:=20<50`, `0<X<10`, `X<10`, `0<X` など
+/// left_bound? Variable (=value | :=value)? right_bound?
 fn annotated_var_term(input: &str) -> PResult<'_, Term> {
     // 左側: (num op)?
     let (input, left) = opt((ws(fixed_number), comp_op)).parse(input)?;
@@ -705,7 +717,7 @@ fn annotated_var_term(input: &str) -> PResult<'_, Term> {
         start: var_name_start,
         end: var_name_end,
     };
-    // @default_value (optional)
+    // =value or :=value (optional)
     let (input, default_with_span) = opt(default_value_suffix).parse(input)?;
     // 右側: (op num)?
     let (input, right) = opt((comp_op, ws(fixed_number))).parse(input)?;
@@ -736,13 +748,12 @@ fn annotated_var_term(input: &str) -> PResult<'_, Term> {
         None => None,
     };
 
-    let (default_value, span) = match default_with_span {
-        Some((val, sp)) => (Some(val), Some(sp)),
-        // @valueなし → 変数名末尾に zero-length span (挿入位置)
+    let (default_value, span, editable) = match default_with_span {
+        Some((val, sp, editable)) => (Some(val), Some(sp), editable),
         None => (None, Some(SrcSpan {
             start: var_name_span.end,
             end: var_name_span.end,
-        })),
+        }), false),
     };
 
     if min.is_none() && max.is_none() && default_value.is_none() {
@@ -756,6 +767,7 @@ fn annotated_var_term(input: &str) -> PResult<'_, Term> {
                 min,
                 max,
                 span,
+                editable,
             },
         ))
     }
@@ -1078,6 +1090,7 @@ fn collect_editable_vars_from_term(term: &Term, vars: &mut Vec<VarInfo>) {
             min,
             max,
             span: Some(span),
+            editable: true,
         } => {
             if !vars.iter().any(|v| v.span.start == span.start) {
                 vars.push(VarInfo {
@@ -1380,7 +1393,7 @@ mod tests {
 
     #[test]
     fn parse_default_var() {
-        let src = "hoge(X@25).";
+        let src = "hoge(X=25).";
         let (_, clause) = clause_parser(src).unwrap();
 
         match clause {
@@ -1447,7 +1460,7 @@ mod tests {
 
     #[test]
     fn parse_default_var_decimal() {
-        let src = "hoge(X@2.5).";
+        let src = "hoge(X=2.5).";
         let (_, clause) = clause_parser(src).unwrap();
         match clause {
             Clause::Fact(Term::Struct { args, .. }) => match &args[0] {
@@ -1560,7 +1573,7 @@ mod tests {
 
     #[test]
     fn parse_annotated_var_with_default_and_range() {
-        let src = "hoge(0<X@20<50).";
+        let src = "hoge(0<X=20<50).";
         let (_, clause) = clause_parser(src).unwrap();
 
         match clause {
@@ -1575,6 +1588,7 @@ mod tests {
                             min,
                             max,
                             span,
+                            ..
                         } => {
                             assert_eq!(name, "X");
                             assert_eq!(*default_value, Some(FixedPoint::from_int(20)));
@@ -1605,7 +1619,7 @@ mod tests {
 
     #[test]
     fn parse_annotated_var_inclusive_range_with_default() {
-        let src = "hoge(0<=X@20<=50).";
+        let src = "hoge(0<=X=20<=50).";
         let (_, clause) = clause_parser(src).unwrap();
 
         match clause {
@@ -1633,7 +1647,7 @@ mod tests {
 
     #[test]
     fn test_collect_editable_vars() {
-        let src = "main :- cube(X@10, 0<Y@20<50, Z@30).";
+        let src = "main :- cube(X:=10, 0<Y:=20<50, Z:=30).";
         let clauses = database(src).unwrap();
         let vars = collect_editable_vars(&clauses);
         assert_eq!(vars.len(), 3);
