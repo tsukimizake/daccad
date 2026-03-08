@@ -356,6 +356,18 @@ pub(super) fn egui_ui(
                                         PreviewAction::Close => {
                                             closes_to_send.push((*target_id, target.render_layer));
                                         }
+                                        PreviewAction::InsertControlPoint(x, y, z) => {
+                                            let cp_text = format!(
+                                                ", control({:.2}, {:.2}, {:.2})",
+                                                x, y, z
+                                            );
+                                            insert_control_point_text(
+                                                &mut **editor_text,
+                                                &target.query,
+                                                &cp_text,
+                                            );
+                                            updates_to_send.push((target.preview_id, target.query.clone()));
+                                        }
                                         PreviewAction::None => {}
                                     }
                                 }
@@ -765,6 +777,7 @@ pub(super) fn on_preview_generated(
                     control_sphere_entities,
                     control_point_overrides: pending_state.control_point_overrides.clone(),
                     bom_entries: ev.bom_entries.clone(),
+                    cp_generate_mode: false,
                 }
             });
     }
@@ -779,6 +792,7 @@ enum PreviewAction {
     Export3MF,
     ExportBOM,
     Close,
+    InsertControlPoint(f64, f64, f64),
 }
 
 // ============================================================
@@ -787,7 +801,6 @@ enum PreviewAction {
 
 /// Ray-triangle intersection using Moller-Trumbore algorithm.
 /// Returns distance t if hit (t > 0).
-#[allow(unused)]
 fn ray_triangle_intersect(
     ray_origin: &[f64; 3],
     ray_dir: &[f64; 3],
@@ -821,7 +834,6 @@ fn ray_triangle_intersect(
     if t > 1e-10 { Some(t) } else { None }
 }
 
-#[allow(unused)]
 fn cross(a: &[f64; 3], b: &[f64; 3]) -> [f64; 3] {
     [
         a[1] * b[2] - a[2] * b[1],
@@ -830,13 +842,11 @@ fn cross(a: &[f64; 3], b: &[f64; 3]) -> [f64; 3] {
     ]
 }
 
-#[allow(unused)]
 fn dot(a: &[f64; 3], b: &[f64; 3]) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
 /// Test ray against AABB, returns true if ray intersects the box.
-#[allow(unused)]
 fn ray_aabb_intersect(
     ray_origin: &[f64; 3],
     ray_dir: &[f64; 3],
@@ -868,7 +878,6 @@ fn ray_aabb_intersect(
 }
 
 /// Raycast against an EvaluatedNode tree. Returns (distance, node_ref) of closest hit.
-#[allow(unused)]
 fn raycast_evaluated_nodes<'a>(
     ray_origin: &[f64; 3],
     ray_dir: &[f64; 3],
@@ -885,7 +894,6 @@ fn raycast_evaluated_nodes<'a>(
     best
 }
 
-#[allow(unused)]
 fn raycast_node<'a>(
     ray_origin: &[f64; 3],
     ray_dir: &[f64; 3],
@@ -939,8 +947,65 @@ fn raycast_node<'a>(
     }
 }
 
+/// クエリのfunctor名に対応するclauseの末尾(`.`の直前)にテキストを挿入する。
+/// クエリが "main." なら、ソース中の最後の "main :- ..." clause の `.` 直前に挿入。
+fn insert_control_point_text(source: &mut String, query: &str, text: &str) {
+    let functor = query.trim().trim_end_matches('.');
+    let functor = functor.split('(').next().unwrap_or(functor).trim();
+    if functor.is_empty() {
+        return;
+    }
+
+    // ソースを後ろからスキャンし、"functor :- ..." の最後のclauseを探す
+    // clause区切りは '.' (文字列リテラル外)
+    let mut best_dot_pos: Option<usize> = None;
+    let bytes = source.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        // clause開始位置を探す: 空白をスキップしてfunctorで始まるか確認
+        while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\n' || bytes[i] == b'\r' || bytes[i] == b'\t') {
+            i += 1;
+        }
+        let content_start = i;
+
+        let mut in_string = false;
+        let mut dot_pos = None;
+        while i < bytes.len() {
+            if in_string {
+                if bytes[i] == b'\\' {
+                    i += 1; // エスケープの次の文字をスキップ
+                } else if bytes[i] == b'"' {
+                    in_string = false;
+                }
+            } else if bytes[i] == b'"' {
+                in_string = true;
+            } else if bytes[i] == b'.' {
+                dot_pos = Some(i);
+                i += 1;
+                break;
+            }
+            i += 1;
+        }
+
+        if let Some(dp) = dot_pos {
+            // このclauseのhead functorがマッチするか確認
+            let clause_text = &source[content_start..dp];
+            let head = clause_text.split(":-").next().unwrap_or(clause_text).trim();
+            let head_functor = head.split('(').next().unwrap_or(head).trim();
+            if head_functor == functor {
+                best_dot_pos = Some(dp);
+            }
+        } else {
+            break;
+        }
+    }
+
+    if let Some(pos) = best_dot_pos {
+        source.insert_str(pos, text);
+    }
+}
+
 /// Generate a ray from UV coordinates (0..1) in the preview image, given camera params.
-#[allow(unused)]
 fn generate_ray_from_uv(u: f32, v: f32, target: &PreviewTarget) -> ([f64; 3], [f64; 3]) {
     let rx = target.rotate_x.clamp(MIN_CAMERA_PITCH, MAX_CAMERA_PITCH) as f32;
     let ry = target.rotate_y.clamp(MIN_CAMERA_YAW, MAX_CAMERA_YAW) as f32;
@@ -1013,6 +1078,10 @@ fn preview_target_ui(
                     target.control_point_overrides.clear();
                     cp_override_regenerate.push(target.preview_id);
                 }
+                let cp_label = if target.cp_generate_mode { "CP生成 ✓" } else { "CP生成" };
+                if ui.button(cp_label).clicked() {
+                    target.cp_generate_mode = !target.cp_generate_mode;
+                }
             });
             ui.add_space(4.0);
             // Camera controls (orbit and zoom)
@@ -1049,49 +1118,60 @@ fn preview_target_ui(
                 egui::Image::from_texture((tex_id, egui::vec2(w, h))).sense(egui::Sense::click()),
             );
 
-            // Click-to-select control point
-            if image_response.clicked() && !target.control_points.is_empty() {
+            if image_response.clicked() {
                 if let Some(pos) = image_response.interact_pointer_pos() {
                     let rect = image_response.rect;
                     let u = (pos.x - rect.min.x) / rect.width();
                     let v = (pos.y - rect.min.y) / rect.height();
                     let (ray_origin, ray_dir) = generate_ray_from_uv(u, v, target);
 
-                    let sphere_radius = CONTROL_SPHERE_HIT_RADIUS;
-                    let mut best_hit: Option<(f64, usize)> = None;
-                    for (ci, cp) in target.control_points.iter().enumerate() {
-                        let center = [cp.x.value, cp.y.value, cp.z.value];
-                        let oc = [
-                            ray_origin[0] - center[0],
-                            ray_origin[1] - center[1],
-                            ray_origin[2] - center[2],
-                        ];
-                        let a = dot(&ray_dir, &ray_dir);
-                        let b = 2.0 * dot(&oc, &ray_dir);
-                        let c = dot(&oc, &oc) - sphere_radius * sphere_radius;
-                        let discriminant = b * b - 4.0 * a * c;
-                        if discriminant >= 0.0 {
-                            let t = (-b - discriminant.sqrt()) / (2.0 * a);
-                            let t = if t > 0.0 {
-                                t
-                            } else {
-                                (-b + discriminant.sqrt()) / (2.0 * a)
-                            };
-                            if t > 0.0 {
-                                if best_hit.is_none() || t < best_hit.unwrap().0 {
-                                    best_hit = Some((t, ci));
+                    if target.cp_generate_mode {
+                        // CP生成モード: メッシュへのraycastで交差点にcontrol pointを挿入
+                        if let Some((t, _node)) = raycast_evaluated_nodes(&ray_origin, &ray_dir, &target.evaluated_nodes) {
+                            let hit = [
+                                ray_origin[0] + t * ray_dir[0],
+                                ray_origin[1] + t * ray_dir[1],
+                                ray_origin[2] + t * ray_dir[2],
+                            ];
+                            action = PreviewAction::InsertControlPoint(hit[0], hit[1], hit[2]);
+                        }
+                    } else if !target.control_points.is_empty() {
+                        // 通常モード: control point選択
+                        let sphere_radius = CONTROL_SPHERE_HIT_RADIUS;
+                        let mut best_hit: Option<(f64, usize)> = None;
+                        for (ci, cp) in target.control_points.iter().enumerate() {
+                            let center = [cp.x.value, cp.y.value, cp.z.value];
+                            let oc = [
+                                ray_origin[0] - center[0],
+                                ray_origin[1] - center[1],
+                                ray_origin[2] - center[2],
+                            ];
+                            let a = dot(&ray_dir, &ray_dir);
+                            let b = 2.0 * dot(&oc, &ray_dir);
+                            let c = dot(&oc, &oc) - sphere_radius * sphere_radius;
+                            let discriminant = b * b - 4.0 * a * c;
+                            if discriminant >= 0.0 {
+                                let t = (-b - discriminant.sqrt()) / (2.0 * a);
+                                let t = if t > 0.0 {
+                                    t
+                                } else {
+                                    (-b + discriminant.sqrt()) / (2.0 * a)
+                                };
+                                if t > 0.0 {
+                                    if best_hit.is_none() || t < best_hit.unwrap().0 {
+                                        best_hit = Some((t, ci));
+                                    }
                                 }
                             }
                         }
-                    }
 
-                    if let Some((_t, ci)) = best_hit {
-                        selected_cp.preview_id = Some(target.preview_id);
-                        selected_cp.index = ci;
-                    } else {
-                        // Click on empty space deselects
-                        if selected_cp.preview_id == Some(target.preview_id) {
-                            selected_cp.preview_id = None;
+                        if let Some((_t, ci)) = best_hit {
+                            selected_cp.preview_id = Some(target.preview_id);
+                            selected_cp.index = ci;
+                        } else {
+                            if selected_cp.preview_id == Some(target.preview_id) {
+                                selected_cp.preview_id = None;
+                            }
                         }
                     }
                 }

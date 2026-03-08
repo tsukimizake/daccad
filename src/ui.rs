@@ -56,6 +56,7 @@ pub struct PreviewTarget {
     pub control_sphere_entities: Vec<Entity>,
     pub control_point_overrides: HashMap<String, f64>,
     pub bom_entries: Vec<BomEntry>,
+    pub cp_generate_mode: bool,
 }
 
 impl Plugin for UiPlugin {
