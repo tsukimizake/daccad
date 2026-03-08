@@ -73,22 +73,19 @@ pub fn resolve_modules(
 }
 
 fn find_module_file(module_path: &str, include_paths: &[PathBuf]) -> Option<PathBuf> {
-    let file_name = format!("{}.cadhr", module_path);
+    let trimmed = module_path.trim_end_matches('/');
     for dir in include_paths {
-        let candidate = dir.join(&file_name);
+        let candidate = dir.join(trimmed).join("db.cadhr");
         if candidate.is_file() {
             return Some(candidate);
-        }
-        let dir_candidate = dir.join(module_path).join("db.cadhr");
-        if dir_candidate.is_file() {
-            return Some(dir_candidate);
         }
     }
     None
 }
 
 fn module_name_from_path(path: &str) -> String {
-    Path::new(path)
+    let trimmed = path.trim_end_matches('/');
+    Path::new(trimmed)
         .file_stem()
         .unwrap_or_default()
         .to_string_lossy()
@@ -101,32 +98,28 @@ fn resolve_use(
     include_paths: &[PathBuf],
     visited: &mut HashSet<PathBuf>,
 ) -> Result<Vec<Clause>, ModuleError> {
-    let file_path = find_module_file(module_path, include_paths).ok_or_else(|| {
-        ModuleError::FileNotFound {
+    let file_path =
+        find_module_file(module_path, include_paths).ok_or_else(|| ModuleError::FileNotFound {
             module_path: module_path.to_string(),
             searched: include_paths
                 .iter()
-                .map(|p| p.join(format!("{}.cadhr", module_path)))
+                .map(|p| p.join(module_path.trim_end_matches('/')).join("db.cadhr"))
                 .collect(),
-        }
-    })?;
-
-    let canonical = file_path
-        .canonicalize()
-        .map_err(|e| ModuleError::IoError {
-            path: file_path.clone(),
-            error: e,
         })?;
+
+    let canonical = file_path.canonicalize().map_err(|e| ModuleError::IoError {
+        path: file_path.clone(),
+        error: e,
+    })?;
 
     if !visited.insert(canonical.clone()) {
         return Err(ModuleError::CyclicDependency { path: canonical });
     }
 
-    let source =
-        std::fs::read_to_string(&file_path).map_err(|e| ModuleError::IoError {
-            path: file_path.clone(),
-            error: e,
-        })?;
+    let source = std::fs::read_to_string(&file_path).map_err(|e| ModuleError::IoError {
+        path: file_path.clone(),
+        error: e,
+    })?;
 
     let clauses = database(&source).map_err(|e| ModuleError::ParseError {
         path: file_path.clone(),
@@ -231,8 +224,9 @@ mod tests {
     #[test]
     fn test_basic_module_resolution() {
         let dir = setup_test_dir();
+        fs::create_dir(dir.path().join("bolts")).unwrap();
         fs::write(
-            dir.path().join("bolts.cadhr"),
+            dir.path().join("bolts/db.cadhr"),
             "m5(X) :- size(X, 5).\nsize(small, 3).\n",
         )
         .unwrap();
@@ -244,23 +238,23 @@ mod tests {
         }];
 
         let mut visited = HashSet::new();
-        let result =
-            resolve_modules(clauses, &[dir.path().to_path_buf()], &mut visited).unwrap();
+        let result = resolve_modules(clauses, &[dir.path().to_path_buf()], &mut visited).unwrap();
 
-        assert!(result
-            .iter()
-            .any(|c| matches!(c, Clause::Rule { head, .. }
+        assert!(result.iter().any(|c| matches!(c, Clause::Rule { head, .. }
                 if matches!(head, Term::Struct { functor, .. } if functor == "bolts::m5"))));
-        assert!(result
-            .iter()
-            .any(|c| matches!(c, Clause::Fact(Term::Struct { functor, .. })
-                if functor == "bolts::size")));
+        assert!(
+            result
+                .iter()
+                .any(|c| matches!(c, Clause::Fact(Term::Struct { functor, .. })
+                if functor == "bolts::size"))
+        );
     }
 
     #[test]
     fn test_expose() {
         let dir = setup_test_dir();
-        fs::write(dir.path().join("bolts.cadhr"), "m5(5).\nm6(6).\n").unwrap();
+        fs::create_dir(dir.path().join("bolts")).unwrap();
+        fs::write(dir.path().join("bolts/db.cadhr"), "m5(5).\nm6(6).\n").unwrap();
 
         let clauses = vec![Clause::Use {
             path: "bolts".to_string(),
@@ -269,34 +263,43 @@ mod tests {
         }];
 
         let mut visited = HashSet::new();
-        let result =
-            resolve_modules(clauses, &[dir.path().to_path_buf()], &mut visited).unwrap();
+        let result = resolve_modules(clauses, &[dir.path().to_path_buf()], &mut visited).unwrap();
 
         // bolts::m5 と m5 の両方が存在する
-        assert!(result
-            .iter()
-            .any(|c| matches!(c, Clause::Fact(Term::Struct { functor, .. })
-                if functor == "bolts::m5")));
-        assert!(result
-            .iter()
-            .any(|c| matches!(c, Clause::Fact(Term::Struct { functor, .. })
-                if functor == "m5")));
+        assert!(
+            result
+                .iter()
+                .any(|c| matches!(c, Clause::Fact(Term::Struct { functor, .. })
+                if functor == "bolts::m5"))
+        );
+        assert!(
+            result
+                .iter()
+                .any(|c| matches!(c, Clause::Fact(Term::Struct { functor, .. })
+                if functor == "m5"))
+        );
         // m6 は expose されていないので非修飾版は無い
-        assert!(!result
-            .iter()
-            .any(|c| matches!(c, Clause::Fact(Term::Struct { functor, .. })
-                if functor == "m6")));
-        assert!(result
-            .iter()
-            .any(|c| matches!(c, Clause::Fact(Term::Struct { functor, .. })
-                if functor == "bolts::m6")));
+        assert!(
+            !result
+                .iter()
+                .any(|c| matches!(c, Clause::Fact(Term::Struct { functor, .. })
+                if functor == "m6"))
+        );
+        assert!(
+            result
+                .iter()
+                .any(|c| matches!(c, Clause::Fact(Term::Struct { functor, .. })
+                if functor == "bolts::m6"))
+        );
     }
 
     #[test]
     fn test_cyclic_dependency() {
         let dir = setup_test_dir();
-        fs::write(dir.path().join("a.cadhr"), "#use(\"b\").\nfoo(1).\n").unwrap();
-        fs::write(dir.path().join("b.cadhr"), "#use(\"a\").\nbar(2).\n").unwrap();
+        fs::create_dir(dir.path().join("a")).unwrap();
+        fs::create_dir(dir.path().join("b")).unwrap();
+        fs::write(dir.path().join("a/db.cadhr"), "#use(\"../b\").\nfoo(1).\n").unwrap();
+        fs::write(dir.path().join("b/db.cadhr"), "#use(\"../a\").\nbar(2).\n").unwrap();
 
         let clauses = vec![Clause::Use {
             path: "a".to_string(),
@@ -327,8 +330,8 @@ mod tests {
     #[test]
     fn test_nested_module() {
         let dir = setup_test_dir();
-        fs::create_dir(dir.path().join("sub")).unwrap();
-        fs::write(dir.path().join("sub/parts.cadhr"), "bolt(1).\n").unwrap();
+        fs::create_dir_all(dir.path().join("sub/parts")).unwrap();
+        fs::write(dir.path().join("sub/parts/db.cadhr"), "bolt(1).\n").unwrap();
 
         let clauses = vec![Clause::Use {
             path: "sub/parts".to_string(),
@@ -337,28 +340,29 @@ mod tests {
         }];
 
         let mut visited = HashSet::new();
-        let result =
-            resolve_modules(clauses, &[dir.path().to_path_buf()], &mut visited).unwrap();
+        let result = resolve_modules(clauses, &[dir.path().to_path_buf()], &mut visited).unwrap();
 
-        assert!(result
-            .iter()
-            .any(|c| matches!(c, Clause::Fact(Term::Struct { functor, .. })
-                if functor == "parts::bolt")));
+        assert!(
+            result
+                .iter()
+                .any(|c| matches!(c, Clause::Fact(Term::Struct { functor, .. })
+                if functor == "parts::bolt"))
+        );
     }
 
     #[test]
     fn test_non_use_clauses_preserved() {
-        let clauses = vec![
-            Clause::Fact(Term::Struct {
-                functor: "hello".to_string(),
-                args: vec![],
-                span: None,
-            }),
-        ];
+        let clauses = vec![Clause::Fact(Term::Struct {
+            functor: "hello".to_string(),
+            args: vec![],
+            span: None,
+        })];
 
         let mut visited = HashSet::new();
         let result = resolve_modules(clauses, &[], &mut visited).unwrap();
         assert_eq!(result.len(), 1);
-        assert!(matches!(&result[0], Clause::Fact(Term::Struct { functor, .. }) if functor == "hello"));
+        assert!(
+            matches!(&result[0], Clause::Fact(Term::Struct { functor, .. }) if functor == "hello")
+        );
     }
 }
