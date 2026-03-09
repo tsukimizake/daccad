@@ -179,6 +179,11 @@ pub enum Term {
         left: Box<Term>,
         right: Box<Term>,
     },
+    /// 名前を持たない範囲値。unifyのrange intersection結果としてenvに格納される。
+    Range {
+        min: Option<Bound>,
+        max: Option<Bound>,
+    },
 }
 
 /// Number または AnnotatedVar(default_value付き) から FixedPoint と SrcSpan を取り出す。
@@ -291,6 +296,16 @@ impl PartialEq for Term {
                     right: r2,
                 },
             ) => l1 == l2 && r1 == r2,
+            (
+                Term::Range {
+                    min: min1,
+                    max: max1,
+                },
+                Term::Range {
+                    min: min2,
+                    max: max2,
+                },
+            ) => min1 == min2 && max1 == max2,
             _ => false,
         }
     }
@@ -374,6 +389,31 @@ impl fmt::Debug for Term {
             Term::StringLit { value } => write!(f, "\"{}\"", value),
             Term::Constraint { left, right } => {
                 write!(f, "constraint({:?} = {:?})", left, right)
+            }
+            Term::Range { min, max } => {
+                match (min, max) {
+                    (Some(lo), Some(hi)) => write!(
+                        f,
+                        "range({} {} _ {} {})",
+                        lo.value,
+                        if lo.inclusive { "<=" } else { "<" },
+                        if hi.inclusive { "<=" } else { "<" },
+                        hi.value
+                    ),
+                    (Some(lo), None) => write!(
+                        f,
+                        "range({} {} _)",
+                        lo.value,
+                        if lo.inclusive { "<=" } else { "<" }
+                    ),
+                    (None, Some(hi)) => write!(
+                        f,
+                        "range(_ {} {})",
+                        if hi.inclusive { "<=" } else { "<" },
+                        hi.value
+                    ),
+                    (None, None) => write!(f, "range(_)"),
+                }
             }
         }
     }

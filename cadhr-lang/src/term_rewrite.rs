@@ -4,7 +4,7 @@ use std::fmt;
 
 use crate::constraint::{ArithEq, ArithExpr, solve_constraints};
 use crate::parse::{
-    ArithOp, Bound, Clause, FixedPoint, SrcSpan, Term, annotated_var, first_span, list, number,
+    ArithOp, Bound, Clause, FixedPoint, SrcSpan, Term, first_span, list, number,
     struc, var,
 };
 use crate::term_processor::{
@@ -45,25 +45,27 @@ fn resolve_inner(term: &Term, env: &Env, depth: usize) -> Term {
             span,
             editable,
         } if name != "_" => match env.get(name) {
-            Some(Term::Number { value: new_val }) => {
-                Term::AnnotatedVar {
-                    name: name.clone(),
-                    default_value: Some(*new_val),
-                    min: *min,
-                    max: *max,
-                    span: *span,
-                    editable: *editable,
-                }
-            }
-            Some(Term::AnnotatedVar { name: n2, .. }) if n2 == name => {
-                // intersection結果が同名のAnnotatedVar → そのまま返す（自己参照回避）
-                env.get(name).unwrap().clone()
-            }
+            Some(Term::Number { value: new_val }) => Term::AnnotatedVar {
+                name: name.clone(),
+                default_value: Some(*new_val),
+                min: *min,
+                max: *max,
+                span: *span,
+                editable: *editable,
+            },
+            Some(Term::Range {
+                min: r_min,
+                max: r_max,
+            }) => Term::AnnotatedVar {
+                name: name.clone(),
+                default_value: *default_value,
+                min: intersect_min(*min, *r_min),
+                max: intersect_max(*max, *r_max),
+                span: *span,
+                editable: *editable,
+            },
             Some(val) => resolve_inner(val, env, depth + 1),
-            None => {
-                // default_valueがあればNumberとして解決し、envに無い場合はそのまま
-                term.clone()
-            }
+            None => term.clone(),
         },
         Term::InfixExpr { op, left, right } => {
             let new_left = resolve_inner(left, env, depth + 1);
@@ -226,6 +228,7 @@ fn collect_default_var_bindings(term: &Term, bindings: &mut Vec<(String, FixedPo
             collect_default_var_bindings(left, bindings);
             collect_default_var_bindings(right, bindings);
         }
+        Term::Range { .. } => {}
         Term::Constraint { left, right } => {
             collect_default_var_bindings(left, bindings);
             collect_default_var_bindings(right, bindings);
@@ -315,7 +318,7 @@ fn occurs_check(var_name: &str, term: &Term) -> bool {
         Term::Constraint { left, right } => {
             occurs_check(var_name, left) || occurs_check(var_name, right)
         }
-        Term::Number { .. } | Term::StringLit { .. } => false,
+        Term::Number { .. } | Term::StringLit { .. } | Term::Range { .. } => false,
     }
 }
 
@@ -480,7 +483,10 @@ pub fn unify(term1: Term, term2: Term, env: &mut Env) -> Result<Vec<Term>, Unify
                     });
                 }
 
-                let intersected = annotated_var(n1.clone(), None, new_min, new_max, None);
+                let intersected = Term::Range {
+                    min: new_min,
+                    max: new_max,
+                };
                 if n1 != "_" {
                     env.insert(n1.clone(), intersected.clone());
                 }
@@ -648,6 +654,40 @@ pub fn unify(term1: Term, term2: Term, env: &mut Env) -> Result<Vec<Term>, Unify
                     }
                 }
             }
+            // Range同士: intersection
+            (
+                Term::Range {
+                    min: min1,
+                    max: max1,
+                },
+                Term::Range {
+                    min: min2,
+                    max: max2,
+                },
+            ) => {
+                let new_min = intersect_min(*min1, *min2);
+                let new_max = intersect_max(*max1, *max2);
+                if !range_is_valid(new_min, new_max) {
+                    return Err(UnifyError {
+                        message: "range intersection is empty".to_string(),
+                        term1: t1,
+                        term2: t2,
+                    });
+                }
+            }
+            // Range と Number: 範囲内かチェック
+            (Term::Range { min, max }, Term::Number { value }) => {
+                if !value_in_range(*value, *min, *max) {
+                    return Err(UnifyError {
+                        message: format!("value {} is out of range {:?}", value, t1),
+                        term1: t1,
+                        term2: t2,
+                    });
+                }
+            }
+            (Term::Number { .. }, Term::Range { .. }) => {
+                stack.push((t2, t1));
+            }
             _ => {
                 return Err(UnifyError {
                     message: format!("cannot unify {:?} with {:?}", t1, t2),
@@ -794,7 +834,7 @@ fn rename_term_vars(term: &mut Term, suffix: &str) {
             rename_term_vars(left.as_mut(), suffix);
             rename_term_vars(right.as_mut(), suffix);
         }
-        Term::Number { .. } | Term::StringLit { .. } => {}
+        Term::Number { .. } | Term::StringLit { .. } | Term::Range { .. } => {}
     }
 }
 
@@ -1276,25 +1316,19 @@ mod tests {
         let mut env = Env::new();
         unify(rv1, rv2, &mut env).unwrap();
         let resolved_x = resolve(&var("X".to_string()), &env);
-        match &resolved_x {
-            Term::AnnotatedVar { min, max, .. } => {
-                assert_eq!(
-                    *min,
-                    Some(Bound {
-                        value: FixedPoint::from_int(5),
-                        inclusive: false
-                    })
-                );
-                assert_eq!(
-                    *max,
-                    Some(Bound {
-                        value: FixedPoint::from_int(10),
-                        inclusive: false
-                    })
-                );
+        assert_eq!(
+            resolved_x,
+            Term::Range {
+                min: Some(Bound {
+                    value: FixedPoint::from_int(5),
+                    inclusive: false
+                }),
+                max: Some(Bound {
+                    value: FixedPoint::from_int(10),
+                    inclusive: false
+                }),
             }
-            _ => panic!("Expected AnnotatedVar, got {:?}", resolved_x),
-        }
+        );
     }
 
     #[test]
