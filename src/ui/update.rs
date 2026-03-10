@@ -44,7 +44,7 @@ const MAX_CAMERA_PITCH: f64 = std::f64::consts::FRAC_PI_2 - 0.001;
 const MIN_CAMERA_PITCH: f64 = -MAX_CAMERA_PITCH;
 const MAX_CAMERA_YAW: f64 = std::f64::consts::PI - 0.001;
 const MIN_CAMERA_YAW: f64 = -MAX_CAMERA_YAW;
-const DEFAULT_ZOOM: f32 = 10.0;
+pub(crate) const DEFAULT_ZOOM: f32 = 10.0;
 const MIN_ZOOM: f32 = 1.0;
 const MAX_ZOOM: f32 = 100.0;
 const CONTROL_SPHERE_RADIUS: f32 = 0.5;
@@ -990,7 +990,8 @@ pub(super) fn on_collision_preview_generated(
                 if let Some(mesh_asset) = meshes.get_mut(&target.base().mesh_handle) {
                     *mesh_asset = ev.combined_mesh.clone();
                 }
-                target.base_mut().base_camera_distance = camera_distance_from_mesh(&ev.combined_mesh);
+                target.base_mut().base_camera_distance =
+                    camera_distance_from_mesh(&ev.combined_mesh);
                 let render_layer = target.base().render_layer;
 
                 if let PreviewTarget::Collision {

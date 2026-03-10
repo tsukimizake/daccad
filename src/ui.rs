@@ -9,6 +9,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
+use crate::ui::update::DEFAULT_ZOOM;
+
 pub mod setup;
 pub mod update;
 
@@ -59,7 +61,7 @@ impl PreviewBase {
         Self {
             preview_id,
             query,
-            zoom: 10.0,
+            zoom: DEFAULT_ZOOM,
             rotate_x: 0.0,
             rotate_y: 0.0,
             order: 0,
