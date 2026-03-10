@@ -16,7 +16,7 @@ use cadhr_lang::parse::{
     substitute_query_params,
 };
 use cadhr_lang::term_processor::TermProcessor;
-use cadhr_lang::term_rewrite::{CadhrError, discover_query_param_ranges, execute};
+use cadhr_lang::term_rewrite::{CadhrError, execute};
 use manifold_rs::Mesh as RsMesh;
 
 pub struct CadhrLangPlugin;
@@ -52,7 +52,7 @@ fn spawn_mesh_job(async_world: AsyncWorld, req: GeneratePreviewRequest) {
             let mut logs: Vec<String> = Vec::new();
 
             // Parse, discover query params, substitute overrides, execute
-            let resolve_result = (|| -> Result<(Vec<cadhr_lang::parse::Term>, Vec<cadhr_lang::manifold_bridge::ControlPoint>, Vec<cadhr_lang::parse::QueryParam>), (String, Option<SrcSpan>)> {
+            let resolve_result = (|| -> Result<(Vec<cadhr_lang::parse::ScopedTerm>, Vec<cadhr_lang::manifold_bridge::ControlPoint>, Vec<cadhr_lang::parse::QueryParam>), (String, Option<SrcSpan>)> {
                 let (_, query_terms) =
                     parse_query(&query).map_err(|e| {
                         let span = parse_error_span(&query, &e);
@@ -70,9 +70,7 @@ fn spawn_mesh_job(async_world: AsyncWorld, req: GeneratePreviewRequest) {
                 )
                 .map_err(|e| (format!("Module error: {}", e), None))?;
 
-                // Query params: extract from parsed query, then discover ranges from rule heads
                 let mut query_params = collect_query_params(&query_terms);
-                discover_query_param_ranges(&db, &mut query_params, &query_terms);
 
                 // Build substitution values: override > default_value > midpoint > 0
                 let mut values = req.query_param_overrides.clone();
@@ -95,13 +93,14 @@ fn spawn_mesh_job(async_world: AsyncWorld, req: GeneratePreviewRequest) {
                 let substituted = substitute_query_params(&query_terms, &values);
                 logs.push(format!("Query terms: {:?}", substituted));
                 logs.push(format!("Database clauses: {:#?}", db));
-                let mut resolved =
+                let (mut resolved, env) =
                     execute(&mut db, substituted).map_err(|e| {
                         let span = e.span();
                         (format!("Rewrite error: {}", e), span)
                     })?;
                 logs.push(format!("Resolved terms: {:?}", resolved));
                 let control_points = extract_control_points(&mut resolved, &req.control_point_overrides);
+                env.update_query_param_ranges(&mut query_params);
                 Ok((resolved, control_points, query_params))
             })();
 
@@ -244,7 +243,7 @@ fn spawn_collision_job(async_world: AsyncWorld, req: GenerateCollisionPreviewReq
                     &mut std::collections::HashSet::new(),
                 )
                 .map_err(|e| (format!("Module error: {}", e), None))?;
-                let resolved = execute(&mut db, query_terms).map_err(|e| {
+                let (resolved, _) = execute(&mut db, query_terms).map_err(|e| {
                     let span = e.span();
                     (format!("Rewrite error: {}", e), span)
                 })?;

@@ -64,11 +64,11 @@ impl std::fmt::Display for BomError {
 
 pub struct BomExtractor;
 
-impl TermProcessor for BomExtractor {
+impl<S> TermProcessor<S> for BomExtractor {
     type Output = Vec<BomEntry>;
     type Error = BomError;
 
-    fn process(&self, terms: &[Term]) -> Result<Self::Output, Self::Error> {
+    fn process(&self, terms: &[Term<S>]) -> Result<Self::Output, Self::Error> {
         terms
             .iter()
             .filter_map(|term| match term {
@@ -81,7 +81,7 @@ impl TermProcessor for BomExtractor {
     }
 }
 
-fn bom_entry_from_args(args: &[Term]) -> Result<BomEntry, BomError> {
+fn bom_entry_from_args<S>(args: &[Term<S>]) -> Result<BomEntry, BomError> {
     let name = match &args[0] {
         Term::StringLit { value } => value.clone(),
         other => return Err(BomError::InvalidName(format!("{:?}", other))),
@@ -98,7 +98,7 @@ fn bom_entry_from_args(args: &[Term]) -> Result<BomEntry, BomError> {
     Ok(BomEntry { name, properties })
 }
 
-fn property_from_term(term: &Term) -> Result<(String, BomPropertyValue), BomError> {
+fn property_from_term<S>(term: &Term<S>) -> Result<(String, BomPropertyValue), BomError> {
     match term {
         Term::Struct { functor, args, .. } if args.len() == 1 => {
             let value = match &args[0] {
@@ -129,7 +129,7 @@ mod tests {
         let query_src = r#"bom("aluminum", [len(100)])."#;
         let (_, query_terms) = query(query_src).unwrap();
         let mut db = database(db_src).unwrap();
-        let resolved = execute(&mut db, query_terms).unwrap();
+        let (resolved, _) = execute(&mut db, query_terms).unwrap();
 
         let entries = BomExtractor.process(&resolved).unwrap();
         assert_eq!(entries.len(), 1);
@@ -146,7 +146,7 @@ mod tests {
         let query_src = r#"bom("bolt", [material("steel"), count(4)])."#;
         let (_, query_terms) = query(query_src).unwrap();
         let mut db = database(db_src).unwrap();
-        let resolved = execute(&mut db, query_terms).unwrap();
+        let (resolved, _) = execute(&mut db, query_terms).unwrap();
 
         let entries = BomExtractor.process(&resolved).unwrap();
         assert_eq!(entries.len(), 1);
@@ -171,7 +171,7 @@ mod tests {
         let query_src = r#"cube(10, 20, 30), bom("plate", [thickness(5)])."#;
         let (_, query_terms) = query(query_src).unwrap();
         let mut db = database(db_src).unwrap();
-        let resolved = execute(&mut db, query_terms).unwrap();
+        let (resolved, _) = execute(&mut db, query_terms).unwrap();
 
         let entries = BomExtractor.process(&resolved).unwrap();
         assert_eq!(entries.len(), 1);
@@ -184,7 +184,7 @@ mod tests {
         let query_src = "cube(10, 20, 30).";
         let (_, query_terms) = query(query_src).unwrap();
         let mut db = database(db_src).unwrap();
-        let resolved = execute(&mut db, query_terms).unwrap();
+        let (resolved, _) = execute(&mut db, query_terms).unwrap();
 
         let entries = BomExtractor.process(&resolved).unwrap();
         assert!(entries.is_empty());

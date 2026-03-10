@@ -8,10 +8,10 @@ pub struct BuiltinFunctorSet {
 }
 inventory::collect!(BuiltinFunctorSet);
 
-pub trait TermProcessor {
+pub trait TermProcessor<S = ()> {
     type Output;
     type Error;
-    fn process(&self, terms: &[Term]) -> Result<Self::Output, Self::Error>;
+    fn process(&self, terms: &[Term<S>]) -> Result<Self::Output, Self::Error>;
 }
 
 pub fn is_builtin_functor(name: &str) -> bool {

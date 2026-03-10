@@ -16,7 +16,7 @@ fn main() {
     println!("Query terms: {:?}", query_terms);
 
     // Execute query
-    let result = execute(&mut db_clauses, query_terms);
+    let (result, _env) = execute(&mut db_clauses, query_terms).expect("Execution failed");
 
     println!("Execution result: {:?}", result);
 }
