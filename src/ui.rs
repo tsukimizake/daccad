@@ -47,6 +47,8 @@ pub struct PreviewState {
     pub query_param_overrides: HashMap<String, f64>,
     #[serde(default)]
     pub mode: PreviewModeType,
+    #[serde(default)]
+    pub order: Option<usize>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -88,6 +90,7 @@ pub struct PreviewTarget {
     pub rotate_y: f64,
     pub query: String,
     pub mode: PreviewMode,
+    pub order: usize,
 }
 
 impl Plugin for UiPlugin {
