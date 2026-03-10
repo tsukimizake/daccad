@@ -545,10 +545,12 @@ pub(super) fn egui_ui(
                                     preview_targets.iter().map(|(_, t)| t.as_ref()),
                                 );
                             }
+                            unsaved.dirty = false;
                             unsaved.show_close_dialog = false;
                             app_exit.write(bevy::app::AppExit::Success);
                         }
                         if ui.button("Quit without Saving").clicked() {
+                            unsaved.dirty = false;
                             unsaved.show_close_dialog = false;
                             app_exit.write(bevy::app::AppExit::Success);
                         }
