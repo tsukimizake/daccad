@@ -4,28 +4,60 @@ use std::fmt;
 
 use crate::constraint::{ArithEq, ArithExpr, solve_constraints};
 use crate::parse::{
-    ArithOp, Bound, Clause, FixedPoint, SrcSpan, Term, first_span, list, number,
-    struc, var,
+    ArithOp, Bound, Clause, FixedPoint, ScopeId, ScopedTerm, SrcSpan, Term, first_span, list,
+    number, struc, var,
 };
 use crate::term_processor::{
     all_builtin_functors, is_builtin_functor, is_builtin_functor_with_arity, should_resolve_args,
 };
 
-pub type Env = HashMap<String, Term>;
+pub type Env = HashMap<String, ScopedTerm>;
+
+#[derive(Debug, Clone)]
+pub struct ScopedEnv {
+    scopes: HashMap<ScopeId, HashMap<String, ScopedTerm>>,
+    /// unify 中の Var 交差で得られた range 情報（値束縛とは別に保持）
+    ranges: HashMap<(ScopeId, String), (Option<Bound>, Option<Bound>)>,
+}
+
+impl ScopedEnv {
+    pub fn new() -> Self {
+        Self {
+            scopes: HashMap::new(),
+            ranges: HashMap::new(),
+        }
+    }
+
+    pub fn insert(&mut self, scope: ScopeId, name: String, term: ScopedTerm) {
+        self.scopes.entry(scope).or_default().insert(name, term);
+    }
+
+    pub fn get(&self, scope: ScopeId, name: &str) -> Option<&ScopedTerm> {
+        self.scopes.get(&scope)?.get(name)
+    }
+
+    pub fn insert_range(&mut self, scope: ScopeId, name: String, min: Option<Bound>, max: Option<Bound>) {
+        self.ranges.insert((scope, name), (min, max));
+    }
+
+    pub fn update_query_param_ranges(&self, params: &mut [crate::parse::QueryParam]) {
+        for param in params.iter_mut() {
+            if let Some((min, max)) = self.ranges.get(&(0, param.name.clone())) {
+                param.min = intersect_min(param.min, *min);
+                param.max = intersect_max(param.max, *max);
+            }
+        }
+    }
+}
 
 const RESOLVE_DEPTH_LIMIT: usize = 256;
 
 /// envを参照して変数を再帰的に解決する。
-/// - Var/AnnotatedVar → envにあれば再帰的にresolve
-/// - AnnotatedVar + Number束縛 → AnnotatedVarのdefault_valueを更新して返す（span保持）
-/// - InfixExpr → 両辺をresolveし、全部Numberなら算術評価
-/// - Struct/List/Constraint → 引数を再帰的にresolve
-/// - Number/StringLit → そのまま
-pub fn resolve(term: &Term, env: &Env) -> Term {
+pub fn resolve(term: &ScopedTerm, env: &ScopedEnv) -> ScopedTerm {
     resolve_inner(term, env, 0)
 }
 
-fn resolve_inner(term: &Term, env: &Env, depth: usize) -> Term {
+fn resolve_inner(term: &ScopedTerm, env: &ScopedEnv, depth: usize) -> ScopedTerm {
     if depth > RESOLVE_DEPTH_LIMIT {
         panic!(
             "resolve depth limit exceeded, possible cyclic bindings in env: {:?}",
@@ -33,37 +65,40 @@ fn resolve_inner(term: &Term, env: &Env, depth: usize) -> Term {
         );
     }
     match term {
-        Term::Var { name, .. } if name != "_" => match env.get(name) {
-            Some(val) => resolve_inner(val, env, depth + 1),
-            None => term.clone(),
-        },
-        Term::AnnotatedVar {
+        Term::Var {
             name,
+            scope,
             default_value,
             min,
             max,
             span,
-        } if name != "_" => match env.get(name) {
-            Some(Term::Number { value: new_val }) => Term::AnnotatedVar {
-                name: name.clone(),
-                default_value: Some(*new_val),
-                min: *min,
-                max: *max,
-                span: *span,
-            },
-            Some(Term::Range {
-                min: r_min,
-                max: r_max,
-            }) => Term::AnnotatedVar {
-                name: name.clone(),
-                default_value: *default_value,
-                min: intersect_min(*min, *r_min),
-                max: intersect_max(*max, *r_max),
-                span: *span,
-            },
-            Some(val) => resolve_inner(val, env, depth + 1),
-            None => term.clone(),
-        },
+        } if name != "_" => {
+            let has_annotation = default_value.is_some() || min.is_some() || max.is_some();
+            let sid = *scope;
+            match env.get(sid, name) {
+                Some(Term::Number { value: new_val }) if has_annotation => Term::Var {
+                    name: name.clone(),
+                    scope: *scope,
+                    default_value: Some(*new_val),
+                    min: *min,
+                    max: *max,
+                    span: *span,
+                },
+                Some(Term::Range {
+                    min: r_min,
+                    max: r_max,
+                }) if has_annotation => Term::Var {
+                    name: name.clone(),
+                    scope: *scope,
+                    default_value: *default_value,
+                    min: intersect_min(*min, *r_min),
+                    max: intersect_max(*max, *r_max),
+                    span: *span,
+                },
+                Some(val) => resolve_inner(val, env, depth + 1),
+                None => term.clone(),
+            }
+        }
         Term::InfixExpr { op, left, right } => {
             let new_left = resolve_inner(left, env, depth + 1);
             let new_right = resolve_inner(right, env, depth + 1);
@@ -107,8 +142,17 @@ fn resolve_inner(term: &Term, env: &Env, depth: usize) -> Term {
     }
 }
 
+/// フラットなEnvからresolveする旧版（try_resolve_constraints等の局所的な使用向け）
+fn resolve_flat(term: &ScopedTerm, env: &Env) -> ScopedTerm {
+    let mut scoped = ScopedEnv::new();
+    for (k, v) in env {
+        scoped.insert(0, k.clone(), v.clone());
+    }
+    resolve(term, &scoped)
+}
+
 /// Check if a term is a built-in primitive that should not be rewritten
-fn is_builtin_term(term: &Term) -> bool {
+fn is_builtin_term<S>(term: &Term<S>) -> bool {
     match term {
         Term::Struct { functor, .. } => is_builtin_functor(functor),
         // InfixExpr (+, -, *) with CAD primitives as operands is also builtin
@@ -140,8 +184,8 @@ fn builtin_cad_facts() -> Vec<Clause> {
 #[derive(Debug, Clone)]
 pub struct UnifyError {
     pub message: String,
-    pub term1: Term,
-    pub term2: Term,
+    pub term1: ScopedTerm,
+    pub term2: ScopedTerm,
 }
 
 impl fmt::Display for UnifyError {
@@ -156,7 +200,7 @@ impl std::error::Error for UnifyError {}
 #[derive(Debug, Clone)]
 pub struct RewriteError {
     pub message: String,
-    pub goal: Term,
+    pub goal: ScopedTerm,
 }
 
 impl fmt::Display for RewriteError {
@@ -177,7 +221,7 @@ impl CadhrError for UnifyError {
         self.message.clone()
     }
     fn span(&self) -> Option<SrcSpan> {
-        first_span(&self.term1).or_else(|| first_span(&self.term2))
+        first_span::<ScopeId>(&self.term1).or_else(|| first_span::<ScopeId>(&self.term2))
     }
 }
 
@@ -186,28 +230,23 @@ impl CadhrError for RewriteError {
         self.message.clone()
     }
     fn span(&self) -> Option<SrcSpan> {
-        first_span(&self.goal)
+        first_span::<ScopeId>(&self.goal)
     }
 }
 
-fn collect_default_var_bindings(term: &Term, bindings: &mut Vec<(String, FixedPoint)>) {
+fn collect_default_var_bindings(term: &ScopedTerm, bindings: &mut Vec<(String, ScopeId, FixedPoint)>) {
     match term {
+        Term::Var {
+            name,
+            scope,
+            default_value: Some(value),
+            ..
+        } if name != "_" => {
+            bindings.push((name.clone(), *scope, *value));
+        }
         Term::Var { .. } => {}
         Term::StringLit { .. } => {}
         Term::Number { .. } => {}
-        Term::AnnotatedVar {
-            name,
-            default_value: Some(value),
-            ..
-        } => {
-            if name != "_" {
-                bindings.push((name.clone(), *value));
-            }
-        }
-        Term::AnnotatedVar {
-            default_value: None,
-            ..
-        } => {}
         Term::Struct { args, .. } => {
             for arg in args {
                 collect_default_var_bindings(arg, bindings);
@@ -233,14 +272,13 @@ fn collect_default_var_bindings(term: &Term, bindings: &mut Vec<(String, FixedPo
     }
 }
 
-fn apply_default_var_bindings(term: &mut Term, goals: &mut Vec<Term>) {
+fn apply_default_var_bindings(term: &mut ScopedTerm, goals: &mut Vec<ScopedTerm>) {
     let mut bindings = Vec::new();
     collect_default_var_bindings(term, &mut bindings);
-    let mut env = Env::new();
-    for (name, value) in bindings {
-        env.insert(name, number(value));
+    let mut env = ScopedEnv::new();
+    for (name, scope, value) in bindings {
+        env.insert(scope, name, number(value));
     }
-    // resolveは算術式の評価も行うので、bindingsが空でも適用する
     *term = resolve(term, &env);
     for goal in goals.iter_mut() {
         *goal = resolve(goal, &env);
@@ -248,9 +286,9 @@ fn apply_default_var_bindings(term: &mut Term, goals: &mut Vec<Term>) {
 }
 
 /// 算術式を評価する。評価できない場合（未束縛変数を含む場合）はNoneを返す
-/// 注: AnnotatedVar は eval_arith では処理しない。unify の明示的な AnnotatedVar ハンドラが
+/// 注: Var は eval_arith では処理しない。unify の明示的な Var ハンドラが
 /// 名前ベースの置換を伴って処理するため、ここで Number に変換すると置換が抜け落ちる。
-fn eval_arith(term: &Term) -> Option<FixedPoint> {
+fn eval_arith<S>(term: &Term<S>) -> Option<FixedPoint> {
     match term {
         Term::Number { value } => Some(*value),
         Term::InfixExpr { op, left, right } => {
@@ -268,7 +306,7 @@ fn eval_arith(term: &Term) -> Option<FixedPoint> {
 }
 
 /// 算術式をインプレースで評価し、可能なら数値に置き換える
-pub fn eval_arith_in_place(term: &mut Term) {
+pub fn eval_arith_in_place<S>(term: &mut Term<S>) {
     if let Some(val) = eval_arith(term) {
         *term = number(val);
     } else {
@@ -300,20 +338,19 @@ pub fn eval_arith_in_place(term: &mut Term) {
 }
 
 /// occurs check: 変数varが項term内に出現するか
-fn occurs_check(var_name: &str, term: &Term) -> bool {
+fn occurs_check_scoped(var_name: &str, var_scope: ScopeId, term: &ScopedTerm) -> bool {
     match term {
-        Term::Var { name, .. } => name == var_name,
-        Term::AnnotatedVar { name, .. } => name == var_name,
-        Term::Struct { args, .. } => args.iter().any(|arg| occurs_check(var_name, arg)),
+        Term::Var { name, scope, .. } => name == var_name && *scope == var_scope,
+        Term::Struct { args, .. } => args.iter().any(|arg| occurs_check_scoped(var_name, var_scope, arg)),
         Term::List { items, tail } => {
-            items.iter().any(|item| occurs_check(var_name, item))
-                || tail.as_ref().map_or(false, |t| occurs_check(var_name, t))
+            items.iter().any(|item| occurs_check_scoped(var_name, var_scope, item))
+                || tail.as_ref().map_or(false, |t| occurs_check_scoped(var_name, var_scope, t))
         }
         Term::InfixExpr { left, right, .. } => {
-            occurs_check(var_name, left) || occurs_check(var_name, right)
+            occurs_check_scoped(var_name, var_scope, left) || occurs_check_scoped(var_name, var_scope, right)
         }
         Term::Constraint { left, right } => {
-            occurs_check(var_name, left) || occurs_check(var_name, right)
+            occurs_check_scoped(var_name, var_scope, left) || occurs_check_scoped(var_name, var_scope, right)
         }
         Term::Number { .. } | Term::StringLit { .. } | Term::Range { .. } => false,
     }
@@ -394,10 +431,10 @@ fn value_in_range(value: FixedPoint, min: Option<Bound>, max: Option<Bound>) -> 
 }
 
 /// 項が算術式として評価可能な形か（変数と数値とInfixExprのみで構成されているか）
-fn is_potentially_arithmetic(term: &Term) -> bool {
+fn is_potentially_arithmetic<S>(term: &Term<S>) -> bool {
     match term {
         Term::Number { .. } => true,
-        Term::Var { .. } | Term::AnnotatedVar { .. } => true,
+        Term::Var { .. } => true,
         Term::InfixExpr { left, right, .. } => {
             is_potentially_arithmetic(left) && is_potentially_arithmetic(right)
         }
@@ -407,36 +444,43 @@ fn is_potentially_arithmetic(term: &Term) -> bool {
 
 /// 2つの項を単一化し、変数束縛をenvに蓄積する。
 /// 解決できなかった遅延制約をVec<Term>として返す。
-pub fn unify(term1: Term, term2: Term, env: &mut Env) -> Result<Vec<Term>, UnifyError> {
+pub fn unify(term1: ScopedTerm, term2: ScopedTerm, env: &mut ScopedEnv) -> Result<Vec<ScopedTerm>, UnifyError> {
     let mut stack = vec![(term1, term2)];
-    let mut deferred: Vec<(Term, Term)> = Vec::new();
+    let mut deferred: Vec<(ScopedTerm, ScopedTerm)> = Vec::new();
 
     while let Some((t1_raw, t2_raw)) = stack.pop() {
         let mut t1 = resolve(&t1_raw, env);
         let mut t2 = resolve(&t2_raw, env);
 
-        // AnnotatedVarでdefault_valueありの場合、envに束縛してNumber化
-        if let Term::AnnotatedVar {
-            name,
-            default_value: Some(value),
-            ..
-        } = &t1
-        {
-            if name != "_" {
-                env.insert(name.clone(), number(*value));
+
+        // 両方が注釈付きVarの場合は range 交差を先にするため、default 適用を後回し
+        let both_annotated = matches!(&t1, Term::Var { default_value, min, max, .. } if default_value.is_some() || min.is_some() || max.is_some())
+            && matches!(&t2, Term::Var { default_value, min, max, .. } if default_value.is_some() || min.is_some() || max.is_some());
+        if !both_annotated {
+            if let Term::Var {
+                name,
+                scope,
+                default_value: Some(value),
+                ..
+            } = &t1
+            {
+                if name != "_" {
+                    env.insert(*scope, name.clone(), number(*value));
+                }
+                t1 = number(*value);
             }
-            t1 = number(*value);
-        }
-        if let Term::AnnotatedVar {
-            name,
-            default_value: Some(value),
-            ..
-        } = &t2
-        {
-            if name != "_" {
-                env.insert(name.clone(), number(*value));
+            if let Term::Var {
+                name,
+                scope,
+                default_value: Some(value),
+                ..
+            } = &t2
+            {
+                if name != "_" {
+                    env.insert(*scope, name.clone(), number(*value));
+                }
+                t2 = number(*value);
             }
-            t2 = number(*value);
         }
 
         if let Some(val) = eval_arith(&t1) {
@@ -453,22 +497,28 @@ pub fn unify(term1: Term, term2: Term, env: &mut Env) -> Result<Vec<Term>, Unify
         }
 
         match (&t1, &t2) {
-            (Term::Var { name: n1, .. }, Term::Var { name: n2, .. }) if n1 == n2 => {}
-            // AnnotatedVar同士: 範囲の交差を計算
+            // 同名同scope、annotation なし: identity
             (
-                Term::AnnotatedVar {
+                Term::Var { name: n1, scope: s1, default_value: None, min: None, max: None, .. },
+                Term::Var { name: n2, scope: s2, default_value: None, min: None, max: None, .. },
+            ) if n1 == n2 && s1 == s2 => {}
+            // Var同士（少なくとも一方に range or default あり）: 範囲の交差を計算
+            (
+                Term::Var {
                     name: n1,
+                    scope: s1,
                     min: min1,
                     max: max1,
                     ..
                 },
-                Term::AnnotatedVar {
+                Term::Var {
                     name: n2,
+                    scope: s2,
                     min: min2,
                     max: max2,
                     ..
                 },
-            ) => {
+            ) if both_annotated => {
                 let new_min = intersect_min(*min1, *min2);
                 let new_max = intersect_max(*max1, *max2);
 
@@ -485,14 +535,45 @@ pub fn unify(term1: Term, term2: Term, env: &mut Env) -> Result<Vec<Term>, Unify
                     max: new_max,
                 };
                 if n1 != "_" {
-                    env.insert(n1.clone(), intersected.clone());
+                    env.insert_range(*s1, n1.clone(), new_min, new_max);
+                    env.insert(*s1, n1.clone(), intersected.clone());
                 }
-                if n2 != "_" && n2 != n1 {
-                    env.insert(n2.clone(), intersected);
+                if n2 != "_" && (n2 != n1 || s2 != s1) {
+                    env.insert_range(*s2, n2.clone(), new_min, new_max);
+                    env.insert(*s2, n2.clone(), intersected.clone());
+                }
+
+                // default 値がある場合は交差 range 内かチェックして束縛
+                let default1 = match &t1 {
+                    Term::Var { default_value: Some(v), .. } => Some(*v),
+                    _ => None,
+                };
+                let default2 = match &t2 {
+                    Term::Var { default_value: Some(v), .. } => Some(*v),
+                    _ => None,
+                };
+                let chosen_default = default1.or(default2);
+                if let Some(dv) = chosen_default {
+                    let dv = if value_in_range(dv, new_min, new_max) {
+                        dv
+                    } else {
+                        match (new_min, new_max) {
+                            (Some(lo), Some(hi)) => {
+                                FixedPoint::from_f64((lo.value.to_f64() + hi.value.to_f64()) / 2.0)
+                            }
+                            _ => dv,
+                        }
+                    };
+                    if n1 != "_" {
+                        env.insert(*s1, n1.clone(), number(dv));
+                    }
+                    if n2 != "_" {
+                        env.insert(*s2, n2.clone(), number(dv));
+                    }
                 }
             }
-            // AnnotatedVar(rangeあり)とNumber: 範囲内かチェック
-            (Term::AnnotatedVar { name, min, max, .. }, Term::Number { value }) => {
+            // Var vs Number: 範囲内かチェック (value_in_range(v, None, None) は常に true)
+            (Term::Var { name, scope, min, max, .. }, Term::Number { value }) => {
                 if !value_in_range(*value, *min, *max) {
                     return Err(UnifyError {
                         message: format!("value {} is out of range {:?}", value, t1),
@@ -501,42 +582,35 @@ pub fn unify(term1: Term, term2: Term, env: &mut Env) -> Result<Vec<Term>, Unify
                     });
                 }
                 if name != "_" {
-                    env.insert(name.clone(), t2.clone());
+                    env.insert(*scope, name.clone(), t2.clone());
                 }
             }
-            (Term::Number { .. }, Term::AnnotatedVar { .. }) => {
+            (Term::Number { .. }, Term::Var { .. }) => {
                 stack.push((t2, t1));
             }
-            // AnnotatedVarと他 (Varと同様に扱う)
-            (Term::AnnotatedVar { name, .. }, _) if name != "_" => {
-                if occurs_check(name, &t2) {
+            // Var vs other
+            (Term::Var { name, scope, min, max, .. }, _) if name != "_" => {
+                if occurs_check_scoped(name, *scope, &t2) {
                     return Err(UnifyError {
                         message: format!("occurs check failed: {} occurs in {:?}", name, t2),
                         term1: t1,
                         term2: t2,
                     });
                 }
-                env.insert(name.clone(), t2.clone());
-            }
-            (_, Term::AnnotatedVar { name, .. }) if name != "_" => {
-                stack.push((t2, t1));
-            }
-            (Term::Var { name, .. }, _) if name != "_" => {
-                if occurs_check(name, &t2) {
-                    return Err(UnifyError {
-                        message: format!("occurs check failed: {} occurs in {:?}", name, t2),
-                        term1: t1,
-                        term2: t2,
-                    });
+                env.insert_range(*scope, name.clone(), *min, *max);
+                if let Term::Var { name: v_name, scope: v_scope, .. } = &t2 {
+                    if v_name != "_" {
+                        env.insert_range(*v_scope, v_name.clone(), *min, *max);
+                    }
                 }
-                env.insert(name.clone(), t2.clone());
+                env.insert(*scope, name.clone(), t2.clone());
             }
             (_, Term::Var { name, .. }) if name != "_" => {
                 stack.push((t2, t1));
             }
-            // anonymous変数はどんな項とも単一化成功（束縛なし）
-            (Term::Var { name, .. }, _) | (Term::AnnotatedVar { name, .. }, _) if name == "_" => {}
-            (_, Term::Var { name, .. }) | (_, Term::AnnotatedVar { name, .. }) if name == "_" => {}
+            // wildcard
+            (Term::Var { name, .. }, _) if name == "_" => {}
+            (_, Term::Var { name, .. }) if name == "_" => {}
             (Term::Number { value: v1 }, Term::Number { value: v2 }) => {
                 if v1 != v2 {
                     return Err(UnifyError {
@@ -612,13 +686,13 @@ pub fn unify(term1: Term, term2: Term, env: &mut Env) -> Result<Vec<Term>, Unify
                     }
                     (Ordering::Equal, None, None) => {}
                     (Ordering::Equal, Some(t1), None) => {
-                        stack.push((t1.as_ref().clone(), list(vec![], None)));
+                        stack.push((t1.as_ref().clone(), list::<ScopeId>(vec![], None)));
                     }
                     (Ordering::Equal, None, Some(t2)) => {
-                        stack.push((list(vec![], None), t2.as_ref().clone()));
+                        stack.push((list::<ScopeId>(vec![], None), t2.as_ref().clone()));
                     }
                     (Ordering::Greater, _, Some(t2_tail)) => {
-                        let remaining: Vec<Term> = items1[min_len..].to_vec();
+                        let remaining: Vec<ScopedTerm> = items1[min_len..].to_vec();
                         let new_list = list(remaining, tail1.as_ref().map(|t| t.as_ref().clone()));
                         stack.push((new_list, t2_tail.as_ref().clone()));
                     }
@@ -634,7 +708,7 @@ pub fn unify(term1: Term, term2: Term, env: &mut Env) -> Result<Vec<Term>, Unify
                         });
                     }
                     (Ordering::Less, Some(t1_tail), _) => {
-                        let remaining: Vec<Term> = items2[min_len..].to_vec();
+                        let remaining: Vec<ScopedTerm> = items2[min_len..].to_vec();
                         let new_list = list(remaining, tail2.as_ref().map(|t| t.as_ref().clone()));
                         stack.push((t1_tail.as_ref().clone(), new_list));
                     }
@@ -740,7 +814,7 @@ pub fn unify(term1: Term, term2: Term, env: &mut Env) -> Result<Vec<Term>, Unify
 
 /// goals 内の Constraint を評価し、解けたものは除去、解けないものは残す
 /// 全 Constraint をまとめて SolverState に渡し、連立方程式として解く
-fn try_resolve_constraints(goals: &mut Vec<Term>) -> Result<(), RewriteError> {
+fn try_resolve_constraints(goals: &mut Vec<ScopedTerm>) -> Result<(), RewriteError> {
     let mut eqs = Vec::new();
     let mut constraint_indices = Vec::new();
     for (i, goal) in goals.iter().enumerate() {
@@ -776,7 +850,7 @@ fn try_resolve_constraints(goals: &mut Vec<Term>) -> Result<(), RewriteError> {
                 env.insert(var_name.clone(), number(*value));
             }
             for goal in goals.iter_mut() {
-                *goal = resolve(goal, &env);
+                *goal = resolve_flat(goal, &env);
             }
         }
     }
@@ -784,54 +858,43 @@ fn try_resolve_constraints(goals: &mut Vec<Term>) -> Result<(), RewriteError> {
     Ok(())
 }
 
-/// 節の変数をリネームして衝突を避ける
-fn rename_clause_vars(clause: &mut Clause, suffix: &str) {
+fn assign_scope_to_clause(clause: Clause, scope_id: ScopeId) -> Clause<ScopeId> {
     match clause {
-        Clause::Fact(term) => rename_term_vars(term, suffix),
-        Clause::Rule { head, body } => {
-            rename_term_vars(head, suffix);
-            for t in body.iter_mut() {
-                rename_term_vars(t, suffix);
-            }
-        }
-        Clause::Use { .. } => {}
+        Clause::Fact(term) => Clause::Fact(assign_scope_to_term(term, scope_id)),
+        Clause::Rule { head, body } => Clause::Rule {
+            head: assign_scope_to_term(head, scope_id),
+            body: body.into_iter().map(|t| assign_scope_to_term(t, scope_id)).collect(),
+        },
+        Clause::Use { path, expose, span } => Clause::Use { path, expose, span },
     }
 }
 
-fn rename_term_vars(term: &mut Term, suffix: &str) {
+fn assign_scope_to_term(term: Term, scope_id: ScopeId) -> ScopedTerm {
     match term {
-        Term::Var { name, .. } => {
-            if name != "_" {
-                *name = format!("{}_{}", name, suffix);
-            }
-        }
-        Term::AnnotatedVar { name, .. } => {
-            if name != "_" {
-                *name = format!("{}_{}", name, suffix);
-            }
-        }
-        Term::Struct { args, .. } => {
-            for arg in args.iter_mut() {
-                rename_term_vars(arg, suffix);
-            }
-        }
-        Term::List { items, tail } => {
-            for item in items.iter_mut() {
-                rename_term_vars(item, suffix);
-            }
-            if let Some(t) = tail {
-                rename_term_vars(t.as_mut(), suffix);
-            }
-        }
-        Term::InfixExpr { left, right, .. } => {
-            rename_term_vars(left.as_mut(), suffix);
-            rename_term_vars(right.as_mut(), suffix);
-        }
-        Term::Constraint { left, right } => {
-            rename_term_vars(left.as_mut(), suffix);
-            rename_term_vars(right.as_mut(), suffix);
-        }
-        Term::Number { .. } | Term::StringLit { .. } | Term::Range { .. } => {}
+        Term::Var { name, default_value, min, max, span, .. } => Term::Var {
+            name, scope: scope_id, default_value, min, max, span,
+        },
+        Term::Number { value } => Term::Number { value },
+        Term::InfixExpr { op, left, right } => Term::InfixExpr {
+            op,
+            left: Box::new(assign_scope_to_term(*left, scope_id)),
+            right: Box::new(assign_scope_to_term(*right, scope_id)),
+        },
+        Term::Struct { functor, args, span } => Term::Struct {
+            functor,
+            args: args.into_iter().map(|a| assign_scope_to_term(a, scope_id)).collect(),
+            span,
+        },
+        Term::List { items, tail } => Term::List {
+            items: items.into_iter().map(|i| assign_scope_to_term(i, scope_id)).collect(),
+            tail: tail.map(|t| Box::new(assign_scope_to_term(*t, scope_id))),
+        },
+        Term::StringLit { value } => Term::StringLit { value },
+        Term::Constraint { left, right } => Term::Constraint {
+            left: Box::new(assign_scope_to_term(*left, scope_id)),
+            right: Box::new(assign_scope_to_term(*right, scope_id)),
+        },
+        Term::Range { min, max } => Term::Range { min, max },
     }
 }
 
@@ -840,25 +903,26 @@ fn rename_term_vars(term: &mut Term, suffix: &str) {
 fn try_rewrite_single_with_result(
     db: &[Clause],
     clause_counter: &mut usize,
-    term: &Term,
-    other_goals: &mut Vec<Term>,
-) -> Option<(Term, Vec<Term>)> {
+    term: &ScopedTerm,
+    other_goals: &mut Vec<ScopedTerm>,
+    shared_env: &mut ScopedEnv,
+) -> Option<(ScopedTerm, Vec<ScopedTerm>)> {
     for clause in db.iter() {
         *clause_counter += 1;
-        let mut renamed = clause.clone();
-        rename_clause_vars(&mut renamed, &clause_counter.to_string());
+        let scoped = assign_scope_to_clause(clause.clone(), *clause_counter);
 
-        let (head, body) = match &renamed {
-            Clause::Fact(t) => (t.clone(), vec![]),
-            Clause::Rule { head, body } => (head.clone(), body.clone()),
+        let (head, body) = match scoped {
+            Clause::Fact(t) => (t, vec![]),
+            Clause::Rule { head, body } => (head, body),
             Clause::Use { .. } => continue,
         };
 
-        let mut env = Env::new();
-        if let Ok(constraints) = unify(term.clone(), head, &mut env) {
-            let resolved_term = resolve(term, &env);
-            let resolved_body: Vec<Term> = body.iter().map(|b| resolve(b, &env)).collect();
-            *other_goals = other_goals.iter().map(|g| resolve(g, &env)).collect();
+        let mut trial_env = shared_env.clone();
+        if let Ok(constraints) = unify(term.clone(), head, &mut trial_env) {
+            *shared_env = trial_env;
+            let resolved_term = resolve(term, shared_env);
+            let resolved_body: Vec<ScopedTerm> = body.iter().map(|b| resolve(b, shared_env)).collect();
+            *other_goals = other_goals.iter().map(|g| resolve(g, shared_env)).collect();
             other_goals.extend(constraints);
             return Some((resolved_term, resolved_body));
         }
@@ -872,9 +936,10 @@ fn try_rewrite_single_with_result(
 fn rewrite_term_recursive(
     db: &[Clause],
     clause_counter: &mut usize,
-    term: Term,
-    other_goals: &mut Vec<Term>,
-) -> Result<Vec<Term>, RewriteError> {
+    term: ScopedTerm,
+    other_goals: &mut Vec<ScopedTerm>,
+    shared_env: &mut ScopedEnv,
+) -> Result<Vec<ScopedTerm>, RewriteError> {
     let mut term = term;
     apply_default_var_bindings(&mut term, other_goals);
 
@@ -888,7 +953,7 @@ fn rewrite_term_recursive(
         if is_builtin_functor_with_arity(functor, args.len()) {
             if should_resolve_args(functor) {
                 let resolved =
-                    resolve_builtin_fact_args(db, clause_counter, term, other_goals)?;
+                    resolve_builtin_fact_args(db, clause_counter, term, other_goals, shared_env)?;
                 return Ok(vec![resolved]);
             } else {
                 return Ok(vec![term]);
@@ -898,7 +963,7 @@ fn rewrite_term_recursive(
 
     // まず、この項自体がルールにマッチするか試す
     if let Some((resolved_term, body)) =
-        try_rewrite_single_with_result(db, clause_counter, &term, other_goals)
+        try_rewrite_single_with_result(db, clause_counter, &term, other_goals, shared_env)
     {
         if body.is_empty() {
             let functor_name = match &resolved_term {
@@ -906,14 +971,14 @@ fn rewrite_term_recursive(
                 _ => None,
             };
             let resolved_term = if functor_name.is_some_and(|f| should_resolve_args(f)) {
-                resolve_builtin_fact_args(db, clause_counter, resolved_term, other_goals)?
+                resolve_builtin_fact_args(db, clause_counter, resolved_term, other_goals, shared_env)?
             } else {
                 resolved_term
             };
             return Ok(vec![resolved_term]);
         } else {
             // Ruleにマッチ: bodyの各項を再帰的に解決
-            let mut remaining_body: Vec<Term> = body;
+            let mut remaining_body: Vec<ScopedTerm> = body;
             let mut all_resolved = Vec::new();
 
             // body 解決前に制約を解き、変数束縛を body と other_goals に伝播
@@ -934,7 +999,7 @@ fn rewrite_term_recursive(
                 temp_other_goals.extend(other_goals.clone());
 
                 let resolved =
-                    rewrite_term_recursive(db, clause_counter, b, &mut temp_other_goals)?;
+                    rewrite_term_recursive(db, clause_counter, b, &mut temp_other_goals, shared_env)?;
                 all_resolved.extend(resolved);
 
                 // 置換が適用された remaining_body と other_goals を復元
@@ -951,8 +1016,8 @@ fn rewrite_term_recursive(
     // ルールにマッチしない場合、サブタームを再帰的に書き換える
     match term {
         Term::InfixExpr { op, left, right } => {
-            let new_left_terms = rewrite_term_recursive(db, clause_counter, *left, other_goals)?;
-            let new_right_terms = rewrite_term_recursive(db, clause_counter, *right, other_goals)?;
+            let new_left_terms = rewrite_term_recursive(db, clause_counter, *left, other_goals, shared_env)?;
+            let new_right_terms = rewrite_term_recursive(db, clause_counter, *right, other_goals, shared_env)?;
 
             // InfixExpr の各オペランドは1つの項に解決されるべき
             if new_left_terms.len() != 1 || new_right_terms.len() != 1 {
@@ -1030,19 +1095,19 @@ fn rewrite_term_recursive(
 fn resolve_builtin_arg(
     db: &[Clause],
     clause_counter: &mut usize,
-    term: Term,
-    other_goals: &mut Vec<Term>,
-) -> Result<Term, RewriteError> {
+    term: ScopedTerm,
+    other_goals: &mut Vec<ScopedTerm>,
+    shared_env: &mut ScopedEnv,
+) -> Result<ScopedTerm, RewriteError> {
     match term {
         Term::Number { .. }
         | Term::Var { .. }
-        | Term::AnnotatedVar { .. }
         | Term::StringLit { .. }
         | Term::Range { .. } => Ok(term),
         Term::List { items, tail } => {
             let resolved_items = items
                 .into_iter()
-                .map(|item| resolve_builtin_arg(db, clause_counter, item, other_goals))
+                .map(|item| resolve_builtin_arg(db, clause_counter, item, other_goals, shared_env))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(Term::List {
                 items: resolved_items,
@@ -1056,7 +1121,7 @@ fn resolve_builtin_arg(
         } if is_builtin_functor(&functor) => {
             let resolved_args = args
                 .into_iter()
-                .map(|arg| resolve_builtin_arg(db, clause_counter, arg, other_goals))
+                .map(|arg| resolve_builtin_arg(db, clause_counter, arg, other_goals, shared_env))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(Term::Struct {
                 functor,
@@ -1065,8 +1130,8 @@ fn resolve_builtin_arg(
             })
         }
         Term::InfixExpr { op, left, right } => {
-            let new_left = resolve_builtin_arg(db, clause_counter, *left, other_goals)?;
-            let new_right = resolve_builtin_arg(db, clause_counter, *right, other_goals)?;
+            let new_left = resolve_builtin_arg(db, clause_counter, *left, other_goals, shared_env)?;
+            let new_right = resolve_builtin_arg(db, clause_counter, *right, other_goals, shared_env)?;
             Ok(Term::InfixExpr {
                 op,
                 left: Box::new(new_left),
@@ -1074,7 +1139,7 @@ fn resolve_builtin_arg(
             })
         }
         other => {
-            let mut resolved = rewrite_term_recursive(db, clause_counter, other, other_goals)?;
+            let mut resolved = rewrite_term_recursive(db, clause_counter, other, other_goals, shared_env)?;
             if resolved.len() > 1 {
                 let mut shape = Vec::new();
                 for t in resolved {
@@ -1102,9 +1167,10 @@ fn resolve_builtin_arg(
 fn resolve_builtin_fact_args(
     db: &[Clause],
     clause_counter: &mut usize,
-    term: Term,
-    other_goals: &mut Vec<Term>,
-) -> Result<Term, RewriteError> {
+    term: ScopedTerm,
+    other_goals: &mut Vec<ScopedTerm>,
+    shared_env: &mut ScopedEnv,
+) -> Result<ScopedTerm, RewriteError> {
     let (functor, args, span) = match term {
         Term::Struct {
             functor,
@@ -1116,7 +1182,7 @@ fn resolve_builtin_fact_args(
 
     let resolved_args = args
         .into_iter()
-        .map(|arg| resolve_builtin_arg(db, clause_counter, arg, other_goals))
+        .map(|arg| resolve_builtin_arg(db, clause_counter, arg, other_goals, shared_env))
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(Term::Struct {
@@ -1126,73 +1192,26 @@ fn resolve_builtin_fact_args(
     })
 }
 
-/// query termをDB内のrule headと引数位置で対応させ、head側のrange情報をQueryParamに伝播する。
-pub fn discover_query_param_ranges(
-    db: &[Clause],
-    params: &mut [crate::parse::QueryParam],
-    query_terms: &[Term],
-) {
-    for query_term in query_terms {
-        let (q_functor, q_args) = match query_term {
-            Term::Struct {
-                functor, args, ..
-            } => (functor.as_str(), args.as_slice()),
-            _ => continue,
-        };
-
-        for clause in db.iter() {
-            let head = match clause {
-                Clause::Fact(t) => t,
-                Clause::Rule { head, .. } => head,
-                Clause::Use { .. } => continue,
-            };
-
-            let (h_functor, h_args) = match head {
-                Term::Struct {
-                    functor, args, ..
-                } => (functor.as_str(), args.as_slice()),
-                _ => continue,
-            };
-
-            if q_functor != h_functor || q_args.len() != h_args.len() {
-                continue;
-            }
-
-            for (q_arg, h_arg) in q_args.iter().zip(h_args.iter()) {
-                let param_name = match q_arg {
-                    Term::Var { name, .. } if name != "_" => name,
-                    Term::AnnotatedVar { name, .. } if name != "_" => name,
-                    _ => continue,
-                };
-
-                let (h_min, h_max) = match h_arg {
-                    Term::AnnotatedVar { min, max, .. } => (*min, *max),
-                    _ => continue,
-                };
-
-                if let Some(param) = params.iter_mut().find(|p| p.name == *param_name) {
-                    param.min = intersect_min(param.min, h_min);
-                    param.max = intersect_max(param.max, h_max);
-                }
-            }
-            break;
-        }
-    }
-}
-
-pub fn execute(db: &mut [Clause], query: Vec<Term>) -> Result<Vec<Term>, RewriteError> {
-    let mut clause_counter = 0;
+pub fn execute(db: &mut [Clause], query: Vec<Term>) -> Result<(Vec<ScopedTerm>, ScopedEnv), RewriteError> {
+    let mut clause_counter: usize = 0;
+    let mut shared_env = ScopedEnv::new();
     let mut results = Vec::new();
     let mut db_with_builtins = db.to_vec();
     db_with_builtins.extend(builtin_cad_facts());
 
-    for term in query {
+    let scoped_query: Vec<ScopedTerm> = query
+        .into_iter()
+        .map(|t| assign_scope_to_term(t, 0))
+        .collect();
+
+    for term in scoped_query {
         let mut other_goals = Vec::new();
         let resolved = rewrite_term_recursive(
             &db_with_builtins,
             &mut clause_counter,
             term,
             &mut other_goals,
+            &mut shared_env,
         )?;
         results.extend(resolved);
         results.extend(other_goals);
@@ -1204,7 +1223,7 @@ pub fn execute(db: &mut [Clause], query: Vec<Term>) -> Result<Vec<Term>, Rewrite
     // 解決済み Constraint を結果から除去
     results.retain(|t| !matches!(t, Term::Constraint { .. }));
 
-    Ok(results)
+    Ok((results, shared_env))
 }
 
 #[cfg(test)]
@@ -1212,10 +1231,15 @@ mod tests {
     use super::*;
     use crate::parse::{FixedPoint, database, query, struc, var};
 
+    /// テスト用: unscoped Term → scope 0 の ScopedTerm に変換
+    fn scoped(term: Term) -> ScopedTerm {
+        assign_scope_to_term(term, 0)
+    }
+
     fn run_success(db_src: &str, query_src: &str) -> Vec<String> {
         let mut db = database(db_src).expect("failed to parse db");
         let q = query(query_src).expect("failed to parse query").1;
-        let resolved = execute(&mut db, q).expect("Expected success");
+        let (resolved, _env) = execute(&mut db, q).expect("Expected success");
         resolved.iter().map(|t| format!("{:?}", t)).collect()
     }
 
@@ -1232,30 +1256,30 @@ mod tests {
 
     #[test]
     fn test_unify_vars() {
-        let x = var("X".to_string());
-        let a = struc("a".to_string(), vec![]);
-        let mut env = Env::new();
+        let x = scoped(var("X".to_string()));
+        let a = scoped(struc("a".to_string(), vec![]));
+        let mut env = ScopedEnv::new();
         unify(x, a.clone(), &mut env).unwrap();
-        assert_eq!(resolve(&var("X".to_string()), &env), a);
+        assert_eq!(resolve(&scoped(var("X".to_string())), &env), a);
     }
 
     #[test]
     fn test_unify_structs() {
-        let t1 = struc("f".to_string(), vec![var("X".to_string())]);
-        let t2 = struc("f".to_string(), vec![struc("a".to_string(), vec![])]);
-        let mut env = Env::new();
+        let t1 = scoped(struc("f".to_string(), vec![var("X".to_string())]));
+        let t2 = scoped(struc("f".to_string(), vec![struc("a".to_string(), vec![])]));
+        let mut env = ScopedEnv::new();
         unify(t1, t2, &mut env).unwrap();
         assert_eq!(
-            resolve(&var("X".to_string()), &env),
-            struc("a".to_string(), vec![])
+            resolve(&scoped(var("X".to_string())), &env),
+            scoped(struc("a".to_string(), vec![]))
         );
     }
 
     #[test]
     fn test_unify_fail() {
-        let t1 = struc("f".to_string(), vec![]);
-        let t2 = struc("g".to_string(), vec![]);
-        assert!(unify(t1, t2, &mut Env::new()).is_err());
+        let t1 = scoped(struc("f".to_string(), vec![]));
+        let t2 = scoped(struc("g".to_string(), vec![]));
+        assert!(unify(t1, t2, &mut ScopedEnv::new()).is_err());
     }
 
     // ===== RangeVar unify tests =====
@@ -1275,9 +1299,9 @@ mod tests {
             }),
         );
         let n = number_int(5);
-        let mut env = Env::new();
-        unify(rv, n.clone(), &mut env).unwrap();
-        assert_eq!(resolve(&var("X".to_string()), &env), n);
+        let mut env = ScopedEnv::new();
+        unify(scoped(rv), scoped(n.clone()), &mut env).unwrap();
+        assert_eq!(resolve(&scoped(var("X".to_string())), &env), scoped(n));
     }
 
     #[test]
@@ -1295,7 +1319,7 @@ mod tests {
             }),
         );
         let n = number_int(15);
-        assert!(unify(rv, n, &mut Env::new()).is_err());
+        assert!(unify(scoped(rv), scoped(n), &mut ScopedEnv::new()).is_err());
     }
 
     #[test]
@@ -1314,10 +1338,10 @@ mod tests {
                 }),
             )
         };
-        assert!(unify(make_rv(), number_int(0), &mut Env::new()).is_err());
-        assert!(unify(make_rv(), number_int(10), &mut Env::new()).is_err());
-        assert!(unify(make_rv(), number_int(1), &mut Env::new()).is_ok());
-        assert!(unify(make_rv(), number_int(9), &mut Env::new()).is_ok());
+        assert!(unify(scoped(make_rv()), scoped(number_int(0)), &mut ScopedEnv::new()).is_err());
+        assert!(unify(scoped(make_rv()), scoped(number_int(10)), &mut ScopedEnv::new()).is_err());
+        assert!(unify(scoped(make_rv()), scoped(number_int(1)), &mut ScopedEnv::new()).is_ok());
+        assert!(unify(scoped(make_rv()), scoped(number_int(9)), &mut ScopedEnv::new()).is_ok());
     }
 
     #[test]
@@ -1336,8 +1360,8 @@ mod tests {
                 }),
             )
         };
-        assert!(unify(make_rv(), number_int(0), &mut Env::new()).is_ok());
-        assert!(unify(make_rv(), number_int(10), &mut Env::new()).is_ok());
+        assert!(unify(scoped(make_rv()), scoped(number_int(0)), &mut ScopedEnv::new()).is_ok());
+        assert!(unify(scoped(make_rv()), scoped(number_int(10)), &mut ScopedEnv::new()).is_ok());
     }
 
     #[test]
@@ -1365,9 +1389,9 @@ mod tests {
                 inclusive: false,
             }),
         );
-        let mut env = Env::new();
-        unify(rv1, rv2, &mut env).unwrap();
-        let resolved_x = resolve(&var("X".to_string()), &env);
+        let mut env = ScopedEnv::new();
+        unify(scoped(rv1), scoped(rv2), &mut env).unwrap();
+        let resolved_x = resolve(&scoped(var("X".to_string())), &env);
         assert_eq!(
             resolved_x,
             Term::Range {
@@ -1408,7 +1432,7 @@ mod tests {
                 inclusive: false,
             }),
         );
-        assert!(unify(rv1, rv2, &mut Env::new()).is_err());
+        assert!(unify(scoped(rv1), scoped(rv2), &mut ScopedEnv::new()).is_err());
     }
 
     #[test]
@@ -1436,7 +1460,7 @@ mod tests {
                 inclusive: false,
             }),
         );
-        assert!(unify(rv1, rv2, &mut Env::new()).is_err());
+        assert!(unify(scoped(rv1), scoped(rv2), &mut ScopedEnv::new()).is_err());
     }
 
     // ===== arithmetic tests =====
@@ -1447,7 +1471,7 @@ mod tests {
         let expr =
             crate::parse::arith_expr(crate::parse::ArithOp::Add, number_int(3), number_int(5));
         let n = number_int(8);
-        assert!(unify(expr, n, &mut Env::new()).is_ok());
+        assert!(unify(scoped(expr), scoped(n), &mut ScopedEnv::new()).is_ok());
     }
 
     #[test]
@@ -1456,7 +1480,7 @@ mod tests {
         let expr =
             crate::parse::arith_expr(crate::parse::ArithOp::Sub, number_int(10), number_int(3));
         let n = number_int(7);
-        assert!(unify(expr, n, &mut Env::new()).is_ok());
+        assert!(unify(scoped(expr), scoped(n), &mut ScopedEnv::new()).is_ok());
     }
 
     #[test]
@@ -1465,7 +1489,7 @@ mod tests {
         let expr =
             crate::parse::arith_expr(crate::parse::ArithOp::Mul, number_int(4), number_int(5));
         let n = number_int(20);
-        assert!(unify(expr, n, &mut Env::new()).is_ok());
+        assert!(unify(scoped(expr), scoped(n), &mut ScopedEnv::new()).is_ok());
     }
 
     #[test]
@@ -1474,7 +1498,7 @@ mod tests {
         let expr =
             crate::parse::arith_expr(crate::parse::ArithOp::Div, number_int(10), number_int(3));
         let n = number(FixedPoint::from_hundredths(333)); // 10/3 = 3.33 in fixed point
-        assert!(unify(expr, n, &mut Env::new()).is_ok());
+        assert!(unify(scoped(expr), scoped(n), &mut ScopedEnv::new()).is_ok());
     }
 
     #[test]
@@ -1544,7 +1568,7 @@ mod tests {
         );
         assert_eq!(
             resolved,
-            vec!["(cube(X_2=25, 50, 300) - translate(cube(5, 50, 260), 7.5, 0, 0))"]
+            vec!["(cube(X=25, 50, 300) - translate(cube(5, 50, 260), 7.5, 0, 0))"]
         );
     }
 
@@ -1936,13 +1960,17 @@ mod tests {
 
     #[test]
     fn query_head_range_intersection() {
-        use crate::parse::{Bound, collect_query_params};
+        use crate::parse::{Bound, collect_query_params, substitute_query_params};
         let db_src = "main(0<X<5) :- cube(X, 10, 10).";
         let query_src = "main(0<X<10).";
-        let db = database(db_src).expect("failed to parse db");
+        let mut db = database(db_src).expect("failed to parse db");
         let (_, query_terms) = query(query_src).expect("failed to parse query");
         let mut params = collect_query_params(&query_terms);
-        discover_query_param_ranges(&db, &mut params, &query_terms);
+        // midpoint of query range 0..10 = 5
+        let values = std::collections::HashMap::from([("X".to_string(), 5.0)]);
+        let substituted = substitute_query_params(&query_terms, &values);
+        let (_resolved, env) = execute(&mut db, substituted).expect("Expected success");
+        env.update_query_param_ranges(&mut params);
         assert_eq!(params.len(), 1);
         assert_eq!(params[0].name, "X");
         // head側0<X<5とquery側0<X<10のintersection → 0<X<5
@@ -1964,15 +1992,18 @@ mod tests {
 
     #[test]
     fn query_head_range_propagation_from_head_only() {
-        use crate::parse::{Bound, collect_query_params};
+        use crate::parse::{Bound, collect_query_params, substitute_query_params};
         let db_src = "main(0<X<10) :- cube(X, 10, 10).";
         let query_src = "main(X).";
-        let db = database(db_src).expect("failed to parse db");
+        let mut db = database(db_src).expect("failed to parse db");
         let (_, query_terms) = query(query_src).expect("failed to parse query");
         let mut params = collect_query_params(&query_terms);
         assert_eq!(params.len(), 1);
         assert!(params[0].min.is_none());
-        discover_query_param_ranges(&db, &mut params, &query_terms);
+        let values = std::collections::HashMap::from([("X".to_string(), 5.0)]);
+        let substituted = substitute_query_params(&query_terms, &values);
+        let (_resolved, env) = execute(&mut db, substituted).expect("Expected success");
+        env.update_query_param_ranges(&mut params);
         // head側のrangeが伝播
         assert_eq!(
             params[0].min.unwrap(),

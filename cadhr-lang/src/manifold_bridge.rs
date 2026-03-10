@@ -180,8 +180,7 @@ pub struct ControlPoint {
     pub var_names: [Option<String>; 3],
 }
 
-/// TermからTrackedF64を抽出する。Number, AnnotatedVar(デフォルト値あり), Var(0にフォールバック)に対応。
-fn term_to_tracked_f64(term: &Term) -> Option<TrackedF64> {
+fn term_to_tracked_f64<S>(term: &Term<S>) -> Option<TrackedF64> {
     if let Some((fp, span)) = term_as_fixed_point(term) {
         return Some(TrackedF64 {
             value: fp.to_f64(),
@@ -189,7 +188,7 @@ fn term_to_tracked_f64(term: &Term) -> Option<TrackedF64> {
         });
     }
     match term {
-        Term::AnnotatedVar {
+        Term::Var {
             default_value: Some(fp),
             span,
             ..
@@ -197,7 +196,7 @@ fn term_to_tracked_f64(term: &Term) -> Option<TrackedF64> {
             value: fp.to_f64(),
             source_span: *span,
         }),
-        Term::AnnotatedVar {
+        Term::Var {
             min: Some(lo),
             max: Some(hi),
             span,
@@ -206,34 +205,39 @@ fn term_to_tracked_f64(term: &Term) -> Option<TrackedF64> {
             value: (lo.value.to_f64() + hi.value.to_f64()) / 2.0,
             source_span: *span,
         }),
-        Term::AnnotatedVar { span, .. } => Some(TrackedF64 {
+        // annotation 全 None: zero-length span (=value 挿入位置)
+        Term::Var {
+            default_value: None,
+            min: None,
+            max: None,
+            span,
+            ..
+        } => Some(TrackedF64 {
             value: 0.0,
-            source_span: *span,
-        }),
-        Term::Var { span, .. } => Some(TrackedF64 {
-            value: 0.0,
-            // 変数名末尾の zero-length span → =value 挿入位置
             source_span: span.map(|s| SrcSpan {
                 start: s.end,
                 end: s.end,
             }),
         }),
+        Term::Var { span, .. } => Some(TrackedF64 {
+            value: 0.0,
+            source_span: *span,
+        }),
         _ => None,
     }
 }
 
-/// Var/AnnotatedVarから変数名を取り出す
-fn var_name(term: &Term) -> Option<&str> {
+fn var_name<S>(term: &Term<S>) -> Option<&str> {
     match term {
-        Term::Var { name, .. } | Term::AnnotatedVar { name, .. } => Some(name),
+        Term::Var { name, .. } => Some(name),
         _ => None,
     }
 }
 
 /// control(X,Y,Z) / control(X,Y,Z,Name) のTermを抽出し、残りのTermを返す。
 /// control座標がVarの場合、同名の変数を残りのtermsからも置換する。
-pub fn extract_control_points(
-    terms: &mut Vec<Term>,
+pub fn extract_control_points<S>(
+    terms: &mut Vec<Term<S>>,
     overrides: &std::collections::HashMap<String, f64>,
 ) -> Vec<ControlPoint> {
     let mut control_points = Vec::new();
@@ -295,9 +299,9 @@ pub fn extract_control_points(
     control_points
 }
 
-fn substitute_vars(term: &mut Term, subs: &[(String, FixedPoint)]) {
+fn substitute_vars<S>(term: &mut Term<S>, subs: &[(String, FixedPoint)]) {
     match term {
-        Term::Var { name, .. } | Term::AnnotatedVar { name, .. } => {
+        Term::Var { name, .. } => {
             if let Some((_, val)) = subs.iter().find(|(n, _)| n == name) {
                 *term = Term::Number { value: *val };
             }
@@ -334,8 +338,8 @@ fn strip_rename_suffix(name: &str) -> &str {
     name
 }
 
-/// override mapに基づいてterms中のVar/AnnotatedVarを置換する
-pub fn apply_var_overrides(terms: &mut Vec<Term>, overrides: &std::collections::HashMap<String, f64>) {
+/// override mapに基づいてterms中のVar/Varを置換する
+pub fn apply_var_overrides<S>(terms: &mut Vec<Term<S>>, overrides: &std::collections::HashMap<String, f64>) {
     if overrides.is_empty() {
         return;
     }
@@ -345,9 +349,9 @@ pub fn apply_var_overrides(terms: &mut Vec<Term>, overrides: &std::collections::
     }
 }
 
-fn apply_var_overrides_to_term(term: &mut Term, overrides: &std::collections::HashMap<String, f64>) {
+fn apply_var_overrides_to_term<S>(term: &mut Term<S>, overrides: &std::collections::HashMap<String, f64>) {
     match term {
-        Term::Var { name, .. } | Term::AnnotatedVar { name, .. } => {
+        Term::Var { name, .. } => {
             let base = strip_rename_suffix(name);
             if let Some(&val) = overrides.get(base) {
                 *term = Term::Number {
@@ -377,13 +381,13 @@ fn apply_var_overrides_to_term(term: &mut Term, overrides: &std::collections::Ha
 }
 
 /// 引数抽出用ヘルパー
-struct Args<'a> {
-    args: &'a [Term],
+struct Args<'a, S> {
+    args: &'a [Term<S>],
     functor: &'a str,
 }
 
-impl<'a> Args<'a> {
-    fn new(functor: &'a str, args: &'a [Term]) -> Self {
+impl<'a, S> Args<'a, S> {
+    fn new(functor: &'a str, args: &'a [Term<S>]) -> Self {
         Self { args, functor }
     }
 
@@ -399,7 +403,7 @@ impl<'a> Args<'a> {
             });
         }
         match &self.args[i] {
-            Term::AnnotatedVar {
+            Term::Var {
                 min: Some(lo),
                 max: Some(hi),
                 span,
@@ -411,7 +415,7 @@ impl<'a> Args<'a> {
                     source_span: *span,
                 })
             }
-            Term::Var { name, .. } | Term::AnnotatedVar { name, .. } => {
+            Term::Var { name, .. } => {
                 Err(ConversionError::UnboundVariable(name.clone()))
             }
             _ => Err(ConversionError::TypeMismatch {
@@ -434,7 +438,7 @@ impl<'a> Args<'a> {
             };
         }
         match &self.args[i] {
-            Term::Var { name, .. } | Term::AnnotatedVar { name, .. } => {
+            Term::Var { name, .. } => {
                 Err(ConversionError::UnboundVariable(name.clone()))
             }
             _ => Err(ConversionError::TypeMismatch {
@@ -476,7 +480,7 @@ fn apply_plane_rotation(m: Manifold, profile: &ManifoldExpr) -> Manifold {
     }
 }
 
-fn extract_polygon_points(list_term: &Term, functor: &str) -> Result<Vec<f64>, ConversionError> {
+fn extract_polygon_points<S>(list_term: &Term<S>, functor: &str) -> Result<Vec<f64>, ConversionError> {
     match list_term {
         Term::List { items, .. } => {
             let mut points = Vec::with_capacity(items.len() * 2);
@@ -515,7 +519,7 @@ fn extract_polygon_points(list_term: &Term, functor: &str) -> Result<Vec<f64>, C
     }
 }
 
-fn extract_polyhedron_points(list_term: &Term, functor: &str) -> Result<Vec<f64>, ConversionError> {
+fn extract_polyhedron_points<S>(list_term: &Term<S>, functor: &str) -> Result<Vec<f64>, ConversionError> {
     match list_term {
         Term::List { items, .. } => {
             let mut points = Vec::with_capacity(items.len() * 3);
@@ -554,8 +558,8 @@ fn extract_polyhedron_points(list_term: &Term, functor: &str) -> Result<Vec<f64>
     }
 }
 
-fn extract_polyhedron_faces(
-    list_term: &Term,
+fn extract_polyhedron_faces<S>(
+    list_term: &Term<S>,
     functor: &str,
 ) -> Result<Vec<Vec<u32>>, ConversionError> {
     match list_term {
@@ -610,7 +614,7 @@ fn extract_polyhedron_faces(
     }
 }
 
-fn extract_point_2d(term: &Term, tag: ManifoldTag, arg_index: usize) -> Result<(f64, f64), ConversionError> {
+fn extract_point_2d<S>(term: &Term<S>, tag: ManifoldTag, arg_index: usize) -> Result<(f64, f64), ConversionError> {
     match term {
         Term::Struct { functor: f, args, .. } if f == "p" && args.len() == 2 => {
             let x = term_as_fixed_point(&args[0])
@@ -639,9 +643,9 @@ fn extract_point_2d(term: &Term, tag: ManifoldTag, arg_index: usize) -> Result<(
     }
 }
 
-fn extract_path_points(
-    start_term: &Term,
-    segments_term: &Term,
+fn extract_path_points<S>(
+    start_term: &Term<S>,
+    segments_term: &Term<S>,
 ) -> Result<Vec<f64>, ConversionError> {
     let mut current = extract_point_2d(start_term, ManifoldTag::Path, 0)?;
     let mut points = vec![current.0, current.1];
@@ -739,12 +743,11 @@ impl ManifoldExpr {
     }
 
     /// Prolog Term から ManifoldExpr へ変換
-    pub fn from_term(term: &Term) -> Result<Self, ConversionError> {
+    pub fn from_term<S>(term: &Term<S>) -> Result<Self, ConversionError> {
         match term {
             Term::Struct { functor, args, .. } => Self::from_struct(functor, args),
             Term::InfixExpr { op, left, right } => Self::from_infix_expr(*op, left, right),
             Term::Var { name, .. } => Err(ConversionError::UnboundVariable(name.clone())),
-            Term::AnnotatedVar { name, .. } => Err(ConversionError::UnboundVariable(name.clone())),
             Term::Constraint { .. } => Err(ConversionError::UnknownPrimitive(
                 "constraint should not reach mesh generation".to_string(),
             )),
@@ -754,7 +757,7 @@ impl ManifoldExpr {
 
     /// 中置演算子をCAD操作として変換
     /// + -> union, - -> difference, * -> intersection
-    fn from_infix_expr(op: ArithOp, left: &Term, right: &Term) -> Result<Self, ConversionError> {
+    fn from_infix_expr<S>(op: ArithOp, left: &Term<S>, right: &Term<S>) -> Result<Self, ConversionError> {
         let left_expr = Box::new(Self::from_term(left)?);
         let right_expr = Box::new(Self::from_term(right)?);
 
@@ -768,7 +771,7 @@ impl ManifoldExpr {
         }
     }
 
-    fn from_struct(functor: &str, args: &[Term]) -> Result<Self, ConversionError> {
+    fn from_struct<S>(functor: &str, args: &[Term<S>]) -> Result<Self, ConversionError> {
         let a = Args::new(functor, args);
         let tag = ManifoldTag::from_str(functor)
             .map_err(|_| ConversionError::UnknownPrimitive(functor.to_string()))?;
@@ -1251,11 +1254,11 @@ pub struct MeshGenerator {
     pub include_paths: Vec<PathBuf>,
 }
 
-impl crate::term_processor::TermProcessor for MeshGenerator {
+impl<S> crate::term_processor::TermProcessor<S> for MeshGenerator {
     type Output = (Mesh, Vec<EvaluatedNode>);
     type Error = ConversionError;
 
-    fn process(&self, terms: &[Term]) -> Result<Self::Output, Self::Error> {
+    fn process(&self, terms: &[Term<S>]) -> Result<Self::Output, Self::Error> {
         let exprs: Vec<ManifoldExpr> = terms
             .iter()
             .filter_map(|t| match ManifoldExpr::from_term(t) {
@@ -1287,8 +1290,8 @@ impl crate::term_processor::TermProcessor for MeshGenerator {
     }
 }
 
-pub fn generate_mesh_and_tree_from_terms(
-    terms: &[Term],
+pub fn generate_mesh_and_tree_from_terms<S>(
+    terms: &[Term<S>],
     include_paths: &[PathBuf],
 ) -> Result<(Mesh, Vec<EvaluatedNode>), ConversionError> {
     use crate::term_processor::TermProcessor;
@@ -1305,7 +1308,7 @@ mod tests {
 
     #[test]
     fn test_cube_conversion() {
-        let term = struc(
+        let term: Term = struc(
             "cube".into(),
             vec![number_int(10), number_int(20), number_int(30)],
         );
@@ -1322,7 +1325,7 @@ mod tests {
 
     #[test]
     fn test_sphere_default_segments() {
-        let term = struc("sphere".into(), vec![number_int(5)]);
+        let term: Term = struc("sphere".into(), vec![number_int(5)]);
         let expr = ManifoldExpr::from_term(&term).unwrap();
         match expr {
             ManifoldExpr::Sphere { radius, segments } => {
@@ -1335,7 +1338,7 @@ mod tests {
 
     #[test]
     fn test_sphere_explicit_segments() {
-        let term = struc("sphere".into(), vec![number_int(5), number_int(16)]);
+        let term: Term = struc("sphere".into(), vec![number_int(5), number_int(16)]);
         let expr = ManifoldExpr::from_term(&term).unwrap();
         match expr {
             ManifoldExpr::Sphere { radius, segments } => {
@@ -1348,7 +1351,7 @@ mod tests {
 
     #[test]
     fn test_cylinder_default_segments() {
-        let term = struc("cylinder".into(), vec![number_int(3), number_int(10)]);
+        let term: Term = struc("cylinder".into(), vec![number_int(3), number_int(10)]);
         let expr = ManifoldExpr::from_term(&term).unwrap();
         match expr {
             ManifoldExpr::Cylinder {
@@ -1366,7 +1369,7 @@ mod tests {
 
     #[test]
     fn test_union_conversion() {
-        let cube1 = struc(
+        let cube1: Term = struc(
             "cube".into(),
             vec![number_int(1), number_int(1), number_int(1)],
         );
@@ -1381,7 +1384,7 @@ mod tests {
 
     #[test]
     fn test_translate_conversion() {
-        let cube = struc(
+        let cube: Term = struc(
             "cube".into(),
             vec![number_int(1), number_int(1), number_int(1)],
         );
@@ -1402,7 +1405,7 @@ mod tests {
 
     #[test]
     fn test_unbound_variable_error() {
-        let term = struc(
+        let term: Term = struc(
             "cube".into(),
             vec![var("X".into()), number_int(1), number_int(1)],
         );
@@ -1412,14 +1415,14 @@ mod tests {
 
     #[test]
     fn test_arity_mismatch() {
-        let term = struc("cube".into(), vec![number_int(1), number_int(2)]);
+        let term: Term = struc("cube".into(), vec![number_int(1), number_int(2)]);
         let result = ManifoldExpr::from_term(&term);
         assert!(matches!(result, Err(ConversionError::ArityMismatch { .. })));
     }
 
     #[test]
     fn test_unknown_primitive() {
-        let term = struc("unknown_shape".into(), vec![number_int(1)]);
+        let term: Term = struc("unknown_shape".into(), vec![number_int(1)]);
         let result = ManifoldExpr::from_term(&term);
         assert!(matches!(result, Err(ConversionError::UnknownPrimitive(_))));
     }
@@ -1427,7 +1430,7 @@ mod tests {
     #[test]
     fn test_nested_csg() {
         // difference(union(cube(1,1,1), cube(2,2,2)), sphere(1))
-        let cube1 = struc(
+        let cube1: Term = struc(
             "cube".into(),
             vec![number_int(1), number_int(1), number_int(1)],
         );
@@ -1449,7 +1452,7 @@ mod tests {
         use crate::parse::arith_expr;
 
         // cube(1,1,1) + sphere(1) -> union
-        let cube = struc(
+        let cube: Term = struc(
             "cube".into(),
             vec![number_int(1), number_int(1), number_int(1)],
         );
@@ -1466,7 +1469,7 @@ mod tests {
         use crate::parse::arith_expr;
 
         // cube(1,1,1) - sphere(1) -> difference
-        let cube = struc(
+        let cube: Term = struc(
             "cube".into(),
             vec![number_int(1), number_int(1), number_int(1)],
         );
@@ -1483,7 +1486,7 @@ mod tests {
         use crate::parse::arith_expr;
 
         // cube(1,1,1) * sphere(1) -> intersection
-        let cube = struc(
+        let cube: Term = struc(
             "cube".into(),
             vec![number_int(1), number_int(1), number_int(1)],
         );
@@ -1500,7 +1503,7 @@ mod tests {
         use crate::parse::arith_expr;
 
         // (cube(1,1,1) + sphere(1)) - cylinder(1,2)
-        let cube = struc(
+        let cube: Term = struc(
             "cube".into(),
             vec![number_int(1), number_int(1), number_int(1)],
         );
@@ -1525,7 +1528,7 @@ mod tests {
         use crate::parse::arith_expr;
 
         // cube(1,1,1) / sphere(1) -> error
-        let cube = struc(
+        let cube: Term = struc(
             "cube".into(),
             vec![number_int(1), number_int(1), number_int(1)],
         );
@@ -1558,7 +1561,7 @@ mod tests {
 
     #[test]
     fn test_circle_default_segments() {
-        let term = struc("circle".into(), vec![number_int(5)]);
+        let term: Term = struc("circle".into(), vec![number_int(5)]);
         let expr = ManifoldExpr::from_term(&term).unwrap();
         match expr {
             ManifoldExpr::Circle { radius, segments } => {
@@ -1585,7 +1588,7 @@ mod tests {
 
     #[test]
     fn test_revolve_circle() {
-        let circle = struc("circle".into(), vec![number_int(5)]);
+        let circle: Term = struc("circle".into(), vec![number_int(5)]);
         let term = struc("revolve".into(), vec![circle, number_int(360)]);
         let expr = ManifoldExpr::from_term(&term).unwrap();
         match expr {
@@ -1604,7 +1607,7 @@ mod tests {
 
     #[test]
     fn test_extrude_circle() {
-        let circle = struc("circle".into(), vec![number_int(5)]);
+        let circle: Term = struc("circle".into(), vec![number_int(5)]);
         let term = struc("linear_extrude".into(), vec![circle, number_int(10)]);
         let expr = ManifoldExpr::from_term(&term).unwrap();
         match expr {
@@ -1656,7 +1659,7 @@ mod tests {
             stl_io::write_stl(&mut file, tris.iter()).unwrap();
         }
 
-        let term = struc(
+        let term: Term = struc(
             "stl".into(),
             vec![string_lit(stl_path.to_str().unwrap().into())],
         );
@@ -1669,7 +1672,7 @@ mod tests {
 
     #[test]
     fn test_extract_control_points() {
-        let cube = struc(
+        let cube: Term = struc(
             "cube".into(),
             vec![number_int(10), number_int(20), number_int(30)],
         );
@@ -1727,7 +1730,7 @@ mod tests {
             "main :- linear_extrude(sketchXY([p(0, 0), p(0, 40), p(30, 0)]), X=10), control(X, 0, 0, \"width\")."
         ).unwrap();
         let (_, q) = parse_query("main.").unwrap();
-        let mut resolved = execute(&mut db, q).unwrap();
+        let (mut resolved, _) = execute(&mut db, q).unwrap();
         let cps = extract_control_points(&mut resolved, &Default::default());
 
         assert_eq!(cps.len(), 1);
@@ -1751,7 +1754,7 @@ mod tests {
         )
         .unwrap();
         let (_, q) = parse_query("main.").unwrap();
-        let mut resolved = execute(&mut db, q).unwrap();
+        let (mut resolved, _) = execute(&mut db, q).unwrap();
         let cps = extract_control_points(&mut resolved, &Default::default());
 
         assert_eq!(cps.len(), 1);
@@ -1773,7 +1776,7 @@ mod tests {
         )
         .unwrap();
         let (_, q) = parse_query("main.").unwrap();
-        let mut resolved = execute(&mut db, q).unwrap();
+        let (mut resolved, _) = execute(&mut db, q).unwrap();
         let cps = extract_control_points(&mut resolved, &Default::default());
 
         assert_eq!(cps.len(), 1);
@@ -1791,7 +1794,7 @@ mod tests {
         let (_, q) = parse_query("main.").unwrap();
 
         // 初回: overridesなし
-        let mut resolved = execute(&mut db, q.clone()).unwrap();
+        let (mut resolved, _) = execute(&mut db, q.clone()).unwrap();
         let cps = extract_control_points(&mut resolved, &Default::default());
         assert_eq!(cps.len(), 1);
         assert_eq!(cps[0].var_names[0], Some("X".to_string()));
@@ -1800,7 +1803,7 @@ mod tests {
         // 2回目: X=5.0でoverride → var_namesが保持されること
         let mut db2 = database(src).unwrap();
         let (_, q2) = parse_query("main.").unwrap();
-        let mut resolved2 = execute(&mut db2, q2).unwrap();
+        let (mut resolved2, _) = execute(&mut db2, q2).unwrap();
         let overrides = std::collections::HashMap::from([("X".to_string(), 5.0)]);
         let cps2 = extract_control_points(&mut resolved2, &overrides);
         assert_eq!(cps2.len(), 1);
@@ -1836,7 +1839,7 @@ mod tests {
             "box(X) :- cube(X, X, X).\nmain :- box(10), box(20), control(X, 0, 0).",
         ).unwrap();
         let (_, q) = parse_query("main.").unwrap();
-        let resolved = execute(&mut db, q).unwrap();
+        let (resolved, _) = execute(&mut db, q).unwrap();
         eprintln!("case1: {:?}", resolved);
 
         // 2つのcontrolが同じ変数名Xを使うケース
@@ -1844,7 +1847,7 @@ mod tests {
             "main :- cube(X+Y, 20, 30), control(X, 0, 0), control(Y, 0, 0).",
         ).unwrap();
         let (_, q2) = parse_query("main.").unwrap();
-        let resolved2 = execute(&mut db2, q2).unwrap();
+        let (resolved2, _) = execute(&mut db2, q2).unwrap();
         eprintln!("case2: {:?}", resolved2);
 
         // ルール経由で同名変数が複数スコープに存在するケース
@@ -1852,7 +1855,7 @@ mod tests {
             "helper(X) :- cube(X, X, X), control(X, 0, 0).\nmain :- helper(10), helper(20).",
         ).unwrap();
         let (_, q3) = parse_query("main.").unwrap();
-        let resolved3 = execute(&mut db3, q3).unwrap();
+        let (resolved3, _) = execute(&mut db3, q3).unwrap();
         eprintln!("case3: {:?}", resolved3);
     }
 
@@ -1866,7 +1869,7 @@ mod tests {
             "main :- cube(X+10, 20, 30), control(X, 0, 0).",
         ).unwrap();
         let (_, q) = parse_query("main.").unwrap();
-        let mut resolved = execute(&mut db, q).unwrap();
+        let (mut resolved, _) = execute(&mut db, q).unwrap();
 
         let mut overrides = HashMap::new();
         overrides.insert("X".to_string(), 5.0);
@@ -1892,7 +1895,7 @@ mod tests {
             "box(X) :- cube(X, X, X).\nmain :- box(10), box(20), control(X, 0, 0).",
         ).unwrap();
         let (_, q) = parse_query("main.").unwrap();
-        let mut resolved = execute(&mut db, q).unwrap();
+        let (mut resolved, _) = execute(&mut db, q).unwrap();
 
         let mut overrides = HashMap::new();
         overrides.insert("X".to_string(), 5.0);

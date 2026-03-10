@@ -334,26 +334,17 @@ pub struct ConversionError {
 impl ArithExpr {
     /// Term から ArithExpr への変換を試みる
     /// Struct や List など算術式でないものは Err を返す
-    pub fn try_from_term(term: &Term) -> Result<Self, ConversionError> {
+    pub fn try_from_term<S>(term: &Term<S>) -> Result<Self, ConversionError> {
         match term {
-            Term::Var { name, .. } => Ok(ArithExpr::Var(name.clone())),
-            Term::AnnotatedVar {
-                name,
-                default_value,
-                min,
-                max,
-                ..
-            } => {
-                if let Some(value) = default_value {
-                    Ok(ArithExpr::Num(*value))
-                } else {
-                    Ok(ArithExpr::RangeVar {
-                        name: name.clone(),
-                        min: *min,
-                        max: *max,
-                    })
-                }
+            Term::Var { default_value: Some(value), .. } => Ok(ArithExpr::Num(*value)),
+            Term::Var { name, min, max, .. } if min.is_some() || max.is_some() => {
+                Ok(ArithExpr::RangeVar {
+                    name: name.clone(),
+                    min: *min,
+                    max: *max,
+                })
             }
+            Term::Var { name, .. } => Ok(ArithExpr::Var(name.clone())),
             Term::Number { value } => Ok(ArithExpr::Num(*value)),
             Term::InfixExpr { op, left, right } => {
                 let left = ArithExpr::try_from_term(left)?;

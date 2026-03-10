@@ -139,15 +139,10 @@ pub enum ArithOp {
 }
 
 #[derive(Clone)]
-pub enum Term {
+pub enum Term<Scope = ()> {
     Var {
         name: String,
-        /// 変数名のソース上の範囲 (バイトオフセット)。=value挿入位置の算出に使用。
-        span: Option<SrcSpan>,
-    },
-    /// 既定値・範囲付き変数: X=25, 0<X=20<50, 0<X<50 など
-    AnnotatedVar {
-        name: String,
+        scope: Scope,
         default_value: Option<FixedPoint>,
         min: Option<Bound>,
         max: Option<Bound>,
@@ -159,17 +154,17 @@ pub enum Term {
     /// 中置演算子式: left op right (算術演算 or CSG演算)
     InfixExpr {
         op: ArithOp,
-        left: Box<Term>,
-        right: Box<Term>,
+        left: Box<Term<Scope>>,
+        right: Box<Term<Scope>>,
     },
     Struct {
         functor: String,
-        args: Vec<Term>,
+        args: Vec<Term<Scope>>,
         span: Option<SrcSpan>,
     },
     List {
-        items: Vec<Term>,
-        tail: Option<Box<Term>>,
+        items: Vec<Term<Scope>>,
+        tail: Option<Box<Term<Scope>>>,
     },
     /// 文字列リテラル: "hello" など
     StringLit {
@@ -177,8 +172,8 @@ pub enum Term {
     },
     /// 遅延された算術制約: left = right を後で検証
     Constraint {
-        left: Box<Term>,
-        right: Box<Term>,
+        left: Box<Term<Scope>>,
+        right: Box<Term<Scope>>,
     },
     /// 名前を持たない範囲値。unifyのrange intersection結果としてenvに格納される。
     Range {
@@ -187,12 +182,15 @@ pub enum Term {
     },
 }
 
-/// Number または AnnotatedVar(default_value付き) から FixedPoint と SrcSpan を取り出す。
-/// manifold_bridge 等で数値を期待する箇所はこの関数を使うことで、AnnotatedVar の処理漏れを防ぐ。
-pub fn term_as_fixed_point(term: &Term) -> Option<(FixedPoint, Option<SrcSpan>)> {
+pub type ScopeId = usize;
+
+pub type ScopedTerm = Term<ScopeId>;
+
+/// Number または Var(default_value付き) から FixedPoint と SrcSpan を取り出す。
+pub fn term_as_fixed_point<S>(term: &Term<S>) -> Option<(FixedPoint, Option<SrcSpan>)> {
     match term {
         Term::Number { value } => Some((*value, None)),
-        Term::AnnotatedVar {
+        Term::Var {
             default_value: Some(value),
             span,
             ..
@@ -201,9 +199,9 @@ pub fn term_as_fixed_point(term: &Term) -> Option<(FixedPoint, Option<SrcSpan>)>
     }
 }
 
-pub fn first_span(term: &Term) -> Option<SrcSpan> {
+pub fn first_span<S>(term: &Term<S>) -> Option<SrcSpan> {
     match term {
-        Term::Var { span, .. } | Term::AnnotatedVar { span, .. } | Term::Struct { span, .. } => {
+        Term::Var { span, .. } | Term::Struct { span, .. } => {
             if span.is_some() {
                 return *span;
             }
@@ -231,26 +229,27 @@ pub fn first_span(term: &Term) -> Option<SrcSpan> {
     }
 }
 
-impl PartialEq for Term {
+impl<Scope: PartialEq> PartialEq for Term<Scope> {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Term::Var { name: n1, .. }, Term::Var { name: n2, .. }) => n1 == n2,
             (
-                Term::AnnotatedVar {
+                Term::Var {
                     name: n1,
+                    scope: s1,
                     default_value: dv1,
                     min: min1,
                     max: max1,
                     ..
                 },
-                Term::AnnotatedVar {
+                Term::Var {
                     name: n2,
+                    scope: s2,
                     default_value: dv2,
                     min: min2,
                     max: max2,
                     ..
                 },
-            ) => n1 == n2 && dv1 == dv2 && min1 == min2 && max1 == max2,
+            ) => n1 == n2 && s1 == s2 && dv1 == dv2 && min1 == min2 && max1 == max2,
             (Term::Number { value: v1 }, Term::Number { value: v2 }) => v1 == v2,
             (
                 Term::InfixExpr {
@@ -313,9 +312,12 @@ impl PartialEq for Term {
 }
 
 #[derive(Clone, PartialEq)]
-pub enum Clause {
-    Fact(Term),
-    Rule { head: Term, body: Vec<Term> },
+pub enum Clause<Scope = ()> {
+    Fact(Term<Scope>),
+    Rule {
+        head: Term<Scope>,
+        body: Vec<Term<Scope>>,
+    },
     Use {
         path: String,
         expose: Vec<String>,
@@ -323,11 +325,12 @@ pub enum Clause {
     },
 }
 
-impl fmt::Debug for Term {
+pub type ScopedClause = Clause<ScopeId>;
+
+impl<Scope> fmt::Debug for Term<Scope> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Term::Var { name, .. } => write!(f, "{}", name),
-            Term::AnnotatedVar {
+            Term::Var {
                 name,
                 default_value,
                 min,
@@ -390,31 +393,29 @@ impl fmt::Debug for Term {
             Term::Constraint { left, right } => {
                 write!(f, "constraint({:?} = {:?})", left, right)
             }
-            Term::Range { min, max } => {
-                match (min, max) {
-                    (Some(lo), Some(hi)) => write!(
-                        f,
-                        "range({} {} _ {} {})",
-                        lo.value,
-                        if lo.inclusive { "<=" } else { "<" },
-                        if hi.inclusive { "<=" } else { "<" },
-                        hi.value
-                    ),
-                    (Some(lo), None) => write!(
-                        f,
-                        "range({} {} _)",
-                        lo.value,
-                        if lo.inclusive { "<=" } else { "<" }
-                    ),
-                    (None, Some(hi)) => write!(
-                        f,
-                        "range(_ {} {})",
-                        if hi.inclusive { "<=" } else { "<" },
-                        hi.value
-                    ),
-                    (None, None) => write!(f, "range(_)"),
-                }
-            }
+            Term::Range { min, max } => match (min, max) {
+                (Some(lo), Some(hi)) => write!(
+                    f,
+                    "range({} {} _ {} {})",
+                    lo.value,
+                    if lo.inclusive { "<=" } else { "<" },
+                    if hi.inclusive { "<=" } else { "<" },
+                    hi.value
+                ),
+                (Some(lo), None) => write!(
+                    f,
+                    "range({} {} _)",
+                    lo.value,
+                    if lo.inclusive { "<=" } else { "<" }
+                ),
+                (None, Some(hi)) => write!(
+                    f,
+                    "range(_ {} {})",
+                    if hi.inclusive { "<=" } else { "<" },
+                    hi.value
+                ),
+                (None, None) => write!(f, "range(_)"),
+            },
         }
     }
 }
@@ -446,35 +447,46 @@ impl fmt::Debug for Clause {
 
 /// Termコンストラクタ
 pub fn var(name: String) -> Term {
-    Term::Var { name, span: None }
+    Term::Var {
+        name,
+        scope: (),
+        default_value: None,
+        min: None,
+        max: None,
+        span: None,
+    }
 }
 
 pub fn var_with_span(name: String, span: SrcSpan) -> Term {
     Term::Var {
         name,
+        scope: (),
+        default_value: None,
+        min: None,
+        max: None,
         span: Some(span),
     }
 }
 
 pub fn default_var(name: String, value: FixedPoint) -> Term {
-    Term::AnnotatedVar {
+    Term::Var {
         name,
+        scope: (),
         default_value: Some(value),
         min: None,
         max: None,
         span: None,
-
     }
 }
 
 pub fn default_var_with_span(name: String, value: FixedPoint, span: SrcSpan) -> Term {
-    Term::AnnotatedVar {
+    Term::Var {
         name,
+        scope: (),
         default_value: Some(value),
         min: None,
         max: None,
         span: Some(span),
-
     }
 }
 
@@ -485,27 +497,27 @@ pub fn annotated_var(
     max: Option<Bound>,
     span: Option<SrcSpan>,
 ) -> Term {
-    Term::AnnotatedVar {
+    Term::Var {
         name,
+        scope: (),
         default_value,
         min,
         max,
         span,
-
     }
 }
 
-pub fn number(value: FixedPoint) -> Term {
+pub fn number<S>(value: FixedPoint) -> Term<S> {
     Term::Number { value }
 }
 
-pub fn number_int(value: i64) -> Term {
+pub fn number_int<S>(value: i64) -> Term<S> {
     Term::Number {
         value: FixedPoint::from_int(value),
     }
 }
 
-pub fn struc(functor: String, args: Vec<Term>) -> Term {
+pub fn struc<S>(functor: String, args: Vec<Term<S>>) -> Term<S> {
     Term::Struct {
         functor,
         args,
@@ -513,7 +525,7 @@ pub fn struc(functor: String, args: Vec<Term>) -> Term {
     }
 }
 
-pub fn struc_with_span(functor: String, args: Vec<Term>, span: SrcSpan) -> Term {
+pub fn struc_with_span<S>(functor: String, args: Vec<Term<S>>, span: SrcSpan) -> Term<S> {
     Term::Struct {
         functor,
         args,
@@ -521,7 +533,7 @@ pub fn struc_with_span(functor: String, args: Vec<Term>, span: SrcSpan) -> Term 
     }
 }
 
-pub fn list(items: Vec<Term>, tail: Option<Term>) -> Term {
+pub fn list<S>(items: Vec<Term<S>>, tail: Option<Term<S>>) -> Term<S> {
     Term::List {
         items,
         tail: tail.map(Box::new),
@@ -529,21 +541,21 @@ pub fn list(items: Vec<Term>, tail: Option<Term>) -> Term {
 }
 
 pub fn range_var(name: String, min: Option<Bound>, max: Option<Bound>) -> Term {
-    Term::AnnotatedVar {
+    Term::Var {
         name,
+        scope: (),
         default_value: None,
         min,
         max,
         span: None,
-
     }
 }
 
-pub fn string_lit(value: String) -> Term {
+pub fn string_lit<S>(value: String) -> Term<S> {
     Term::StringLit { value }
 }
 
-pub fn arith_expr(op: ArithOp, left: Term, right: Term) -> Term {
+pub fn arith_expr<S>(op: ArithOp, left: Term<S>, right: Term<S>) -> Term<S> {
     Term::InfixExpr {
         op,
         left: Box::new(left),
@@ -659,18 +671,26 @@ fn fixed_number(input: &str) -> PResult<'_, FixedPoint> {
         recognize((opt(char('-')), digit1, opt(pair(char('.'), digit1)))),
         |s: &str| -> Result<FixedPoint, String> {
             if let Some(dot_pos) = s.find('.') {
-                let int_part: i64 = s[..dot_pos].parse().map_err(|e: std::num::ParseIntError| e.to_string())?;
+                let int_part: i64 = s[..dot_pos]
+                    .parse()
+                    .map_err(|e: std::num::ParseIntError| e.to_string())?;
                 let frac_str = &s[dot_pos + 1..];
-                let frac_val: i64 = frac_str.parse().map_err(|e: std::num::ParseIntError| e.to_string())?;
+                let frac_val: i64 = frac_str
+                    .parse()
+                    .map_err(|e: std::num::ParseIntError| e.to_string())?;
                 let frac = match frac_str.len() {
                     1 => frac_val * 10,
                     2 => frac_val,
                     _ => return Err("fractional part must be 1-2 digits".to_string()),
                 };
                 let sign = if s.starts_with('-') { -1 } else { 1 };
-                Ok(FixedPoint::from_hundredths(sign * (int_part.abs() * 100 + frac)))
+                Ok(FixedPoint::from_hundredths(
+                    sign * (int_part.abs() * 100 + frac),
+                ))
             } else {
-                let v: i64 = s.parse().map_err(|e: std::num::ParseIntError| e.to_string())?;
+                let v: i64 = s
+                    .parse()
+                    .map_err(|e: std::num::ParseIntError| e.to_string())?;
                 Ok(FixedPoint::from_int(v))
             }
         },
@@ -766,7 +786,9 @@ fn annotated_var_term(input: &str) -> PResult<'_, Term> {
             value: val,
             inclusive: true,
         }),
-        Some((_, CompOp::Gt | CompOp::Ge)) => return Ok((input, var_with_span(name, var_name_span))),
+        Some((_, CompOp::Gt | CompOp::Ge)) => {
+            return Ok((input, var_with_span(name, var_name_span)));
+        }
         None => None,
     };
 
@@ -779,16 +801,21 @@ fn annotated_var_term(input: &str) -> PResult<'_, Term> {
             value: val,
             inclusive: true,
         }),
-        Some((CompOp::Gt | CompOp::Ge, _)) => return Ok((input, var_with_span(name, var_name_span))),
+        Some((CompOp::Gt | CompOp::Ge, _)) => {
+            return Ok((input, var_with_span(name, var_name_span)));
+        }
         None => None,
     };
 
     let (default_value, span) = match default_with_span {
         Some((val, sp)) => (Some(val), Some(sp)),
-        None => (None, Some(SrcSpan {
-            start: var_name_span.end,
-            end: var_name_span.end,
-        })),
+        None => (
+            None,
+            Some(SrcSpan {
+                start: var_name_span.end,
+                end: var_name_span.end,
+            }),
+        ),
     };
 
     if min.is_none() && max.is_none() && default_value.is_none() {
@@ -796,8 +823,9 @@ fn annotated_var_term(input: &str) -> PResult<'_, Term> {
     } else {
         Ok((
             input,
-            Term::AnnotatedVar {
+            Term::Var {
                 name,
+                scope: (),
                 default_value,
                 min,
                 max,
@@ -829,15 +857,16 @@ fn atom_term(input: &str) -> PResult<'_, Term> {
     let (input, _) = space_or_comment0(input)?;
     let start = input.as_ptr() as usize;
     let (input, name) = atom(input)?;
-    let (input, name) = if let Ok((input2, _)) = tag::<&str, &str, nom::error::Error<&str>>("::")(input) {
-        if let Ok((input2, qualified_name)) = atom(input2) {
-            (input2, format!("{}::{}", name, qualified_name))
+    let (input, name) =
+        if let Ok((input2, _)) = tag::<&str, &str, nom::error::Error<&str>>("::")(input) {
+            if let Ok((input2, qualified_name)) = atom(input2) {
+                (input2, format!("{}::{}", name, qualified_name))
+            } else {
+                (input, name)
+            }
         } else {
             (input, name)
-        }
-    } else {
-        (input, name)
-    };
+        };
     let (input, maybe_args) = opt(ws(delimited(
         char('('),
         separated_list0(ws(char(',')), term),
@@ -912,23 +941,21 @@ fn pipe_expr(input: &str) -> PResult<'_, Term> {
     let (input, first) = simple_term(input)?;
     let (input, rest) = many0(preceded(ws(tag("|>")), simple_term)).parse(input)?;
 
-    let result = rest.into_iter().fold(first, |acc, rhs| {
-        match rhs {
+    let result = rest.into_iter().fold(first, |acc, rhs| match rhs {
+        Term::Struct {
+            functor,
+            args,
+            span,
+        } => {
+            let mut new_args = vec![acc];
+            new_args.extend(args);
             Term::Struct {
                 functor,
-                args,
+                args: new_args,
                 span,
-            } => {
-                let mut new_args = vec![acc];
-                new_args.extend(args);
-                Term::Struct {
-                    functor,
-                    args: new_args,
-                    span,
-                }
             }
-            other => struc("apply".to_string(), vec![other, acc]),
         }
+        other => struc("apply".to_string(), vec![other, acc]),
     });
     Ok((input, result))
 }
@@ -964,11 +991,14 @@ fn use_directive(input: &str) -> PResult<'_, Clause> {
     let (input, _) = char('(').parse(input)?;
     let (input, path) = ws(delimited(
         char('"'),
-        map(many0(alt((
-            map(tag("\\\""), |_: &str| '"'),
-            map(tag("\\\\"), |_: &str| '\\'),
-            nom::character::complete::none_of("\"\\"),
-        ))), |chars| chars.into_iter().collect::<String>()),
+        map(
+            many0(alt((
+                map(tag("\\\""), |_: &str| '"'),
+                map(tag("\\\\"), |_: &str| '\\'),
+                nom::character::complete::none_of("\"\\"),
+            ))),
+            |chars| chars.into_iter().collect::<String>(),
+        ),
         cut(char('"')),
     ))
     .parse(input)?;
@@ -1011,12 +1041,6 @@ pub fn program(input: &str) -> PResult<'_, Vec<Clause>> {
 fn fix_spans_in_term(term: &mut Term, base: usize) {
     match term {
         Term::Var { span, .. } => {
-            if let Some(s) = span {
-                s.start = s.start.wrapping_sub(base);
-                s.end = s.end.wrapping_sub(base);
-            }
-        }
-        Term::AnnotatedVar { span, .. } => {
             if let Some(s) = span {
                 s.start = s.start.wrapping_sub(base);
                 s.end = s.end.wrapping_sub(base);
@@ -1117,17 +1141,7 @@ pub struct QueryParam {
 
 fn collect_query_params_from_term(term: &Term, params: &mut Vec<QueryParam>) {
     match term {
-        Term::Var { name, .. } if name != "_" => {
-            if !params.iter().any(|p| p.name == *name) {
-                params.push(QueryParam {
-                    name: name.clone(),
-                    min: None,
-                    max: None,
-                    default_value: None,
-                });
-            }
-        }
-        Term::AnnotatedVar {
+        Term::Var {
             name,
             default_value,
             min,
@@ -1160,7 +1174,7 @@ fn collect_query_params_from_term(term: &Term, params: &mut Vec<QueryParam>) {
     }
 }
 
-/// execute結果のtermからAnnotatedVar/Varを走査してQueryParamsを抽出する。
+/// execute結果のtermからVar/Varを走査してQueryParamsを抽出する。
 /// unificationでhead側rangeが伝播済みの状態を想定。
 pub fn collect_query_params(terms: &[Term]) -> Vec<QueryParam> {
     let mut params = Vec::new();
@@ -1170,7 +1184,7 @@ pub fn collect_query_params(terms: &[Term]) -> Vec<QueryParam> {
     params
 }
 
-/// term内のVar/AnnotatedVarを値で置換する
+/// term内のVar/Varを値で置換する
 pub fn substitute_query_params(
     terms: &[Term],
     values: &std::collections::HashMap<String, f64>,
@@ -1180,16 +1194,18 @@ pub fn substitute_query_params(
 
 fn substitute_term(term: &Term, values: &std::collections::HashMap<String, f64>) -> Term {
     match term {
-        Term::Var { name, .. } if name != "_" => {
+        Term::Var {
+            name, min, max, span, ..
+        } if name != "_" => {
             if let Some(&val) = values.get(name) {
-                number(FixedPoint::from_f64(val))
-            } else {
-                term.clone()
-            }
-        }
-        Term::AnnotatedVar { name, .. } if name != "_" => {
-            if let Some(&val) = values.get(name) {
-                number(FixedPoint::from_f64(val))
+                Term::Var {
+                    name: name.clone(),
+                    scope: (),
+                    default_value: Some(FixedPoint::from_f64(val)),
+                    min: *min,
+                    max: *max,
+                    span: *span,
+                }
             } else {
                 term.clone()
             }
@@ -1205,9 +1221,7 @@ fn substitute_term(term: &Term, values: &std::collections::HashMap<String, f64>)
         },
         Term::List { items, tail } => Term::List {
             items: items.iter().map(|i| substitute_term(i, values)).collect(),
-            tail: tail
-                .as_ref()
-                .map(|t| Box::new(substitute_term(t, values))),
+            tail: tail.as_ref().map(|t| Box::new(substitute_term(t, values))),
         },
         Term::InfixExpr { op, left, right } => Term::InfixExpr {
             op: *op,
@@ -1268,7 +1282,10 @@ mod tests {
             qs,
             vec![struc(
                 "member".to_string(),
-                vec![v("X"), list(vec![number_int(1), number_int(2), number_int(3)], None),],
+                vec![
+                    v("X"),
+                    list(vec![number_int(1), number_int(2), number_int(3)], None),
+                ],
             )]
         );
     }
@@ -1332,7 +1349,7 @@ mod tests {
                     assert_eq!(functor, "hoge");
                     assert_eq!(args.len(), 1);
                     match &args[0] {
-                        Term::AnnotatedVar { name, min, max, .. } => {
+                        Term::Var { name, min, max, .. } => {
                             assert_eq!(name, "X");
                             assert_eq!(
                                 *min,
@@ -1349,7 +1366,7 @@ mod tests {
                                 })
                             );
                         }
-                        _ => panic!("Expected AnnotatedVar, got {:?}", args[0]),
+                        _ => panic!("Expected Var, got {:?}", args[0]),
                     }
                 }
                 _ => panic!("Expected Struct"),
@@ -1366,7 +1383,7 @@ mod tests {
         match clause {
             Clause::Fact(term) => match &term {
                 Term::Struct { args, .. } => match &args[0] {
-                    Term::AnnotatedVar { name, min, max, .. } => {
+                    Term::Var { name, min, max, .. } => {
                         assert_eq!(name, "X");
                         assert_eq!(
                             *min,
@@ -1383,7 +1400,7 @@ mod tests {
                             })
                         );
                     }
-                    _ => panic!("Expected AnnotatedVar"),
+                    _ => panic!("Expected Var"),
                 },
                 _ => panic!("Expected Struct"),
             },
@@ -1399,7 +1416,7 @@ mod tests {
         match clause {
             Clause::Fact(term) => match &term {
                 Term::Struct { args, .. } => match &args[0] {
-                    Term::AnnotatedVar { name, min, max, .. } => {
+                    Term::Var { name, min, max, .. } => {
                         assert_eq!(name, "X");
                         assert_eq!(
                             *min,
@@ -1410,7 +1427,7 @@ mod tests {
                         );
                         assert_eq!(*max, None);
                     }
-                    _ => panic!("Expected AnnotatedVar"),
+                    _ => panic!("Expected Var"),
                 },
                 _ => panic!("Expected Struct"),
             },
@@ -1426,7 +1443,7 @@ mod tests {
         match clause {
             Clause::Fact(term) => match &term {
                 Term::Struct { args, .. } => match &args[0] {
-                    Term::AnnotatedVar { name, min, max, .. } => {
+                    Term::Var { name, min, max, .. } => {
                         assert_eq!(name, "X");
                         assert_eq!(*min, None);
                         assert_eq!(
@@ -1437,7 +1454,7 @@ mod tests {
                             })
                         );
                     }
-                    _ => panic!("Expected AnnotatedVar"),
+                    _ => panic!("Expected Var"),
                 },
                 _ => panic!("Expected Struct"),
             },
@@ -1455,7 +1472,7 @@ mod tests {
                 match &head {
                     Term::Struct { functor, args, .. } => {
                         assert_eq!(functor, "hoge");
-                        assert!(matches!(&args[0], Term::AnnotatedVar { .. }));
+                        assert!(matches!(&args[0], Term::Var { .. }));
                     }
                     _ => panic!("Expected Struct"),
                 }
@@ -1473,11 +1490,15 @@ mod tests {
         match clause {
             Clause::Fact(term) => match &term {
                 Term::Struct { args, .. } => match &args[0] {
-                    Term::AnnotatedVar { name, default_value, .. } => {
+                    Term::Var {
+                        name,
+                        default_value,
+                        ..
+                    } => {
                         assert_eq!(name, "X");
                         assert_eq!(*default_value, Some(FixedPoint::from_int(25)));
                     }
-                    _ => panic!("Expected AnnotatedVar"),
+                    _ => panic!("Expected Var"),
                 },
                 _ => panic!("Expected Struct"),
             },
@@ -1538,11 +1559,15 @@ mod tests {
         let (_, clause) = clause_parser(src).unwrap();
         match clause {
             Clause::Fact(Term::Struct { args, .. }) => match &args[0] {
-                Term::AnnotatedVar { name, default_value, .. } => {
+                Term::Var {
+                    name,
+                    default_value,
+                    ..
+                } => {
                     assert_eq!(name, "X");
                     assert_eq!(*default_value, Some(FixedPoint::from_hundredths(250)));
                 }
-                _ => panic!("Expected AnnotatedVar"),
+                _ => panic!("Expected Var"),
             },
             _ => panic!("Expected Fact"),
         }
@@ -1656,7 +1681,7 @@ mod tests {
                     assert_eq!(functor, "hoge");
                     assert_eq!(args.len(), 1);
                     match &args[0] {
-                        Term::AnnotatedVar {
+                        Term::Var {
                             name,
                             default_value,
                             min,
@@ -1682,7 +1707,7 @@ mod tests {
                             );
                             assert!(span.is_some());
                         }
-                        _ => panic!("Expected AnnotatedVar, got {:?}", args[0]),
+                        _ => panic!("Expected Var, got {:?}", args[0]),
                     }
                 }
                 _ => panic!("Expected Struct"),
@@ -1699,7 +1724,7 @@ mod tests {
         match clause {
             Clause::Fact(term) => match &term {
                 Term::Struct { args, .. } => match &args[0] {
-                    Term::AnnotatedVar {
+                    Term::Var {
                         name,
                         default_value,
                         min,
@@ -1711,7 +1736,7 @@ mod tests {
                         assert!(min.unwrap().inclusive);
                         assert!(max.unwrap().inclusive);
                     }
-                    _ => panic!("Expected AnnotatedVar"),
+                    _ => panic!("Expected Var"),
                 },
                 _ => panic!("Expected Struct"),
             },
@@ -1739,7 +1764,7 @@ mod tests {
         values.insert("X".to_string(), 5.0);
         values.insert("Y".to_string(), 10.0);
         let substituted = substitute_query_params(&terms, &values);
-        assert_eq!(format!("{:?}", substituted), "[main(5, 10)]");
+        assert_eq!(format!("{:?}", substituted), "[main(X=5, Y=10)]");
     }
 
     #[test]
