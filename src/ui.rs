@@ -26,71 +26,103 @@ pub struct BomJsonFileContents;
 pub struct SessionSaveContents;
 pub struct SessionLoadContents;
 
-#[derive(Serialize, Deserialize, Clone, Default, Debug, PartialEq)]
-pub enum PreviewModeType {
-    #[default]
-    Normal,
-    Collision,
+fn default_entity() -> Entity {
+    Entity::PLACEHOLDER
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-pub struct PreviewState {
+pub struct PreviewBase {
     #[serde(default)]
-    pub preview_id: Option<u64>,
+    pub preview_id: u64,
     pub query: String,
     pub zoom: f32,
     pub rotate_x: f64,
     pub rotate_y: f64,
     #[serde(default)]
-    pub control_point_overrides: HashMap<String, f64>,
-    #[serde(default)]
-    pub query_param_overrides: HashMap<String, f64>,
-    #[serde(default)]
-    pub mode: PreviewModeType,
-    #[serde(default)]
-    pub order: Option<usize>,
+    pub order: usize,
+    #[serde(skip)]
+    pub render_layer: usize,
+    #[serde(skip)]
+    pub mesh_handle: Handle<Mesh>,
+    #[serde(skip)]
+    pub rt_image: Handle<Image>,
+    #[serde(skip)]
+    pub rt_size: UVec2,
+    #[serde(skip, default = "default_entity")]
+    pub camera_entity: Entity,
+    #[serde(skip)]
+    pub base_camera_distance: f32,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
-pub struct SessionPreviews {
-    pub previews: Vec<PreviewState>,
+impl PreviewBase {
+    pub fn new(preview_id: u64, query: String) -> Self {
+        Self {
+            preview_id,
+            query,
+            zoom: 10.0,
+            rotate_x: 0.0,
+            rotate_y: 0.0,
+            order: 0,
+            render_layer: 0,
+            mesh_handle: Handle::default(),
+            rt_image: Handle::default(),
+            rt_size: UVec2::ZERO,
+            camera_entity: Entity::PLACEHOLDER,
+            base_camera_distance: 0.0,
+        }
+    }
 }
 
-pub enum PreviewMode {
+#[derive(Component, Serialize, Deserialize, Clone)]
+pub enum PreviewTarget {
     Normal {
-        evaluated_nodes: Vec<EvaluatedNode>,
-        control_points: Vec<ControlPoint>,
-        control_sphere_entities: Vec<Entity>,
+        base: PreviewBase,
+        #[serde(default)]
         control_point_overrides: HashMap<String, f64>,
-        query_params: Vec<QueryParam>,
+        #[serde(default)]
         query_param_overrides: HashMap<String, f64>,
+        #[serde(skip)]
+        evaluated_nodes: Vec<EvaluatedNode>,
+        #[serde(skip)]
+        control_points: Vec<ControlPoint>,
+        #[serde(skip)]
+        control_sphere_entities: Vec<Entity>,
+        #[serde(skip)]
+        query_params: Vec<QueryParam>,
+        #[serde(skip)]
         bom_entries: Vec<BomEntry>,
+        #[serde(skip)]
         cp_generate_mode: bool,
     },
     Collision {
+        base: PreviewBase,
+        #[serde(skip)]
         collision_mesh_entities: Vec<Entity>,
+        #[serde(skip)]
         collision_count: usize,
+        #[serde(skip)]
         part_count: usize,
     },
 }
 
-/// Preview target data stored as a component on the root entity.
-/// When this entity is despawned, all children are automatically removed.
-#[derive(Component)]
-pub struct PreviewTarget {
-    pub preview_id: u64,
-    pub render_layer: usize,
-    pub mesh_handle: Handle<Mesh>,
-    pub rt_image: Handle<Image>,
-    pub rt_size: UVec2,
-    pub camera_entity: Entity,
-    pub base_camera_distance: f32,
-    pub zoom: f32,
-    pub rotate_x: f64,
-    pub rotate_y: f64,
-    pub query: String,
-    pub mode: PreviewMode,
-    pub order: usize,
+impl PreviewTarget {
+    pub fn base(&self) -> &PreviewBase {
+        match self {
+            PreviewTarget::Normal { base, .. } => base,
+            PreviewTarget::Collision { base, .. } => base,
+        }
+    }
+    pub fn base_mut(&mut self) -> &mut PreviewBase {
+        match self {
+            PreviewTarget::Normal { base, .. } => base,
+            PreviewTarget::Collision { base, .. } => base,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct SessionPreviews {
+    pub previews: Vec<PreviewTarget>,
 }
 
 impl Plugin for UiPlugin {
@@ -178,7 +210,7 @@ pub struct ErrorMessage {
 pub struct CurrentFilePath(pub Option<PathBuf>);
 
 #[derive(Resource, Default, Clone, Deref, DerefMut)]
-pub struct PendingPreviewStates(pub HashMap<u64, PreviewState>);
+pub struct PendingPreviewStates(pub HashMap<u64, PreviewTarget>);
 
 #[derive(Resource)]
 pub struct AutoReload {
