@@ -14,6 +14,12 @@ pub mod update;
 
 pub struct UiPlugin;
 
+#[derive(Resource, Default)]
+pub struct UnsavedChanges {
+    pub dirty: bool,
+    pub show_close_dialog: bool,
+}
+
 pub struct ThreeMfFileContents;
 pub struct BomJsonFileContents;
 
@@ -90,8 +96,9 @@ impl Plugin for UiPlugin {
         use setup::*;
         use update::{
             auto_reload_system, bom_json_saved, egui_ui, handle_cadhr_lang_output,
-            on_collision_preview_generated, on_preview_generated, restore_last_session,
-            session_loaded, session_saved, threemf_saved, update_preview_transforms,
+            handle_close_requested, on_collision_preview_generated, on_preview_generated,
+            restore_last_session, session_loaded, session_saved, threemf_saved,
+            update_preview_transforms,
         };
 
         app.add_plugins(EguiPlugin::default())
@@ -122,6 +129,7 @@ impl Plugin for UiPlugin {
                     threemf_saved,
                     bom_json_saved,
                     auto_reload_system,
+                    handle_close_requested,
                 ),
             )
             .insert_resource(EditorText("main :- cube(10, 20, 30).".to_string()))
@@ -131,7 +139,8 @@ impl Plugin for UiPlugin {
             .insert_resource(CurrentFilePath::default())
             .insert_resource(PendingPreviewStates::default())
             .insert_resource(SelectedControlPoint::default())
-            .insert_resource(AutoReload::default());
+            .insert_resource(AutoReload::default())
+            .insert_resource(UnsavedChanges::default());
     }
 }
 

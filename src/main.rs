@@ -14,10 +14,17 @@ use bevy_async_ecs::AsyncEcsPlugin;
 
 pub fn main() {
     App::new()
-        .add_plugins(DefaultPlugins.set(LogPlugin {
-            filter: "info,bevy=info,wgpu=warn,cadhr=trace".into(),
-            ..default()
-        }))
+        .add_plugins(
+            DefaultPlugins
+                .set(LogPlugin {
+                    filter: "info,bevy=info,wgpu=warn,cadhr=trace".into(),
+                    ..default()
+                })
+                .set(bevy::window::WindowPlugin {
+                    close_when_requested: false,
+                    ..default()
+                }),
+        )
         .add_plugins(AsyncEcsPlugin)
         .add_message::<GeneratePreviewRequest>()
         .add_message::<PreviewGenerated>()

@@ -15,10 +15,10 @@ fn snap_to_char_boundary(s: &str, idx: usize) -> usize {
     }
 }
 use crate::ui::{
-    AutoReload, BomJsonFileContents, CurrentFilePath, EditorText, ErrorMessage,
-    FreeRenderLayers, NextPreviewId, PendingPreviewStates, PreviewMode, PreviewModeType,
-    PreviewState, PreviewTarget, SelectedControlPoint, SessionLoadContents, SessionPreviews,
-    SessionSaveContents, ThreeMfFileContents,
+    AutoReload, BomJsonFileContents, CurrentFilePath, EditorText, ErrorMessage, FreeRenderLayers,
+    NextPreviewId, PendingPreviewStates, PreviewMode, PreviewModeType, PreviewState, PreviewTarget,
+    SelectedControlPoint, SessionLoadContents, SessionPreviews, SessionSaveContents,
+    ThreeMfFileContents, UnsavedChanges,
 };
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::RenderTarget;
@@ -34,6 +34,12 @@ use cadhr_lang::manifold_bridge::{EvaluatedNode, collect_tracked_spans_from_expr
 use cadhr_lang::parse::SrcSpan;
 use std::io::Cursor;
 use std::path::Path;
+
+#[derive(bevy::ecs::system::SystemParam)]
+pub(super) struct PreviewEvents<'w> {
+    generate: MessageWriter<'w, GeneratePreviewRequest>,
+    collision: MessageWriter<'w, GenerateCollisionPreviewRequest>,
+}
 
 const MAX_CAMERA_PITCH: f64 = std::f64::consts::FRAC_PI_2 - 0.001;
 const MIN_CAMERA_PITCH: f64 = -MAX_CAMERA_PITCH;
@@ -68,12 +74,13 @@ pub(super) fn egui_ui(
     mut next_preview_id: ResMut<NextPreviewId>,
     mut pending_states: ResMut<PendingPreviewStates>,
     mut free_render_layers: ResMut<FreeRenderLayers>,
-    mut ev_generate: MessageWriter<GeneratePreviewRequest>,
-    mut ev_collision: MessageWriter<GenerateCollisionPreviewRequest>,
+    mut preview_events: PreviewEvents,
     mut selected_cp: ResMut<SelectedControlPoint>,
     mut error_message: ResMut<ErrorMessage>,
     mut current_file_path: ResMut<CurrentFilePath>,
     mut auto_reload: ResMut<AutoReload>,
+    mut unsaved: ResMut<UnsavedChanges>,
+    mut app_exit: MessageWriter<bevy::app::AppExit>,
     meshes: Res<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
@@ -88,6 +95,7 @@ pub(super) fn egui_ui(
                         ui.close();
                         **editor_text = "main :- cube(10, 20, 30).".to_string();
                         **current_file_path = None;
+                        unsaved.dirty = false;
                         **next_preview_id = 0;
                         pending_states.clear();
                         *selected_cp = SelectedControlPoint::default();
@@ -111,6 +119,7 @@ pub(super) fn egui_ui(
                                 &editor_text,
                                 preview_targets.iter().map(|(_, t)| t.as_ref()),
                             );
+                            unsaved.dirty = false;
                         } else {
                             commands
                                 .dialog()
@@ -166,7 +175,7 @@ pub(super) fn egui_ui(
                             mode: PreviewModeType::Normal,
                         },
                     );
-                    ev_generate.write(GeneratePreviewRequest {
+                    preview_events.generate.write(GeneratePreviewRequest {
                         preview_id,
                         database: (**editor_text).clone(),
                         query: query_text,
@@ -192,7 +201,7 @@ pub(super) fn egui_ui(
                             mode: PreviewModeType::Collision,
                         },
                     );
-                    ev_collision.write(GenerateCollisionPreviewRequest {
+                    preview_events.collision.write(GenerateCollisionPreviewRequest {
                         preview_id,
                         database: (**editor_text).clone(),
                         query: query_text,
@@ -205,8 +214,8 @@ pub(super) fn egui_ui(
                             target,
                             &editor_text,
                             &current_file_path,
-                            &mut ev_generate,
-                            &mut ev_collision,
+                            &mut preview_events.generate,
+                            &mut preview_events.collision,
                         );
                     }
                 }
@@ -288,12 +297,15 @@ pub(super) fn egui_ui(
                     }
                     ui.fonts_mut(|f| f.layout_job(job))
                 };
-                left.add_sized(
+                let editor_response = left.add_sized(
                     size_left,
                     egui::TextEdit::multiline(&mut **editor_text)
                         .hint_text("ここにテキストを入力してください")
                         .layouter(&mut layouter),
                 );
+                if editor_response.changed() {
+                    unsaved.dirty = true;
+                }
 
                 // Right half: show and edit previews
                 let right = &mut columns[1];
@@ -387,7 +399,7 @@ pub(super) fn egui_ui(
                     {
                         match &target.mode {
                             PreviewMode::Normal { control_point_overrides, query_param_overrides, .. } => {
-                                ev_generate.write(GeneratePreviewRequest {
+                                preview_events.generate.write(GeneratePreviewRequest {
                                     preview_id,
                                     database: (**editor_text).clone(),
                                     query,
@@ -397,7 +409,7 @@ pub(super) fn egui_ui(
                                 });
                             }
                             PreviewMode::Collision { .. } => {
-                                ev_collision.write(GenerateCollisionPreviewRequest {
+                                preview_events.collision.write(GenerateCollisionPreviewRequest {
                                     preview_id,
                                     database: (**editor_text).clone(),
                                     query,
@@ -414,7 +426,7 @@ pub(super) fn egui_ui(
                         .find(|(_, t)| t.preview_id == preview_id)
                     {
                         if let PreviewMode::Normal { control_point_overrides, query_param_overrides, .. } = &target.mode {
-                            ev_generate.write(GeneratePreviewRequest {
+                            preview_events.generate.write(GeneratePreviewRequest {
                                 preview_id,
                                 database: (**editor_text).clone(),
                                 query: target.query.clone(),
@@ -432,7 +444,7 @@ pub(super) fn egui_ui(
                         .find(|(_, t)| t.preview_id == preview_id)
                     {
                         if let PreviewMode::Normal { control_point_overrides, query_param_overrides, .. } = &target.mode {
-                            ev_generate.write(GeneratePreviewRequest {
+                            preview_events.generate.write(GeneratePreviewRequest {
                                 preview_id,
                                 database: (**editor_text).clone(),
                                 query: target.query.clone(),
@@ -507,13 +519,59 @@ pub(super) fn egui_ui(
                             target,
                             &editor_text,
                             &current_file_path,
-                            &mut ev_generate,
-                            &mut ev_collision,
+                            &mut preview_events.generate,
+                            &mut preview_events.collision,
                         );
                     }
                 }
             });
         });
+    }
+
+    if unsaved.show_close_dialog {
+        if let Ok(ctx) = contexts.ctx_mut() {
+            egui::Window::new("Unsaved Changes")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.label("There are unsaved changes. Do you want to save before quitting?");
+                    ui.horizontal(|ui| {
+                        if ui.button("Save & Quit").clicked() {
+                            if let Some(ref path) = **current_file_path {
+                                save_session(
+                                    path,
+                                    &editor_text,
+                                    preview_targets.iter().map(|(_, t)| t.as_ref()),
+                                );
+                            }
+                            unsaved.show_close_dialog = false;
+                            app_exit.write(bevy::app::AppExit::Success);
+                        }
+                        if ui.button("Quit without Saving").clicked() {
+                            unsaved.show_close_dialog = false;
+                            app_exit.write(bevy::app::AppExit::Success);
+                        }
+                        if ui.button("Cancel").clicked() {
+                            unsaved.show_close_dialog = false;
+                        }
+                    });
+                });
+        }
+    }
+}
+
+pub(super) fn handle_close_requested(
+    mut close_events: MessageReader<bevy::window::WindowCloseRequested>,
+    mut unsaved: ResMut<UnsavedChanges>,
+    mut app_exit: MessageWriter<bevy::app::AppExit>,
+) {
+    for _ev in close_events.read() {
+        if unsaved.dirty {
+            unsaved.show_close_dialog = true;
+        } else {
+            app_exit.write(bevy::app::AppExit::Success);
+        }
     }
 }
 
@@ -1721,12 +1779,14 @@ pub(super) fn session_saved(
     mut current_file_path: ResMut<CurrentFilePath>,
     editor_text: Res<EditorText>,
     preview_query: Query<&PreviewTarget>,
+    mut unsaved: ResMut<UnsavedChanges>,
 ) {
     for ev in ev_saved.read() {
         if ev.result.is_ok() {
             save_session(&ev.path, &editor_text, preview_query.iter());
             **current_file_path = Some(ev.path.clone());
             save_last_session_path(&ev.path);
+            unsaved.dirty = false;
         }
     }
 }
@@ -1742,9 +1802,11 @@ pub(super) fn session_loaded(
     mut next_preview_id: ResMut<NextPreviewId>,
     mut pending_states: ResMut<PendingPreviewStates>,
     mut free_render_layers: ResMut<FreeRenderLayers>,
+    mut unsaved: ResMut<UnsavedChanges>,
 ) {
     for ev in ev_picked.read() {
         if let Some((db_content, previews)) = load_session(&ev.path) {
+            unsaved.dirty = false;
             **editor_text = db_content;
             **current_file_path = Some(ev.path.clone());
             save_last_session_path(&ev.path);
@@ -1829,6 +1891,7 @@ pub(super) fn restore_last_session(
     mut ev_collision: MessageWriter<GenerateCollisionPreviewRequest>,
     mut next_preview_id: ResMut<NextPreviewId>,
     mut pending_states: ResMut<PendingPreviewStates>,
+    mut unsaved: ResMut<UnsavedChanges>,
 ) {
     let path_str = match std::fs::read_to_string(LAST_SESSION_PATH_FILE) {
         Ok(s) => s,
@@ -1841,6 +1904,7 @@ pub(super) fn restore_last_session(
     if let Some((db_content, previews)) = load_session(&path) {
         **editor_text = db_content;
         **current_file_path = Some(path);
+        unsaved.dirty = false;
 
         for mut preview_state in previews.previews {
             let preview_id = if let Some(saved_id) = preview_state.preview_id {
