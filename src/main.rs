@@ -5,7 +5,10 @@ mod cadhr_lang_wrapper;
 mod events;
 mod ui;
 use crate::cadhr_lang_wrapper::CadhrLangPlugin;
-use crate::events::{CadhrLangOutput, GeneratePreviewRequest, PreviewGenerated};
+use crate::events::{
+    CadhrLangOutput, CollisionPreviewGenerated, GenerateCollisionPreviewRequest,
+    GeneratePreviewRequest, PreviewGenerated,
+};
 use crate::ui::UiPlugin;
 use bevy_async_ecs::AsyncEcsPlugin;
 
@@ -18,6 +21,8 @@ pub fn main() {
         .add_plugins(AsyncEcsPlugin)
         .add_message::<GeneratePreviewRequest>()
         .add_message::<PreviewGenerated>()
+        .add_message::<GenerateCollisionPreviewRequest>()
+        .add_message::<CollisionPreviewGenerated>()
         .add_message::<CadhrLangOutput>()
         .add_plugins((UiPlugin, CadhrLangPlugin))
         .run();

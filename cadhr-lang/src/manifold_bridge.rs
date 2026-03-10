@@ -197,6 +197,15 @@ fn term_to_tracked_f64(term: &Term) -> Option<TrackedF64> {
             value: fp.to_f64(),
             source_span: *span,
         }),
+        Term::AnnotatedVar {
+            min: Some(lo),
+            max: Some(hi),
+            span,
+            ..
+        } => Some(TrackedF64 {
+            value: (lo.value.to_f64() + hi.value.to_f64()) / 2.0,
+            source_span: *span,
+        }),
         Term::AnnotatedVar { span, .. } => Some(TrackedF64 {
             value: 0.0,
             source_span: *span,
@@ -390,6 +399,18 @@ impl<'a> Args<'a> {
             });
         }
         match &self.args[i] {
+            Term::AnnotatedVar {
+                min: Some(lo),
+                max: Some(hi),
+                span,
+                ..
+            } => {
+                let mid = (lo.value.to_f64() + hi.value.to_f64()) / 2.0;
+                Ok(TrackedF64 {
+                    value: mid,
+                    source_span: *span,
+                })
+            }
             Term::Var { name, .. } | Term::AnnotatedVar { name, .. } => {
                 Err(ConversionError::UnboundVariable(name.clone()))
             }

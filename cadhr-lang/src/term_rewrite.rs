@@ -43,7 +43,6 @@ fn resolve_inner(term: &Term, env: &Env, depth: usize) -> Term {
             min,
             max,
             span,
-            editable,
         } if name != "_" => match env.get(name) {
             Some(Term::Number { value: new_val }) => Term::AnnotatedVar {
                 name: name.clone(),
@@ -51,7 +50,6 @@ fn resolve_inner(term: &Term, env: &Env, depth: usize) -> Term {
                 min: *min,
                 max: *max,
                 span: *span,
-                editable: *editable,
             },
             Some(Term::Range {
                 min: r_min,
@@ -62,7 +60,6 @@ fn resolve_inner(term: &Term, env: &Env, depth: usize) -> Term {
                 min: intersect_min(*min, *r_min),
                 max: intersect_max(*max, *r_max),
                 span: *span,
-                editable: *editable,
             },
             Some(val) => resolve_inner(val, env, depth + 1),
             None => term.clone(),
@@ -1040,7 +1037,8 @@ fn resolve_builtin_arg(
         Term::Number { .. }
         | Term::Var { .. }
         | Term::AnnotatedVar { .. }
-        | Term::StringLit { .. } => Ok(term),
+        | Term::StringLit { .. }
+        | Term::Range { .. } => Ok(term),
         Term::List { items, tail } => {
             let resolved_items = items
                 .into_iter()
@@ -1126,6 +1124,60 @@ fn resolve_builtin_fact_args(
         args: resolved_args,
         span,
     })
+}
+
+/// query termをDB内のrule headと引数位置で対応させ、head側のrange情報をQueryParamに伝播する。
+pub fn discover_query_param_ranges(
+    db: &[Clause],
+    params: &mut [crate::parse::QueryParam],
+    query_terms: &[Term],
+) {
+    for query_term in query_terms {
+        let (q_functor, q_args) = match query_term {
+            Term::Struct {
+                functor, args, ..
+            } => (functor.as_str(), args.as_slice()),
+            _ => continue,
+        };
+
+        for clause in db.iter() {
+            let head = match clause {
+                Clause::Fact(t) => t,
+                Clause::Rule { head, .. } => head,
+                Clause::Use { .. } => continue,
+            };
+
+            let (h_functor, h_args) = match head {
+                Term::Struct {
+                    functor, args, ..
+                } => (functor.as_str(), args.as_slice()),
+                _ => continue,
+            };
+
+            if q_functor != h_functor || q_args.len() != h_args.len() {
+                continue;
+            }
+
+            for (q_arg, h_arg) in q_args.iter().zip(h_args.iter()) {
+                let param_name = match q_arg {
+                    Term::Var { name, .. } if name != "_" => name,
+                    Term::AnnotatedVar { name, .. } if name != "_" => name,
+                    _ => continue,
+                };
+
+                let (h_min, h_max) = match h_arg {
+                    Term::AnnotatedVar { min, max, .. } => (*min, *max),
+                    _ => continue,
+                };
+
+                if let Some(param) = params.iter_mut().find(|p| p.name == *param_name) {
+                    param.min = intersect_min(param.min, h_min);
+                    param.max = intersect_max(param.max, h_max);
+                }
+            }
+            break;
+        }
+    }
 }
 
 pub fn execute(db: &mut [Clause], query: Vec<Term>) -> Result<Vec<Term>, RewriteError> {
@@ -1880,5 +1932,61 @@ mod tests {
     fn constraint_propagation_across_body() {
         let resolved = run_success("f(X+Y, Y) :- h(X), g(Y). h(4). g(3).", "f(7, 3).");
         assert_eq!(resolved, vec!["h(4)", "g(3)"]);
+    }
+
+    #[test]
+    fn query_head_range_intersection() {
+        use crate::parse::{Bound, collect_query_params};
+        let db_src = "main(0<X<5) :- cube(X, 10, 10).";
+        let query_src = "main(0<X<10).";
+        let db = database(db_src).expect("failed to parse db");
+        let (_, query_terms) = query(query_src).expect("failed to parse query");
+        let mut params = collect_query_params(&query_terms);
+        discover_query_param_ranges(&db, &mut params, &query_terms);
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].name, "X");
+        // head側0<X<5とquery側0<X<10のintersection → 0<X<5
+        assert_eq!(
+            params[0].max.unwrap(),
+            Bound {
+                value: FixedPoint::from_int(5),
+                inclusive: false,
+            }
+        );
+        assert_eq!(
+            params[0].min.unwrap(),
+            Bound {
+                value: FixedPoint::from_int(0),
+                inclusive: false,
+            }
+        );
+    }
+
+    #[test]
+    fn query_head_range_propagation_from_head_only() {
+        use crate::parse::{Bound, collect_query_params};
+        let db_src = "main(0<X<10) :- cube(X, 10, 10).";
+        let query_src = "main(X).";
+        let db = database(db_src).expect("failed to parse db");
+        let (_, query_terms) = query(query_src).expect("failed to parse query");
+        let mut params = collect_query_params(&query_terms);
+        assert_eq!(params.len(), 1);
+        assert!(params[0].min.is_none());
+        discover_query_param_ranges(&db, &mut params, &query_terms);
+        // head側のrangeが伝播
+        assert_eq!(
+            params[0].min.unwrap(),
+            Bound {
+                value: FixedPoint::from_int(0),
+                inclusive: false,
+            }
+        );
+        assert_eq!(
+            params[0].max.unwrap(),
+            Bound {
+                value: FixedPoint::from_int(10),
+                inclusive: false,
+            }
+        );
     }
 }

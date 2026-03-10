@@ -1,5 +1,6 @@
 pub mod bezier;
 pub mod bom;
+pub mod collision;
 pub mod constraint;
 pub mod manifold_bridge;
 pub mod module;

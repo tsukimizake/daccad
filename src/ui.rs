@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use bevy_file_dialog::prelude::*;
 use cadhr_lang::bom::BomEntry;
 use cadhr_lang::manifold_bridge::{ControlPoint, EvaluatedNode};
+use cadhr_lang::parse::QueryParam;
 use derived_deref::{Deref, DerefMut};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -19,6 +20,13 @@ pub struct BomJsonFileContents;
 pub struct SessionSaveContents;
 pub struct SessionLoadContents;
 
+#[derive(Serialize, Deserialize, Clone, Default, Debug, PartialEq)]
+pub enum PreviewModeType {
+    #[default]
+    Normal,
+    Collision,
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct PreviewState {
     #[serde(default)]
@@ -29,6 +37,10 @@ pub struct PreviewState {
     pub rotate_y: f64,
     #[serde(default)]
     pub control_point_overrides: HashMap<String, f64>,
+    #[serde(default)]
+    pub query_param_overrides: HashMap<String, f64>,
+    #[serde(default)]
+    pub mode: PreviewModeType,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -36,9 +48,27 @@ pub struct SessionPreviews {
     pub previews: Vec<PreviewState>,
 }
 
+pub enum PreviewMode {
+    Normal {
+        evaluated_nodes: Vec<EvaluatedNode>,
+        control_points: Vec<ControlPoint>,
+        control_sphere_entities: Vec<Entity>,
+        control_point_overrides: HashMap<String, f64>,
+        query_params: Vec<QueryParam>,
+        query_param_overrides: HashMap<String, f64>,
+        bom_entries: Vec<BomEntry>,
+        cp_generate_mode: bool,
+    },
+    Collision {
+        collision_mesh_entities: Vec<Entity>,
+        collision_count: usize,
+        part_count: usize,
+    },
+}
+
 /// Preview target data stored as a component on the root entity.
 /// When this entity is despawned, all children are automatically removed.
-#[derive(Component, Clone)]
+#[derive(Component)]
 pub struct PreviewTarget {
     pub preview_id: u64,
     pub render_layer: usize,
@@ -51,12 +81,7 @@ pub struct PreviewTarget {
     pub rotate_x: f64,
     pub rotate_y: f64,
     pub query: String,
-    pub evaluated_nodes: Vec<EvaluatedNode>,
-    pub control_points: Vec<ControlPoint>,
-    pub control_sphere_entities: Vec<Entity>,
-    pub control_point_overrides: HashMap<String, f64>,
-    pub bom_entries: Vec<BomEntry>,
-    pub cp_generate_mode: bool,
+    pub mode: PreviewMode,
 }
 
 impl Plugin for UiPlugin {
@@ -65,8 +90,8 @@ impl Plugin for UiPlugin {
         use setup::*;
         use update::{
             auto_reload_system, bom_json_saved, egui_ui, handle_cadhr_lang_output,
-            on_preview_generated, restore_last_session, session_loaded, session_saved,
-            threemf_saved, update_preview_transforms,
+            on_collision_preview_generated, on_preview_generated, restore_last_session,
+            session_loaded, session_saved, threemf_saved, update_preview_transforms,
         };
 
         app.add_plugins(EguiPlugin::default())
@@ -84,18 +109,27 @@ impl Plugin for UiPlugin {
                 Update,
                 (
                     on_preview_generated,
+                    on_collision_preview_generated,
                     update_preview_transforms,
                     handle_cadhr_lang_output,
                 ),
             )
-            .add_systems(Update, (session_saved, session_loaded, threemf_saved, bom_json_saved, auto_reload_system))
+            .add_systems(
+                Update,
+                (
+                    session_saved,
+                    session_loaded,
+                    threemf_saved,
+                    bom_json_saved,
+                    auto_reload_system,
+                ),
+            )
             .insert_resource(EditorText("main :- cube(10, 20, 30).".to_string()))
             .insert_resource(NextPreviewId::default())
             .insert_resource(FreeRenderLayers::default())
             .insert_resource(ErrorMessage::default())
             .insert_resource(CurrentFilePath::default())
             .insert_resource(PendingPreviewStates::default())
-            .insert_resource(EditableVars::default())
             .insert_resource(SelectedControlPoint::default())
             .insert_resource(AutoReload::default());
     }
@@ -109,9 +143,6 @@ pub struct SelectedControlPoint {
 
 #[derive(Resource, Default, Clone, Deref, DerefMut)]
 struct EditorText(pub String);
-
-#[derive(Resource, Default, Clone, Deref, DerefMut)]
-pub struct EditableVars(pub Vec<cadhr_lang::parse::VarInfo>);
 
 #[derive(Resource, Default, Deref, DerefMut)]
 pub struct NextPreviewId(u64);

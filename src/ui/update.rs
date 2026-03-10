@@ -1,4 +1,7 @@
-use crate::events::{CadhrLangOutput, GeneratePreviewRequest, PreviewGenerated};
+use crate::events::{
+    CadhrLangOutput, CollisionPreviewGenerated, GenerateCollisionPreviewRequest,
+    GeneratePreviewRequest, PreviewGenerated,
+};
 
 fn snap_to_char_boundary(s: &str, idx: usize) -> usize {
     if idx >= s.len() {
@@ -12,10 +15,10 @@ fn snap_to_char_boundary(s: &str, idx: usize) -> usize {
     }
 }
 use crate::ui::{
-    AutoReload, BomJsonFileContents, CurrentFilePath, EditableVars, EditorText, ErrorMessage,
-    FreeRenderLayers, NextPreviewId, PendingPreviewStates, PreviewState, PreviewTarget,
-    SelectedControlPoint, SessionLoadContents, SessionPreviews, SessionSaveContents,
-    ThreeMfFileContents,
+    AutoReload, BomJsonFileContents, CurrentFilePath, EditorText, ErrorMessage,
+    FreeRenderLayers, NextPreviewId, PendingPreviewStates, PreviewMode, PreviewModeType,
+    PreviewState, PreviewTarget, SelectedControlPoint, SessionLoadContents, SessionPreviews,
+    SessionSaveContents, ThreeMfFileContents,
 };
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::RenderTarget;
@@ -44,11 +47,6 @@ const CONTROL_SPHERE_HIT_RADIUS: f64 = 1.5;
 const CONTROL_SPHERE_COLOR: Color = Color::srgb(1.0, 0.9, 0.0);
 const CONTROL_SPHERE_SELECTED_COLOR: Color = Color::srgb(0.0, 1.0, 0.5);
 const CAMERA_DISTANCE_FACTOR: f32 = 2.4 * 3.0;
-fn refresh_editable_vars(editor_text: &str, editable_vars: &mut EditableVars) {
-    if let Ok(clauses) = cadhr_lang::parse::database(editor_text) {
-        **editable_vars = cadhr_lang::parse::collect_editable_vars(&clauses);
-    }
-}
 const MIN_CAMERA_DISTANCE: f32 = 5.0;
 
 fn camera_distance_from_mesh(mesh: &Mesh) -> f32 {
@@ -71,7 +69,7 @@ pub(super) fn egui_ui(
     mut pending_states: ResMut<PendingPreviewStates>,
     mut free_render_layers: ResMut<FreeRenderLayers>,
     mut ev_generate: MessageWriter<GeneratePreviewRequest>,
-    mut editable_vars: ResMut<EditableVars>,
+    mut ev_collision: MessageWriter<GenerateCollisionPreviewRequest>,
     mut selected_cp: ResMut<SelectedControlPoint>,
     mut error_message: ResMut<ErrorMessage>,
     mut current_file_path: ResMut<CurrentFilePath>,
@@ -79,11 +77,6 @@ pub(super) fn egui_ui(
     meshes: Res<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    // Parse editable vars if not yet populated (e.g. initial load, session load)
-    if editable_vars.is_empty() && !editor_text.is_empty() {
-        refresh_editable_vars(&editor_text, &mut editable_vars);
-    }
-
     // Collect preview targets into a Vec for indexed access
     let mut preview_targets: Vec<(Entity, Mut<PreviewTarget>)> = preview_query.iter_mut().collect();
     // Toolbar: menu bar + preview buttons
@@ -97,7 +90,6 @@ pub(super) fn egui_ui(
                         **current_file_path = None;
                         **next_preview_id = 0;
                         pending_states.clear();
-                        editable_vars.clear();
                         *selected_cp = SelectedControlPoint::default();
                         *error_message = ErrorMessage::default();
                         for (target_id, target) in preview_targets.drain(..) {
@@ -170,6 +162,8 @@ pub(super) fn egui_ui(
                             rotate_x: 0.0,
                             rotate_y: 0.0,
                             control_point_overrides: Default::default(),
+                            query_param_overrides: Default::default(),
+                            mode: PreviewModeType::Normal,
                         },
                     );
                     ev_generate.write(GeneratePreviewRequest {
@@ -178,17 +172,42 @@ pub(super) fn egui_ui(
                         query: query_text,
                         include_paths: (**current_file_path).iter().cloned().collect(),
                         control_point_overrides: Default::default(),
+                        query_param_overrides: Default::default(),
+                    });
+                }
+                if ui.button("Add Collision").clicked() {
+                    let preview_id = **next_preview_id;
+                    **next_preview_id += 1;
+                    let query_text = "main.".to_string();
+                    pending_states.insert(
+                        preview_id,
+                        PreviewState {
+                            preview_id: Some(preview_id),
+                            query: query_text.clone(),
+                            zoom: DEFAULT_ZOOM,
+                            rotate_x: 0.0,
+                            rotate_y: 0.0,
+                            control_point_overrides: Default::default(),
+                            query_param_overrides: Default::default(),
+                            mode: PreviewModeType::Collision,
+                        },
+                    );
+                    ev_collision.write(GenerateCollisionPreviewRequest {
+                        preview_id,
+                        database: (**editor_text).clone(),
+                        query: query_text,
+                        include_paths: (**current_file_path).iter().cloned().collect(),
                     });
                 }
                 if ui.button("Update Previews").clicked() {
                     for (_, target) in preview_targets.iter() {
-                        ev_generate.write(GeneratePreviewRequest {
-                            preview_id: target.preview_id,
-                            database: (**editor_text).clone(),
-                            query: target.query.clone(),
-                            include_paths: (**current_file_path).iter().cloned().collect(),
-                            control_point_overrides: target.control_point_overrides.clone(),
-                        });
+                        send_update_for_target(
+                            target,
+                            &editor_text,
+                            &current_file_path,
+                            &mut ev_generate,
+                            &mut ev_collision,
+                        );
                     }
                 }
             });
@@ -228,39 +247,6 @@ pub(super) fn egui_ui(
             ui.columns(2, |columns| {
                 // Left half: text area + editable vars panel
                 let left = &mut columns[0];
-
-                // Editable vars sliders at the top of left panel
-                let mut global_var_edits: Vec<(f64, SrcSpan)> = Vec::new();
-                if !editable_vars.is_empty() {
-                    egui::Frame::default()
-                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(80)))
-                        .corner_radius(egui::CornerRadius::same(4))
-                        .inner_margin(egui::Margin::symmetric(6, 4))
-                        .show(left, |ui| {
-                            ui.label("Parameters");
-                            for var_info in editable_vars.iter_mut() {
-                                ui.horizontal(|ui| {
-                                    ui.label(format!("{}:", var_info.name));
-                                    let min_f =
-                                        var_info.min.map(|b| b.value.to_f64()).unwrap_or(-10000.0);
-                                    let max_f =
-                                        var_info.max.map(|b| b.value.to_f64()).unwrap_or(10000.0);
-                                    let mut val = var_info.value.to_f64();
-                                    let changed = ui
-                                        .add(
-                                            egui::DragValue::new(&mut val)
-                                                .speed(0.5)
-                                                .range(min_f..=max_f),
-                                        )
-                                        .changed();
-                                    if changed {
-                                        global_var_edits.push((val, var_info.span));
-                                    }
-                                });
-                            }
-                        });
-                    left.add_space(4.0);
-                }
 
                 // Text editor
                 let size_left = left.available_size();
@@ -302,17 +288,12 @@ pub(super) fn egui_ui(
                     }
                     ui.fonts_mut(|f| f.layout_job(job))
                 };
-                let text_response = left.add_sized(
+                left.add_sized(
                     size_left,
                     egui::TextEdit::multiline(&mut **editor_text)
                         .hint_text("ここにテキストを入力してください")
                         .layouter(&mut layouter),
                 );
-
-                // Refresh editable vars when text changes
-                if text_response.changed() {
-                    refresh_editable_vars(&editor_text, &mut editable_vars);
-                }
 
                 // Right half: show and edit previews
                 let right = &mut columns[1];
@@ -322,6 +303,7 @@ pub(super) fn egui_ui(
                 let mut bom_exports_to_send: Vec<usize> = Vec::new();
                 let mut closes_to_send: Vec<(Entity, usize)> = Vec::new();
                 let mut cp_override_regenerate: Vec<u64> = Vec::new();
+                let mut qp_override_regenerate: Vec<u64> = Vec::new();
                 let mut cp_source_edits: Vec<(f64, SrcSpan)> = Vec::new();
                 egui::ScrollArea::vertical()
                     .auto_shrink([false; 2])
@@ -341,6 +323,7 @@ pub(super) fn egui_ui(
                                         *size,
                                         &mut selected_cp,
                                         &mut cp_override_regenerate,
+                                        &mut qp_override_regenerate,
                                         &mut cp_source_edits,
                                     ) {
                                         PreviewAction::Update => {
@@ -377,37 +360,52 @@ pub(super) fn egui_ui(
                     });
                 // Update control sphere colors based on selection
                 for (_, target) in preview_targets.iter() {
-                    let is_selected_preview = selected_cp.preview_id == Some(target.preview_id);
-                    for (ci, entity) in target.control_sphere_entities.iter().enumerate() {
-                        let selected = is_selected_preview && selected_cp.index == ci;
-                        let color = if selected {
-                            CONTROL_SPHERE_SELECTED_COLOR
-                        } else {
-                            CONTROL_SPHERE_COLOR
-                        };
-                        let mat = materials.add(StandardMaterial {
-                            base_color: color,
-                            unlit: true,
-                            ..default()
-                        });
-                        commands.entity(*entity).insert(MeshMaterial3d(mat));
+                    if let PreviewMode::Normal { control_sphere_entities, .. } = &target.mode {
+                        let is_selected_preview = selected_cp.preview_id == Some(target.preview_id);
+                        for (ci, entity) in control_sphere_entities.iter().enumerate() {
+                            let selected = is_selected_preview && selected_cp.index == ci;
+                            let color = if selected {
+                                CONTROL_SPHERE_SELECTED_COLOR
+                            } else {
+                                CONTROL_SPHERE_COLOR
+                            };
+                            let mat = materials.add(StandardMaterial {
+                                base_color: color,
+                                unlit: true,
+                                ..default()
+                            });
+                            commands.entity(*entity).insert(MeshMaterial3d(mat));
+                        }
                     }
                 }
 
                 // Send update requests
                 for (preview_id, query) in updates_to_send {
-                    let overrides = preview_targets
+                    if let Some((_, target)) = preview_targets
                         .iter()
                         .find(|(_, t)| t.preview_id == preview_id)
-                        .map(|(_, t)| t.control_point_overrides.clone())
-                        .unwrap_or_default();
-                    ev_generate.write(GeneratePreviewRequest {
-                        preview_id,
-                        database: (**editor_text).clone(),
-                        query,
-                        include_paths: (**current_file_path).iter().cloned().collect(),
-                        control_point_overrides: overrides,
-                    });
+                    {
+                        match &target.mode {
+                            PreviewMode::Normal { control_point_overrides, query_param_overrides, .. } => {
+                                ev_generate.write(GeneratePreviewRequest {
+                                    preview_id,
+                                    database: (**editor_text).clone(),
+                                    query,
+                                    include_paths: (**current_file_path).iter().cloned().collect(),
+                                    control_point_overrides: control_point_overrides.clone(),
+                                    query_param_overrides: query_param_overrides.clone(),
+                                });
+                            }
+                            PreviewMode::Collision { .. } => {
+                                ev_collision.write(GenerateCollisionPreviewRequest {
+                                    preview_id,
+                                    database: (**editor_text).clone(),
+                                    query,
+                                    include_paths: (**current_file_path).iter().cloned().collect(),
+                                });
+                            }
+                        }
+                    }
                 }
                 // Regenerate previews that had control point overrides changed
                 for preview_id in cp_override_regenerate {
@@ -415,13 +413,34 @@ pub(super) fn egui_ui(
                         .iter()
                         .find(|(_, t)| t.preview_id == preview_id)
                     {
-                        ev_generate.write(GeneratePreviewRequest {
-                            preview_id,
-                            database: (**editor_text).clone(),
-                            query: target.query.clone(),
-                            include_paths: (**current_file_path).iter().cloned().collect(),
-                            control_point_overrides: target.control_point_overrides.clone(),
-                        });
+                        if let PreviewMode::Normal { control_point_overrides, query_param_overrides, .. } = &target.mode {
+                            ev_generate.write(GeneratePreviewRequest {
+                                preview_id,
+                                database: (**editor_text).clone(),
+                                query: target.query.clone(),
+                                include_paths: (**current_file_path).iter().cloned().collect(),
+                                control_point_overrides: control_point_overrides.clone(),
+                                query_param_overrides: query_param_overrides.clone(),
+                            });
+                        }
+                    }
+                }
+                // Regenerate previews that had query param overrides changed
+                for preview_id in qp_override_regenerate {
+                    if let Some((_, target)) = preview_targets
+                        .iter()
+                        .find(|(_, t)| t.preview_id == preview_id)
+                    {
+                        if let PreviewMode::Normal { control_point_overrides, query_param_overrides, .. } = &target.mode {
+                            ev_generate.write(GeneratePreviewRequest {
+                                preview_id,
+                                database: (**editor_text).clone(),
+                                query: target.query.clone(),
+                                include_paths: (**current_file_path).iter().cloned().collect(),
+                                control_point_overrides: control_point_overrides.clone(),
+                                query_param_overrides: query_param_overrides.clone(),
+                            });
+                        }
                     }
                 }
                 // Handle export requests
@@ -446,19 +465,21 @@ pub(super) fn egui_ui(
                         .save_file::<ThreeMfFileContents>(threemf_data);
                 }
                 for idx in bom_exports_to_send {
-                    if let Some(target) = preview_targets.get(idx) {
-                        let json = cadhr_lang::bom::bom_entries_to_json(&target.1.bom_entries);
-                        let filename = target.1.query.clone() + "_bom";
-                        let file_name = export_3mf_file_name(
-                            current_file_path.as_ref().as_ref().map(|p| p.as_path()),
-                            &filename,
-                        )
-                        .replace(".3mf", ".json");
-                        commands
-                            .dialog()
-                            .add_filter("JSON", &["json"])
-                            .set_file_name(file_name)
-                            .save_file::<BomJsonFileContents>(json.into_bytes());
+                    if let Some((_, target)) = preview_targets.get(idx) {
+                        if let PreviewMode::Normal { bom_entries, .. } = &target.mode {
+                            let json = cadhr_lang::bom::bom_entries_to_json(bom_entries);
+                            let filename = target.query.clone() + "_bom";
+                            let file_name = export_3mf_file_name(
+                                current_file_path.as_ref().as_ref().map(|p| p.as_path()),
+                                &filename,
+                            )
+                            .replace(".3mf", ".json");
+                            commands
+                                .dialog()
+                                .add_filter("JSON", &["json"])
+                                .set_file_name(file_name)
+                                .save_file::<BomJsonFileContents>(json.into_bytes());
+                        }
                     }
                 }
                 for (entity, render_layer) in closes_to_send {
@@ -466,17 +487,14 @@ pub(super) fn egui_ui(
                     commands.entity(entity).despawn();
                 }
 
-                // Merge control point source edits
-                global_var_edits.extend(cp_source_edits);
-                // Apply source text edits from parameters panel and control points
-                if !global_var_edits.is_empty() {
-                    global_var_edits.sort_by(|a, b| b.1.start.cmp(&a.1.start));
-                    for (new_val, span) in &global_var_edits {
+                // Apply control point source edits
+                if !cp_source_edits.is_empty() {
+                    cp_source_edits.sort_by(|a, b| b.1.start.cmp(&a.1.start));
+                    for (new_val, span) in &cp_source_edits {
                         let src = &mut **editor_text;
                         if span.end <= src.len() {
                             if span.start == span.end {
-                                // zero-length span: 変数名の直後に @value を挿入
-                                let insert_str = format!("@{}", new_val);
+                                let insert_str = format!("={}", new_val);
                                 src.insert_str(span.start, &insert_str);
                             } else {
                                 let new_val_str = format!("{}", new_val);
@@ -484,19 +502,47 @@ pub(super) fn egui_ui(
                             }
                         }
                     }
-                    refresh_editable_vars(&editor_text, &mut editable_vars);
                     for (_, target) in preview_targets.iter() {
-                        ev_generate.write(GeneratePreviewRequest {
-                            preview_id: target.preview_id,
-                            database: (**editor_text).clone(),
-                            query: target.query.clone(),
-                            include_paths: (**current_file_path).iter().cloned().collect(),
-                            control_point_overrides: target.control_point_overrides.clone(),
-                        });
+                        send_update_for_target(
+                            target,
+                            &editor_text,
+                            &current_file_path,
+                            &mut ev_generate,
+                            &mut ev_collision,
+                        );
                     }
                 }
             });
         });
+    }
+}
+
+fn send_update_for_target(
+    target: &PreviewTarget,
+    editor_text: &EditorText,
+    current_file_path: &CurrentFilePath,
+    ev_generate: &mut MessageWriter<GeneratePreviewRequest>,
+    ev_collision: &mut MessageWriter<GenerateCollisionPreviewRequest>,
+) {
+    match &target.mode {
+        PreviewMode::Normal { control_point_overrides, query_param_overrides, .. } => {
+            ev_generate.write(GeneratePreviewRequest {
+                preview_id: target.preview_id,
+                database: (**editor_text).clone(),
+                query: target.query.clone(),
+                include_paths: (**current_file_path).iter().cloned().collect(),
+                control_point_overrides: control_point_overrides.clone(),
+                query_param_overrides: query_param_overrides.clone(),
+            });
+        }
+        PreviewMode::Collision { .. } => {
+            ev_collision.write(GenerateCollisionPreviewRequest {
+                preview_id: target.preview_id,
+                database: (**editor_text).clone(),
+                query: target.query.clone(),
+                include_paths: (**current_file_path).iter().cloned().collect(),
+            });
+        }
     }
 }
 
@@ -505,17 +551,17 @@ fn update_control_spheres(
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<StandardMaterial>>,
     parent_entity: Entity,
-    target: &mut PreviewTarget,
+    control_points: &[cadhr_lang::manifold_bridge::ControlPoint],
+    control_sphere_entities: &mut Vec<Entity>,
     both_layers: &RenderLayers,
 ) {
-    let cp_count = target.control_points.len();
-    let existing_count = target.control_sphere_entities.len();
+    let cp_count = control_points.len();
+    let existing_count = control_sphere_entities.len();
 
-    // Update positions of existing spheres
-    for (i, cp) in target.control_points.iter().enumerate() {
+    for (i, cp) in control_points.iter().enumerate() {
         if i < existing_count {
             commands
-                .entity(target.control_sphere_entities[i])
+                .entity(control_sphere_entities[i])
                 .insert(Transform::from_xyz(
                     cp.x.value as f32,
                     cp.y.value as f32,
@@ -524,7 +570,6 @@ fn update_control_spheres(
         }
     }
 
-    // Spawn new spheres if count increased
     let sphere_mesh = meshes.add(Sphere::new(CONTROL_SPHERE_RADIUS));
     let sphere_material = materials.add(StandardMaterial {
         base_color: CONTROL_SPHERE_COLOR,
@@ -533,7 +578,7 @@ fn update_control_spheres(
     });
 
     for i in existing_count..cp_count {
-        let cp = &target.control_points[i];
+        let cp = &control_points[i];
         let child_id = commands
             .spawn((
                 Mesh3d(sphere_mesh.clone()),
@@ -543,14 +588,13 @@ fn update_control_spheres(
             ))
             .id();
         commands.entity(parent_entity).add_child(child_id);
-        target.control_sphere_entities.push(child_id);
+        control_sphere_entities.push(child_id);
     }
 
-    // Despawn extras if count decreased
     for i in cp_count..existing_count {
-        commands.entity(target.control_sphere_entities[i]).despawn();
+        commands.entity(control_sphere_entities[i]).despawn();
     }
-    target.control_sphere_entities.truncate(cp_count);
+    control_sphere_entities.truncate(cp_count);
 }
 
 // Handle generated previews: spawn entities and track UI state
@@ -572,22 +616,26 @@ pub(super) fn on_preview_generated(
                 if let Some(mesh_asset) = meshes.get_mut(&target.mesh_handle) {
                     *mesh_asset = ev.mesh.clone();
                 }
-                target.evaluated_nodes = ev.evaluated_nodes.clone();
-                target.control_points = ev.control_points.clone();
-                target.bom_entries = ev.bom_entries.clone();
                 target.base_camera_distance = camera_distance_from_mesh(&ev.mesh);
 
-                // Update control sphere entities
                 let render_layer = target.render_layer;
-                let both_layers = RenderLayers::from_layers(&[0, render_layer]);
-                update_control_spheres(
-                    &mut commands,
-                    &mut meshes,
-                    &mut materials,
-                    entity,
-                    &mut target,
-                    &both_layers,
-                );
+                if let PreviewMode::Normal { evaluated_nodes, control_points, bom_entries, query_params, control_sphere_entities, .. } = &mut target.mode {
+                    *evaluated_nodes = ev.evaluated_nodes.clone();
+                    *control_points = ev.control_points.clone();
+                    *bom_entries = ev.bom_entries.clone();
+                    *query_params = ev.query_params.clone();
+
+                    let both_layers = RenderLayers::from_layers(&[0, render_layer]);
+                    update_control_spheres(
+                        &mut commands,
+                        &mut meshes,
+                        &mut materials,
+                        entity,
+                        control_points,
+                        control_sphere_entities,
+                        &both_layers,
+                    );
+                }
 
                 updated_existing = true;
                 break;
@@ -772,13 +820,237 @@ pub(super) fn on_preview_generated(
                     rotate_x: pending_state.rotate_x,
                     rotate_y: pending_state.rotate_y,
                     query: ev.query.clone(),
-                    evaluated_nodes: ev.evaluated_nodes.clone(),
-                    control_points: ev.control_points.clone(),
-                    control_sphere_entities,
-                    control_point_overrides: pending_state.control_point_overrides.clone(),
-                    bom_entries: ev.bom_entries.clone(),
-                    cp_generate_mode: false,
+                    mode: PreviewMode::Normal {
+                        evaluated_nodes: ev.evaluated_nodes.clone(),
+                        control_points: ev.control_points.clone(),
+                        control_sphere_entities,
+                        control_point_overrides: pending_state.control_point_overrides.clone(),
+                        query_params: ev.query_params.clone(),
+                        query_param_overrides: pending_state.query_param_overrides.clone(),
+                        bom_entries: ev.bom_entries.clone(),
+                        cp_generate_mode: false,
+                    },
                 }
+            });
+    }
+}
+
+pub(super) fn on_collision_preview_generated(
+    mut ev_generated: MessageReader<CollisionPreviewGenerated>,
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    mut preview_query: Query<(Entity, &mut PreviewTarget)>,
+    mut pending_states: ResMut<PendingPreviewStates>,
+    mut free_render_layers: ResMut<FreeRenderLayers>,
+) {
+    for ev in ev_generated.read() {
+        // Update existing collision preview
+        let mut updated_existing = false;
+        for (entity, mut target) in preview_query.iter_mut() {
+            if target.preview_id == ev.preview_id {
+                if let Some(mesh_asset) = meshes.get_mut(&target.mesh_handle) {
+                    *mesh_asset = ev.combined_mesh.clone();
+                }
+                target.base_camera_distance = camera_distance_from_mesh(&ev.combined_mesh);
+                let render_layer = target.render_layer;
+
+                if let PreviewMode::Collision { collision_mesh_entities, collision_count, part_count } = &mut target.mode {
+                    for e in collision_mesh_entities.drain(..) {
+                        commands.entity(e).despawn();
+                    }
+
+                    let both_layers = RenderLayers::from_layers(&[0, render_layer]);
+                    let collision_material = materials.add(StandardMaterial {
+                        base_color: Color::srgba(1.0, 0.0, 0.0, 0.3),
+                        alpha_mode: AlphaMode::Blend,
+                        ..default()
+                    });
+                    for collision_mesh in &ev.collision_meshes {
+                        let mesh_handle = meshes.add(collision_mesh.clone());
+                        let child_id = commands
+                            .spawn((
+                                Mesh3d(mesh_handle),
+                                MeshMaterial3d(collision_material.clone()),
+                                Transform::default(),
+                                both_layers.clone(),
+                            ))
+                            .id();
+                        commands.entity(entity).add_child(child_id);
+                        collision_mesh_entities.push(child_id);
+                    }
+
+                    *collision_count = ev.collision_meshes.len();
+                    *part_count = ev.part_count;
+                }
+
+                updated_existing = true;
+                break;
+            }
+        }
+        if updated_existing {
+            continue;
+        }
+
+        // Spawn new collision preview
+        let Some(pending_state) = pending_states.remove(&ev.preview_id) else {
+            continue;
+        };
+
+        let mesh_handle = meshes.add(ev.combined_mesh.clone());
+        let material = materials.add(StandardMaterial {
+            base_color: Color::srgb(0.7, 0.2, 0.2),
+            ..default()
+        });
+
+        let rt_size = UVec2::new(512, 384);
+        let size = Extent3d {
+            width: rt_size.x,
+            height: rt_size.y,
+            depth_or_array_layers: 1,
+        };
+        let mut image = Image::new_fill(
+            size,
+            TextureDimension::D2,
+            &[0, 0, 0, 0],
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
+        );
+        image.texture_descriptor.usage = TextureUsages::RENDER_ATTACHMENT
+            | TextureUsages::TEXTURE_BINDING
+            | TextureUsages::COPY_SRC;
+        let rt_image = images.add(image);
+
+        let Some(render_layer) = free_render_layers.pop() else {
+            bevy::log::error!(
+                "No free render layer available for collision preview {}",
+                ev.preview_id
+            );
+            continue;
+        };
+        let layer_only = RenderLayers::layer(render_layer);
+        let both_layers = RenderLayers::from_layers(&[0, render_layer]);
+
+        let camera_distance = camera_distance_from_mesh(&ev.combined_mesh);
+        let initial_zoom = if pending_state.zoom > 0.0 {
+            pending_state.zoom
+        } else {
+            DEFAULT_ZOOM
+        };
+        let cam_pos = Vec3::new(
+            camera_distance * 0.5,
+            camera_distance,
+            camera_distance * 0.5,
+        );
+
+        let axis_length = 20.0;
+        let axis_radius = 0.1;
+        let axis_cylinder = meshes.add(Cylinder::new(axis_radius, axis_length));
+        let x_material = materials.add(StandardMaterial {
+            base_color: Color::srgb(1.0, 0.0, 0.0),
+            unlit: true,
+            ..default()
+        });
+        let y_material = materials.add(StandardMaterial {
+            base_color: Color::srgb(0.0, 1.0, 0.0),
+            unlit: true,
+            ..default()
+        });
+        let z_material = materials.add(StandardMaterial {
+            base_color: Color::srgb(0.0, 0.0, 1.0),
+            unlit: true,
+            ..default()
+        });
+
+        let collision_material = materials.add(StandardMaterial {
+            base_color: Color::srgba(1.0, 0.0, 0.0, 0.3),
+            alpha_mode: AlphaMode::Blend,
+            ..default()
+        });
+
+        let mut camera_entity = Entity::PLACEHOLDER;
+        let mut collision_mesh_entities: Vec<Entity> = Vec::new();
+        commands
+            .spawn((Transform::default(), Visibility::default()))
+            .with_children(|parent| {
+                parent.spawn((
+                    Mesh3d(mesh_handle.clone()),
+                    MeshMaterial3d(material.clone()),
+                    Transform::default(),
+                    both_layers.clone(),
+                ));
+
+                camera_entity = parent
+                    .spawn((
+                        Camera3d::default(),
+                        Camera::default(),
+                        RenderTarget::Image(rt_image.clone().into()),
+                        Transform::from_xyz(cam_pos.x, cam_pos.y, cam_pos.z)
+                            .looking_at(Vec3::ZERO, Vec3::Z),
+                        layer_only.clone(),
+                    ))
+                    .id();
+
+                parent.spawn((
+                    DirectionalLight::default(),
+                    Transform::from_xyz(4.0, 4.0, 8.0).looking_at(Vec3::ZERO, Vec3::Z),
+                    layer_only.clone(),
+                ));
+
+                // Axes
+                parent.spawn((
+                    Mesh3d(axis_cylinder.clone()),
+                    MeshMaterial3d(x_material),
+                    Transform::from_xyz(axis_length / 2.0, 0.0, 0.0)
+                        .with_rotation(Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2)),
+                    both_layers.clone(),
+                ));
+                parent.spawn((
+                    Mesh3d(axis_cylinder.clone()),
+                    MeshMaterial3d(y_material),
+                    Transform::from_xyz(0.0, axis_length / 2.0, 0.0),
+                    both_layers.clone(),
+                ));
+                parent.spawn((
+                    Mesh3d(axis_cylinder.clone()),
+                    MeshMaterial3d(z_material),
+                    Transform::from_xyz(0.0, 0.0, axis_length / 2.0)
+                        .with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)),
+                    both_layers.clone(),
+                ));
+
+                // Collision mesh overlays
+                for collision_mesh in &ev.collision_meshes {
+                    let cmesh_handle = meshes.add(collision_mesh.clone());
+                    let id = parent
+                        .spawn((
+                            Mesh3d(cmesh_handle),
+                            MeshMaterial3d(collision_material.clone()),
+                            Transform::default(),
+                            both_layers.clone(),
+                        ))
+                        .id();
+                    collision_mesh_entities.push(id);
+                }
+            })
+            .insert(PreviewTarget {
+                preview_id: ev.preview_id,
+                render_layer,
+                mesh_handle: mesh_handle.clone(),
+                rt_image: rt_image.clone(),
+                rt_size,
+                camera_entity,
+                base_camera_distance: camera_distance,
+                zoom: initial_zoom,
+                rotate_x: pending_state.rotate_x,
+                rotate_y: pending_state.rotate_y,
+                query: ev.query.clone(),
+                mode: PreviewMode::Collision {
+                    collision_mesh_entities,
+                    collision_count: ev.collision_meshes.len(),
+                    part_count: ev.part_count,
+                },
             });
     }
 }
@@ -1049,6 +1321,7 @@ fn preview_target_ui(
     size: UVec2,
     selected_cp: &mut SelectedControlPoint,
     cp_override_regenerate: &mut Vec<u64>,
+    qp_override_regenerate: &mut Vec<u64>,
     cp_source_edits: &mut Vec<(f64, SrcSpan)>,
 ) -> PreviewAction {
     let mut action = PreviewAction::None;
@@ -1057,33 +1330,92 @@ fn preview_target_ui(
         .corner_radius(egui::CornerRadius::same(6))
         .inner_margin(egui::Margin::symmetric(8, 8))
         .show(ui, |ui| {
-            ui.label(format!("Preview {}", index + 1));
+            let mode_label = match &target.mode {
+                PreviewMode::Normal { .. } => format!("Preview {}", index + 1),
+                PreviewMode::Collision { collision_count, part_count, .. } => {
+                    if *collision_count > 0 {
+                        format!("Collision {} ({} parts, {} collisions)", index + 1, part_count, collision_count)
+                    } else {
+                        format!("Collision {} ({} parts, OK)", index + 1, part_count)
+                    }
+                }
+            };
+            ui.label(mode_label);
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 ui.label("?-");
                 ui.text_edit_singleline(&mut target.query);
-                if ui.button("Update Preview").clicked() {
+                if ui.button("Update").clicked() {
                     action = PreviewAction::Update;
                 }
-                if ui.button("Export 3MF").clicked() {
-                    action = PreviewAction::Export3MF;
-                }
-                if !target.bom_entries.is_empty() && ui.button("Export BOM").clicked() {
-                    action = PreviewAction::ExportBOM;
+                // Normal-mode-specific buttons
+                if let PreviewMode::Normal { bom_entries, control_point_overrides, cp_generate_mode, .. } = &mut target.mode {
+                    if ui.button("Export 3MF").clicked() {
+                        action = PreviewAction::Export3MF;
+                    }
+                    if !bom_entries.is_empty() && ui.button("Export BOM").clicked() {
+                        action = PreviewAction::ExportBOM;
+                    }
+                    if !control_point_overrides.is_empty() && ui.button("Reset CPs").clicked() {
+                        control_point_overrides.clear();
+                        cp_override_regenerate.push(target.preview_id);
+                    }
+                    let cp_label = if *cp_generate_mode { "CP生成 ✓" } else { "CP生成" };
+                    if ui.button(cp_label).clicked() {
+                        *cp_generate_mode = !*cp_generate_mode;
+                    }
                 }
                 if ui.button("Close").clicked() {
                     action = PreviewAction::Close;
                 }
-                if !target.control_point_overrides.is_empty() && ui.button("Reset CPs").clicked() {
-                    target.control_point_overrides.clear();
-                    cp_override_regenerate.push(target.preview_id);
-                }
-                let cp_label = if target.cp_generate_mode { "CP生成 ✓" } else { "CP生成" };
-                if ui.button(cp_label).clicked() {
-                    target.cp_generate_mode = !target.cp_generate_mode;
-                }
             });
-            ui.add_space(4.0);
+            // Query parameters sliders
+            if let PreviewMode::Normal { query_params, query_param_overrides, .. } = &mut target.mode {
+                if !query_params.is_empty() {
+                    egui::Frame::default()
+                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(80)))
+                        .corner_radius(egui::CornerRadius::same(4))
+                        .inner_margin(egui::Margin::symmetric(6, 4))
+                        .show(ui, |ui| {
+                            ui.label("Parameters");
+                            for param in query_params.iter() {
+                                ui.horizontal(|ui| {
+                                    ui.label(format!("{}:", param.name));
+                                    let min_f = param.min.map(|b| {
+                                        if b.inclusive { b.value.to_f64() } else { b.value.to_f64() + 0.01 }
+                                    }).unwrap_or(-10000.0);
+                                    let max_f = param.max.map(|b| {
+                                        if b.inclusive { b.value.to_f64() } else { b.value.to_f64() - 0.01 }
+                                    }).unwrap_or(10000.0);
+                                    let default = param.default_value
+                                        .map(|dv| dv.to_f64())
+                                        .unwrap_or_else(|| {
+                                            match (param.min.as_ref(), param.max.as_ref()) {
+                                                (Some(min), Some(max)) => (min.value.to_f64() + max.value.to_f64()) / 2.0,
+                                                _ => 0.0,
+                                            }
+                                        });
+                                    let mut val = query_param_overrides
+                                        .get(&param.name)
+                                        .copied()
+                                        .unwrap_or(default);
+                                    let changed = ui
+                                        .add(
+                                            egui::DragValue::new(&mut val)
+                                                .speed(0.1)
+                                                .range(min_f..=max_f),
+                                        )
+                                        .changed();
+                                    if changed {
+                                        query_param_overrides.insert(param.name.clone(), val);
+                                        qp_override_regenerate.push(target.preview_id);
+                                    }
+                                });
+                            }
+                        });
+                    ui.add_space(4.0);
+                }
+            }
             // Camera controls (orbit and zoom)
             ui.horizontal(|ui| {
                 target.rotate_x = target.rotate_x.clamp(MIN_CAMERA_PITCH, MAX_CAMERA_PITCH);
@@ -1118,16 +1450,22 @@ fn preview_target_ui(
                 egui::Image::from_texture((tex_id, egui::vec2(w, h))).sense(egui::Sense::click()),
             );
 
-            if image_response.clicked() {
-                if let Some(pos) = image_response.interact_pointer_pos() {
+            // Click handling: compute ray before borrowing mode
+            let click_ray = if image_response.clicked() {
+                image_response.interact_pointer_pos().map(|pos| {
                     let rect = image_response.rect;
                     let u = (pos.x - rect.min.x) / rect.width();
                     let v = (pos.y - rect.min.y) / rect.height();
-                    let (ray_origin, ray_dir) = generate_ray_from_uv(u, v, target);
+                    generate_ray_from_uv(u, v, target)
+                })
+            } else {
+                None
+            };
 
-                    if target.cp_generate_mode {
-                        // CP生成モード: メッシュへのraycastで交差点にcontrol pointを挿入
-                        if let Some((t, _node)) = raycast_evaluated_nodes(&ray_origin, &ray_dir, &target.evaluated_nodes) {
+            if let PreviewMode::Normal { cp_generate_mode, evaluated_nodes, control_points, control_point_overrides, .. } = &mut target.mode {
+                if let Some((ray_origin, ray_dir)) = click_ray {
+                    if *cp_generate_mode {
+                        if let Some((t, _node)) = raycast_evaluated_nodes(&ray_origin, &ray_dir, evaluated_nodes) {
                             let hit = [
                                 ray_origin[0] + t * ray_dir[0],
                                 ray_origin[1] + t * ray_dir[1],
@@ -1135,11 +1473,10 @@ fn preview_target_ui(
                             ];
                             action = PreviewAction::InsertControlPoint(hit[0], hit[1], hit[2]);
                         }
-                    } else if !target.control_points.is_empty() {
-                        // 通常モード: control point選択
+                    } else if !control_points.is_empty() {
                         let sphere_radius = CONTROL_SPHERE_HIT_RADIUS;
                         let mut best_hit: Option<(f64, usize)> = None;
-                        for (ci, cp) in target.control_points.iter().enumerate() {
+                        for (ci, cp) in control_points.iter().enumerate() {
                             let center = [cp.x.value, cp.y.value, cp.z.value];
                             let oc = [
                                 ray_origin[0] - center[0],
@@ -1168,53 +1505,50 @@ fn preview_target_ui(
                         if let Some((_t, ci)) = best_hit {
                             selected_cp.preview_id = Some(target.preview_id);
                             selected_cp.index = ci;
-                        } else {
-                            if selected_cp.preview_id == Some(target.preview_id) {
-                                selected_cp.preview_id = None;
-                            }
+                        } else if selected_cp.preview_id == Some(target.preview_id) {
+                            selected_cp.preview_id = None;
                         }
                     }
                 }
-            }
 
-            // Control point DragValue UI
-            if selected_cp.preview_id == Some(target.preview_id) {
-                if let Some(cp) = target.control_points.get_mut(selected_cp.index) {
-                    ui.add_space(4.0);
-                    let label = cp
-                        .name
-                        .as_deref()
-                        .map(|n| format!("Control: {}", n))
-                        .unwrap_or_else(|| format!("Control {}", selected_cp.index));
-                    ui.label(label);
-                    ui.horizontal(|ui| {
-                        for (axis_idx, (axis_label, tracked)) in
-                            [("X:", &mut cp.x), ("Y:", &mut cp.y), ("Z:", &mut cp.z)]
-                                .iter_mut()
-                                .enumerate()
-                        {
-                            ui.label(*axis_label);
-                            let mut val = cp.var_names[axis_idx]
-                                .as_ref()
-                                .and_then(|vn| target.control_point_overrides.get(vn).copied())
-                                .unwrap_or(tracked.value);
-                            let response = ui.add(egui::DragValue::new(&mut val).speed(0.5));
-                            if response.changed() {
-                                if let Some(ref vname) = cp.var_names[axis_idx] {
-                                    target.control_point_overrides.insert(vname.clone(), val);
-                                }
-                                cp_override_regenerate.push(target.preview_id);
-                            }
-                            if response.drag_stopped() || response.lost_focus() {
-                                if let Some(span) = tracked.source_span {
-                                    cp_source_edits.push((val, span));
+                if selected_cp.preview_id == Some(target.preview_id) {
+                    if let Some(cp) = control_points.get_mut(selected_cp.index) {
+                        ui.add_space(4.0);
+                        let label = cp
+                            .name
+                            .as_deref()
+                            .map(|n| format!("Control: {}", n))
+                            .unwrap_or_else(|| format!("Control {}", selected_cp.index));
+                        ui.label(label);
+                        ui.horizontal(|ui| {
+                            for (axis_idx, (axis_label, tracked)) in
+                                [("X:", &mut cp.x), ("Y:", &mut cp.y), ("Z:", &mut cp.z)]
+                                    .iter_mut()
+                                    .enumerate()
+                            {
+                                ui.label(*axis_label);
+                                let mut val = cp.var_names[axis_idx]
+                                    .as_ref()
+                                    .and_then(|vn| control_point_overrides.get(vn).copied())
+                                    .unwrap_or(tracked.value);
+                                let response = ui.add(egui::DragValue::new(&mut val).speed(0.5));
+                                if response.changed() {
                                     if let Some(ref vname) = cp.var_names[axis_idx] {
-                                        target.control_point_overrides.remove(vname);
+                                        control_point_overrides.insert(vname.clone(), val);
+                                    }
+                                    cp_override_regenerate.push(target.preview_id);
+                                }
+                                if response.drag_stopped() || response.lost_focus() {
+                                    if let Some(span) = tracked.source_span {
+                                        cp_source_edits.push((val, span));
+                                        if let Some(ref vname) = cp.var_names[axis_idx] {
+                                            control_point_overrides.remove(vname);
+                                        }
                                     }
                                 }
                             }
-                        }
-                    });
+                        });
+                    }
                 }
             }
         });
@@ -1282,19 +1616,20 @@ pub(super) fn handle_cadhr_lang_output(
             if let Some(pid) = output.preview_id {
                 for mut target in preview_query.iter_mut() {
                     if target.preview_id == pid {
-                        target.control_point_overrides = target
-                            .control_points
-                            .iter()
-                            .flat_map(|cp| {
-                                [(&cp.x, 0), (&cp.y, 1), (&cp.z, 2)].into_iter().filter_map(
-                                    |(tracked, ai)| {
-                                        cp.var_names[ai]
-                                            .as_ref()
-                                            .map(|vn| (vn.clone(), tracked.value))
-                                    },
-                                )
-                            })
-                            .collect();
+                        if let PreviewMode::Normal { control_point_overrides, control_points, .. } = &mut target.mode {
+                            *control_point_overrides = control_points
+                                .iter()
+                                .flat_map(|cp| {
+                                    [(&cp.x, 0), (&cp.y, 1), (&cp.z, 2)].into_iter().filter_map(
+                                        |(tracked, ai)| {
+                                            cp.var_names[ai]
+                                                .as_ref()
+                                                .map(|vn| (vn.clone(), tracked.value))
+                                        },
+                                    )
+                                })
+                                .collect();
+                        }
                         break;
                     }
                 }
@@ -1337,13 +1672,25 @@ fn save_session<'a>(
 
     let previews = SessionPreviews {
         previews: preview_targets
-            .map(|t| PreviewState {
-                preview_id: Some(t.preview_id),
-                query: t.query.clone(),
-                zoom: t.zoom,
-                rotate_x: t.rotate_x,
-                rotate_y: t.rotate_y,
-                control_point_overrides: t.control_point_overrides.clone(),
+            .map(|t| {
+                let (cp_overrides, qp_overrides, mode_type) = match &t.mode {
+                    PreviewMode::Normal { control_point_overrides, query_param_overrides, .. } => {
+                        (control_point_overrides.clone(), query_param_overrides.clone(), PreviewModeType::Normal)
+                    }
+                    PreviewMode::Collision { .. } => {
+                        (Default::default(), Default::default(), PreviewModeType::Collision)
+                    }
+                };
+                PreviewState {
+                    preview_id: Some(t.preview_id),
+                    query: t.query.clone(),
+                    zoom: t.zoom,
+                    rotate_x: t.rotate_x,
+                    rotate_y: t.rotate_y,
+                    control_point_overrides: cp_overrides,
+                    query_param_overrides: qp_overrides,
+                    mode: mode_type,
+                }
             })
             .collect(),
     };
@@ -1391,10 +1738,10 @@ pub(super) fn session_loaded(
     mut current_file_path: ResMut<CurrentFilePath>,
     preview_query: Query<(Entity, &PreviewTarget)>,
     mut ev_generate: MessageWriter<GeneratePreviewRequest>,
+    mut ev_collision: MessageWriter<GenerateCollisionPreviewRequest>,
     mut next_preview_id: ResMut<NextPreviewId>,
     mut pending_states: ResMut<PendingPreviewStates>,
     mut free_render_layers: ResMut<FreeRenderLayers>,
-    mut editable_vars: ResMut<EditableVars>,
 ) {
     for ev in ev_picked.read() {
         if let Some((db_content, previews)) = load_session(&ev.path) {
@@ -1402,9 +1749,6 @@ pub(super) fn session_loaded(
             **current_file_path = Some(ev.path.clone());
             save_last_session_path(&ev.path);
 
-            refresh_editable_vars(&editor_text, &mut editable_vars);
-
-            // Despawn all preview root entities (children are automatically removed)
             for (entity, target) in preview_query.iter() {
                 free_render_layers.push(target.render_layer);
                 commands.entity(entity).despawn();
@@ -1426,16 +1770,31 @@ pub(super) fn session_loaded(
 
                 preview_state.preview_id = Some(preview_id);
                 let query = preview_state.query.clone();
-                let overrides = preview_state.control_point_overrides.clone();
+                let cp_overrides = preview_state.control_point_overrides.clone();
+                let qp_overrides = preview_state.query_param_overrides.clone();
+                let mode = preview_state.mode.clone();
                 pending_states.insert(preview_id, preview_state);
 
-                ev_generate.write(GeneratePreviewRequest {
-                    preview_id,
-                    database: (**editor_text).clone(),
-                    query,
-                    include_paths: (**current_file_path).iter().cloned().collect(),
-                    control_point_overrides: overrides,
-                });
+                match mode {
+                    PreviewModeType::Normal => {
+                        ev_generate.write(GeneratePreviewRequest {
+                            preview_id,
+                            database: (**editor_text).clone(),
+                            query,
+                            include_paths: (**current_file_path).iter().cloned().collect(),
+                            control_point_overrides: cp_overrides,
+                            query_param_overrides: qp_overrides,
+                        });
+                    }
+                    PreviewModeType::Collision => {
+                        ev_collision.write(GenerateCollisionPreviewRequest {
+                            preview_id,
+                            database: (**editor_text).clone(),
+                            query,
+                            include_paths: (**current_file_path).iter().cloned().collect(),
+                        });
+                    }
+                }
             }
         } else {
             bevy::log::error!("Failed to load session from {:?}", ev.path);
@@ -1467,9 +1826,9 @@ pub(super) fn restore_last_session(
     mut editor_text: ResMut<EditorText>,
     mut current_file_path: ResMut<CurrentFilePath>,
     mut ev_generate: MessageWriter<GeneratePreviewRequest>,
+    mut ev_collision: MessageWriter<GenerateCollisionPreviewRequest>,
     mut next_preview_id: ResMut<NextPreviewId>,
     mut pending_states: ResMut<PendingPreviewStates>,
-    mut editable_vars: ResMut<EditableVars>,
 ) {
     let path_str = match std::fs::read_to_string(LAST_SESSION_PATH_FILE) {
         Ok(s) => s,
@@ -1482,8 +1841,6 @@ pub(super) fn restore_last_session(
     if let Some((db_content, previews)) = load_session(&path) {
         **editor_text = db_content;
         **current_file_path = Some(path);
-
-        refresh_editable_vars(&editor_text, &mut editable_vars);
 
         for mut preview_state in previews.previews {
             let preview_id = if let Some(saved_id) = preview_state.preview_id {
@@ -1499,16 +1856,31 @@ pub(super) fn restore_last_session(
 
             preview_state.preview_id = Some(preview_id);
             let query = preview_state.query.clone();
-            let overrides = preview_state.control_point_overrides.clone();
+            let cp_overrides = preview_state.control_point_overrides.clone();
+            let qp_overrides = preview_state.query_param_overrides.clone();
+            let mode = preview_state.mode.clone();
             pending_states.insert(preview_id, preview_state);
 
-            ev_generate.write(GeneratePreviewRequest {
-                preview_id,
-                database: (**editor_text).clone(),
-                query,
-                include_paths: (**current_file_path).iter().cloned().collect(),
-                control_point_overrides: overrides,
-            });
+            match mode {
+                PreviewModeType::Normal => {
+                    ev_generate.write(GeneratePreviewRequest {
+                        preview_id,
+                        database: (**editor_text).clone(),
+                        query,
+                        include_paths: (**current_file_path).iter().cloned().collect(),
+                        control_point_overrides: cp_overrides,
+                        query_param_overrides: qp_overrides,
+                    });
+                }
+                PreviewModeType::Collision => {
+                    ev_collision.write(GenerateCollisionPreviewRequest {
+                        preview_id,
+                        database: (**editor_text).clone(),
+                        query,
+                        include_paths: (**current_file_path).iter().cloned().collect(),
+                    });
+                }
+            }
         }
     }
 }
@@ -1566,9 +1938,9 @@ pub(super) fn auto_reload_system(
     mut auto_reload: ResMut<AutoReload>,
     current_file_path: Res<CurrentFilePath>,
     mut editor_text: ResMut<EditorText>,
-    mut editable_vars: ResMut<EditableVars>,
     preview_query: Query<&PreviewTarget>,
     mut ev_generate: MessageWriter<GeneratePreviewRequest>,
+    mut ev_collision: MessageWriter<GenerateCollisionPreviewRequest>,
 ) {
     if !auto_reload.enabled {
         return;
@@ -1589,15 +1961,14 @@ pub(super) fn auto_reload_system(
     auto_reload.last_modified = Some(file_modified);
     if let Ok(content) = std::fs::read_to_string(&db_path) {
         **editor_text = content;
-        refresh_editable_vars(&editor_text, &mut editable_vars);
         for target in preview_query.iter() {
-            ev_generate.write(GeneratePreviewRequest {
-                preview_id: target.preview_id,
-                database: (**editor_text).clone(),
-                query: target.query.clone(),
-                include_paths: (**current_file_path).iter().cloned().collect(),
-                control_point_overrides: target.control_point_overrides.clone(),
-            });
+            send_update_for_target(
+                target,
+                &editor_text,
+                &current_file_path,
+                &mut ev_generate,
+                &mut ev_collision,
+            );
         }
     }
 }

@@ -33,6 +33,9 @@ impl FixedPoint {
     pub fn from_int(v: i64) -> Self {
         Self(v * 100)
     }
+    pub fn from_f64(v: f64) -> Self {
+        Self((v * 100.0).round() as i64)
+    }
     pub fn to_f64(self) -> f64 {
         self.0 as f64 / 100.0
     }
@@ -142,15 +145,13 @@ pub enum Term {
         /// 変数名のソース上の範囲 (バイトオフセット)。=value挿入位置の算出に使用。
         span: Option<SrcSpan>,
     },
-    /// 既定値・範囲付き変数: X=25, X:=25, 0<X:=20<50, 0<X<50 など
-    /// editable=true (:=) の場合のみ Parameters パネルに表示される
+    /// 既定値・範囲付き変数: X=25, 0<X=20<50, 0<X<50 など
     AnnotatedVar {
         name: String,
         default_value: Option<FixedPoint>,
         min: Option<Bound>,
         max: Option<Bound>,
         span: Option<SrcSpan>,
-        editable: bool,
     },
     Number {
         value: FixedPoint,
@@ -331,7 +332,6 @@ impl fmt::Debug for Term {
                 default_value,
                 min,
                 max,
-                editable,
                 ..
             } => {
                 if let Some(b) = min {
@@ -339,7 +339,7 @@ impl fmt::Debug for Term {
                 }
                 write!(f, "{}", name)?;
                 if let Some(dv) = default_value {
-                    write!(f, "{}{}", if *editable { ":=" } else { "=" }, dv)?;
+                    write!(f, "={}", dv)?;
                 }
                 if let Some(b) = max {
                     write!(f, " {} {}", if b.inclusive { "<=" } else { "<" }, b.value)?;
@@ -463,7 +463,7 @@ pub fn default_var(name: String, value: FixedPoint) -> Term {
         min: None,
         max: None,
         span: None,
-        editable: false,
+
     }
 }
 
@@ -474,7 +474,7 @@ pub fn default_var_with_span(name: String, value: FixedPoint, span: SrcSpan) -> 
         min: None,
         max: None,
         span: Some(span),
-        editable: false,
+
     }
 }
 
@@ -491,7 +491,7 @@ pub fn annotated_var(
         min,
         max,
         span,
-        editable: false,
+
     }
 }
 
@@ -535,7 +535,7 @@ pub fn range_var(name: String, min: Option<Bound>, max: Option<Bound>) -> Term {
         min,
         max,
         span: None,
-        editable: false,
+
     }
 }
 
@@ -721,12 +721,8 @@ fn comp_op(input: &str) -> PResult<'_, CompOp> {
     .parse(input)
 }
 
-fn default_value_suffix(input: &str) -> PResult<'_, (FixedPoint, SrcSpan, bool)> {
-    let (input, editable) = ws(alt((
-        map(tag(":="), |_| true),
-        map(char('='), |_| false),
-    )))
-    .parse(input)?;
+fn default_value_suffix(input: &str) -> PResult<'_, (FixedPoint, SrcSpan)> {
+    let (input, _) = ws(char('=')).parse(input)?;
     let (input, _) = space_or_comment0(input)?;
     let value_start = input.as_ptr() as usize;
     let (input, value) = fixed_number(input)?;
@@ -739,7 +735,6 @@ fn default_value_suffix(input: &str) -> PResult<'_, (FixedPoint, SrcSpan, bool)>
                 start: value_start,
                 end: value_end,
             },
-            editable,
         ),
     ))
 }
@@ -757,7 +752,7 @@ fn annotated_var_term(input: &str) -> PResult<'_, Term> {
         start: var_name_start,
         end: var_name_end,
     };
-    // =value or :=value (optional)
+    // =value (optional)
     let (input, default_with_span) = opt(default_value_suffix).parse(input)?;
     // 右側: (op num)?
     let (input, right) = opt((comp_op, ws(fixed_number))).parse(input)?;
@@ -788,12 +783,12 @@ fn annotated_var_term(input: &str) -> PResult<'_, Term> {
         None => None,
     };
 
-    let (default_value, span, editable) = match default_with_span {
-        Some((val, sp, editable)) => (Some(val), Some(sp), editable),
+    let (default_value, span) = match default_with_span {
+        Some((val, sp)) => (Some(val), Some(sp)),
         None => (None, Some(SrcSpan {
             start: var_name_span.end,
             end: var_name_span.end,
-        }), false),
+        })),
     };
 
     if min.is_none() && max.is_none() && default_value.is_none() {
@@ -807,7 +802,6 @@ fn annotated_var_term(input: &str) -> PResult<'_, Term> {
                 min,
                 max,
                 span,
-                editable,
             },
         ))
     }
@@ -1112,76 +1106,116 @@ pub fn query(input: &str) -> PResult<'_, Vec<Term>> {
     Ok((rest, terms))
 }
 
-/// 編集可能な変数の情報
+/// query変数のパラメータ情報（UIスライダー用）
 #[derive(Clone, Debug)]
-pub struct VarInfo {
+pub struct QueryParam {
     pub name: String,
-    pub value: FixedPoint,
     pub min: Option<Bound>,
     pub max: Option<Bound>,
-    pub span: SrcSpan,
+    pub default_value: Option<FixedPoint>,
 }
 
-fn collect_editable_vars_from_term(term: &Term, vars: &mut Vec<VarInfo>) {
+fn collect_query_params_from_term(term: &Term, params: &mut Vec<QueryParam>) {
     match term {
-        Term::AnnotatedVar {
-            name,
-            default_value: Some(value),
-            min,
-            max,
-            span: Some(span),
-            editable: true,
-        } => {
-            if !vars.iter().any(|v| v.span.start == span.start) {
-                vars.push(VarInfo {
+        Term::Var { name, .. } if name != "_" => {
+            if !params.iter().any(|p| p.name == *name) {
+                params.push(QueryParam {
                     name: name.clone(),
-                    value: *value,
-                    min: *min,
-                    max: *max,
-                    span: *span,
+                    min: None,
+                    max: None,
+                    default_value: None,
                 });
             }
         }
-        Term::Struct { functor, args, .. } if functor != "control" => {
+        Term::AnnotatedVar {
+            name,
+            default_value,
+            min,
+            max,
+            ..
+        } if name != "_" => {
+            if !params.iter().any(|p| p.name == *name) {
+                params.push(QueryParam {
+                    name: name.clone(),
+                    min: *min,
+                    max: *max,
+                    default_value: *default_value,
+                });
+            }
+        }
+        Term::Struct { args, .. } => {
             for arg in args {
-                collect_editable_vars_from_term(arg, vars);
+                collect_query_params_from_term(arg, params);
             }
         }
         Term::List { items, tail } => {
             for item in items {
-                collect_editable_vars_from_term(item, vars);
+                collect_query_params_from_term(item, params);
             }
             if let Some(t) = tail {
-                collect_editable_vars_from_term(t, vars);
+                collect_query_params_from_term(t, params);
             }
-        }
-        Term::InfixExpr { left, right, .. } => {
-            collect_editable_vars_from_term(left, vars);
-            collect_editable_vars_from_term(right, vars);
-        }
-        Term::Constraint { left, right } => {
-            collect_editable_vars_from_term(left, vars);
-            collect_editable_vars_from_term(right, vars);
         }
         _ => {}
     }
 }
 
-pub fn collect_editable_vars(clauses: &[Clause]) -> Vec<VarInfo> {
-    let mut vars = Vec::new();
-    for clause in clauses {
-        match clause {
-            Clause::Fact(term) => collect_editable_vars_from_term(term, &mut vars),
-            Clause::Rule { head, body } => {
-                collect_editable_vars_from_term(head, &mut vars);
-                for t in body {
-                    collect_editable_vars_from_term(t, &mut vars);
-                }
-            }
-            Clause::Use { .. } => {}
-        }
+/// execute結果のtermからAnnotatedVar/Varを走査してQueryParamsを抽出する。
+/// unificationでhead側rangeが伝播済みの状態を想定。
+pub fn collect_query_params(terms: &[Term]) -> Vec<QueryParam> {
+    let mut params = Vec::new();
+    for term in terms {
+        collect_query_params_from_term(term, &mut params);
     }
-    vars
+    params
+}
+
+/// term内のVar/AnnotatedVarを値で置換する
+pub fn substitute_query_params(
+    terms: &[Term],
+    values: &std::collections::HashMap<String, f64>,
+) -> Vec<Term> {
+    terms.iter().map(|t| substitute_term(t, values)).collect()
+}
+
+fn substitute_term(term: &Term, values: &std::collections::HashMap<String, f64>) -> Term {
+    match term {
+        Term::Var { name, .. } if name != "_" => {
+            if let Some(&val) = values.get(name) {
+                number(FixedPoint::from_f64(val))
+            } else {
+                term.clone()
+            }
+        }
+        Term::AnnotatedVar { name, .. } if name != "_" => {
+            if let Some(&val) = values.get(name) {
+                number(FixedPoint::from_f64(val))
+            } else {
+                term.clone()
+            }
+        }
+        Term::Struct {
+            functor,
+            args,
+            span,
+        } => Term::Struct {
+            functor: functor.clone(),
+            args: args.iter().map(|a| substitute_term(a, values)).collect(),
+            span: *span,
+        },
+        Term::List { items, tail } => Term::List {
+            items: items.iter().map(|i| substitute_term(i, values)).collect(),
+            tail: tail
+                .as_ref()
+                .map(|t| Box::new(substitute_term(t, values))),
+        },
+        Term::InfixExpr { op, left, right } => Term::InfixExpr {
+            op: *op,
+            left: Box::new(substitute_term(left, values)),
+            right: Box::new(substitute_term(right, values)),
+        },
+        _ => term.clone(),
+    }
 }
 
 #[cfg(test)]
@@ -1686,20 +1720,26 @@ mod tests {
     }
 
     #[test]
-    fn test_collect_editable_vars() {
-        let src = "main :- cube(X:=10, 0<Y:=20<50, Z:=30).";
-        let clauses = database(src).unwrap();
-        let vars = collect_editable_vars(&clauses);
-        assert_eq!(vars.len(), 3);
-        assert_eq!(vars[0].name, "X");
-        assert_eq!(vars[0].value, FixedPoint::from_int(10));
-        assert!(vars[0].min.is_none());
-        assert_eq!(vars[1].name, "Y");
-        assert_eq!(vars[1].value, FixedPoint::from_int(20));
-        assert!(vars[1].min.is_some());
-        assert!(vars[1].max.is_some());
-        assert_eq!(vars[2].name, "Z");
-        assert_eq!(vars[2].value, FixedPoint::from_int(30));
+    fn test_collect_query_params() {
+        let (_, terms) = query("main(X, 0<Y<50).").unwrap();
+        let params = collect_query_params(&terms);
+        assert_eq!(params.len(), 2);
+        assert_eq!(params[0].name, "X");
+        assert!(params[0].min.is_none());
+        assert!(params[0].max.is_none());
+        assert_eq!(params[1].name, "Y");
+        assert!(params[1].min.is_some());
+        assert!(params[1].max.is_some());
+    }
+
+    #[test]
+    fn test_substitute_query_params() {
+        let (_, terms) = query("main(X, Y).").unwrap();
+        let mut values = std::collections::HashMap::new();
+        values.insert("X".to_string(), 5.0);
+        values.insert("Y".to_string(), 10.0);
+        let substituted = substitute_query_params(&terms, &values);
+        assert_eq!(format!("{:?}", substituted), "[main(5, 10)]");
     }
 
     #[test]
