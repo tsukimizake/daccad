@@ -142,13 +142,22 @@ fn resolve_inner(term: &ScopedTerm, env: &ScopedEnv, depth: usize) -> ScopedTerm
     }
 }
 
-/// フラットなEnvからresolveする旧版（try_resolve_constraints等の局所的な使用向け）
-fn resolve_flat(term: &ScopedTerm, env: &Env) -> ScopedTerm {
-    let mut scoped = ScopedEnv::new();
-    for (k, v) in env {
-        scoped.insert(0, k.clone(), v.clone());
+/// Constraint内のVarから name→scope のマッピングを収集する
+fn collect_var_scopes_from_term(term: &ScopedTerm, scopes: &mut HashMap<String, ScopeId>) {
+    match term {
+        Term::Var { name, scope, .. } if name != "_" => {
+            scopes.entry(name.clone()).or_insert(*scope);
+        }
+        Term::InfixExpr { left, right, .. } => {
+            collect_var_scopes_from_term(left, scopes);
+            collect_var_scopes_from_term(right, scopes);
+        }
+        Term::Constraint { left, right } => {
+            collect_var_scopes_from_term(left, scopes);
+            collect_var_scopes_from_term(right, scopes);
+        }
+        _ => {}
     }
-    resolve(term, &scoped)
 }
 
 /// Check if a term is a built-in primitive that should not be rewritten
@@ -794,6 +803,8 @@ pub fn unify(term1: ScopedTerm, term2: ScopedTerm, env: &mut ScopedEnv) -> Resul
             }
             _ => {
                 if is_potentially_arithmetic(&t1) && is_potentially_arithmetic(&t2) {
+                    store_ranges_from_term(&t1, env);
+                    store_ranges_from_term(&t2, env);
                     constraints.push(Term::Constraint {
                         left: Box::new(t1),
                         right: Box::new(t2),
@@ -841,21 +852,134 @@ fn try_resolve_constraints(goals: &mut Vec<ScopedTerm>) -> Result<(), RewriteErr
     })?;
 
     if !result.bindings.is_empty() || result.fully_resolved {
+        // Constraint内のVarからname→scopeマッピングを収集
+        let mut var_scopes: HashMap<String, ScopeId> = HashMap::new();
+        for &idx in &constraint_indices {
+            collect_var_scopes_from_term(&goals[idx], &mut var_scopes);
+        }
+
         for &idx in constraint_indices.iter().rev() {
             goals.remove(idx);
         }
         if !result.bindings.is_empty() {
-            let mut env = Env::new();
+            let mut scoped_env = ScopedEnv::new();
             for (var_name, value) in &result.bindings {
-                env.insert(var_name.clone(), number(*value));
+                if let Some(&scope) = var_scopes.get(var_name) {
+                    scoped_env.insert(scope, var_name.clone(), number(*value));
+                }
             }
             for goal in goals.iter_mut() {
-                *goal = resolve_flat(goal, &env);
+                *goal = resolve(goal, &scoped_env);
             }
         }
     }
 
     Ok(())
+}
+
+fn store_ranges_from_term(term: &ScopedTerm, env: &mut ScopedEnv) {
+    match term {
+        Term::Var { name, scope, min, max, .. } if name != "_" && (min.is_some() || max.is_some()) => {
+            env.insert_range(*scope, name.clone(), *min, *max);
+        }
+        Term::InfixExpr { left, right, .. } => {
+            store_ranges_from_term(left, env);
+            store_ranges_from_term(right, env);
+        }
+        _ => {}
+    }
+}
+
+fn collect_ranges_from_term(
+    term: &ScopedTerm,
+    ranges: &mut HashMap<String, (Option<Bound>, Option<Bound>)>,
+) {
+    match term {
+        Term::Var { name, min, max, .. } if name != "_" && (min.is_some() || max.is_some()) => {
+            let entry = ranges.entry(name.clone()).or_insert((None, None));
+            entry.0 = intersect_min(entry.0, *min);
+            entry.1 = intersect_max(entry.1, *max);
+        }
+        Term::InfixExpr { left, right, .. } => {
+            collect_ranges_from_term(left, ranges);
+            collect_ranges_from_term(right, ranges);
+        }
+        Term::Struct { args, .. } => {
+            for arg in args {
+                collect_ranges_from_term(arg, ranges);
+            }
+        }
+        Term::List { items, tail } => {
+            for item in items {
+                collect_ranges_from_term(item, ranges);
+            }
+            if let Some(t) = tail {
+                collect_ranges_from_term(t, ranges);
+            }
+        }
+        Term::Constraint { left, right } => {
+            collect_ranges_from_term(left, ranges);
+            collect_ranges_from_term(right, ranges);
+        }
+        _ => {}
+    }
+}
+
+fn apply_ranges_to_term(
+    term: &mut ScopedTerm,
+    ranges: &HashMap<String, (Option<Bound>, Option<Bound>)>,
+) {
+    match term {
+        Term::Var { name, min, max, .. } if name != "_" => {
+            if let Some((r_min, r_max)) = ranges.get(name) {
+                *min = intersect_min(*min, *r_min);
+                *max = intersect_max(*max, *r_max);
+            }
+        }
+        Term::InfixExpr { left, right, .. } => {
+            apply_ranges_to_term(left, ranges);
+            apply_ranges_to_term(right, ranges);
+        }
+        Term::Struct { args, .. } => {
+            for arg in args {
+                apply_ranges_to_term(arg, ranges);
+            }
+        }
+        Term::List { items, tail, .. } => {
+            for item in items {
+                apply_ranges_to_term(item, ranges);
+            }
+            if let Some(t) = tail {
+                apply_ranges_to_term(t, ranges);
+            }
+        }
+        Term::Constraint { left, right } => {
+            apply_ranges_to_term(left, ranges);
+            apply_ranges_to_term(right, ranges);
+        }
+        _ => {}
+    }
+}
+
+fn propagate_ranges_in_clause(clause: &mut Clause<ScopeId>) {
+    let mut ranges = HashMap::new();
+    match clause {
+        Clause::Fact(term) => {
+            collect_ranges_from_term(term, &mut ranges);
+            apply_ranges_to_term(term, &ranges);
+        }
+        Clause::Rule { head, body } => {
+            collect_ranges_from_term(head, &mut ranges);
+            for b in body.iter() {
+                collect_ranges_from_term(b, &mut ranges);
+            }
+            apply_ranges_to_term(head, &ranges);
+            for b in body.iter_mut() {
+                apply_ranges_to_term(b, &ranges);
+            }
+        }
+        Clause::Use { .. } => {}
+    }
 }
 
 fn assign_scope_to_clause(clause: Clause, scope_id: ScopeId) -> Clause<ScopeId> {
@@ -909,7 +1033,8 @@ fn try_rewrite_single_with_result(
 ) -> Option<(ScopedTerm, Vec<ScopedTerm>)> {
     for clause in db.iter() {
         *clause_counter += 1;
-        let scoped = assign_scope_to_clause(clause.clone(), *clause_counter);
+        let mut scoped = assign_scope_to_clause(clause.clone(), *clause_counter);
+        propagate_ranges_in_clause(&mut scoped);
 
         let (head, body) = match scoped {
             Clause::Fact(t) => (t, vec![]),
@@ -923,7 +1048,11 @@ fn try_rewrite_single_with_result(
             let resolved_term = resolve(term, shared_env);
             let resolved_body: Vec<ScopedTerm> = body.iter().map(|b| resolve(b, shared_env)).collect();
             *other_goals = other_goals.iter().map(|g| resolve(g, shared_env)).collect();
-            other_goals.extend(constraints);
+            let resolved_constraints: Vec<ScopedTerm> = constraints
+                .into_iter()
+                .map(|c| resolve(&c, shared_env))
+                .collect();
+            other_goals.extend(resolved_constraints);
             return Some((resolved_term, resolved_body));
         }
     }
@@ -1953,9 +2082,42 @@ mod tests {
     }
 
     #[test]
-    fn constraint_propagation_across_body() {
-        let resolved = run_success("f(X+Y, Y) :- h(X), g(Y). h(4). g(3).", "f(7, 3).");
-        assert_eq!(resolved, vec!["h(4)", "g(3)"]);
+    fn constraint_solving_binds_variable() {
+        let resolved = run_success(
+            "box(X+Y, Y) :- cube(X, Y, 10).",
+            "box(7, 3).",
+        );
+        assert_eq!(resolved, vec!["cube(4, 3, 10)"]);
+    }
+
+    #[test]
+    fn constraint_contradiction_detected() {
+        let mut db = database("f(X+Y, Y) :- h(X), g(Y). h(4). g(3).").expect("parse db");
+        let q = query("f(100, 3).").expect("parse query").1;
+        let result = execute(&mut db, q);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn range_propagation_in_clause() {
+        // head の range が body の Var に伝播し、値が default_value として保持されること
+        let resolved = run_success(
+            "foo(0<X<10) :- cube(X, X, X).",
+            "foo(5).",
+        );
+        assert_eq!(resolved, vec!["cube(0 < X=5 < 10, 0 < X=5 < 10, 0 < X=5 < 10)"]);
+    }
+
+    #[test]
+    fn constraint_solving_does_not_leak_across_scopes() {
+        // f で X+Y=7, Y=3 → X=4。body は g(4, Z=2)。
+        // g(A, X) :- cube(A, X, X) で X_scope2 は 2 になるべき。
+        // scope leak があると X_scope2 が 4 に汚染されて失敗する。
+        let resolved = run_success(
+            "f(X+Y, Y, Z) :- g(X, Z). g(A, X) :- cube(A, X, X).",
+            "f(7, 3, 2).",
+        );
+        assert_eq!(resolved, vec!["cube(4, 2, 2)"]);
     }
 
     #[test]

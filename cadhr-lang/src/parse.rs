@@ -1170,6 +1170,10 @@ fn collect_query_params_from_term(term: &Term, params: &mut Vec<QueryParam>) {
                 collect_query_params_from_term(t, params);
             }
         }
+        Term::InfixExpr { left, right, .. } => {
+            collect_query_params_from_term(left, params);
+            collect_query_params_from_term(right, params);
+        }
         _ => {}
     }
 }
@@ -1230,6 +1234,91 @@ fn substitute_term(term: &Term, values: &std::collections::HashMap<String, f64>)
         },
         _ => term.clone(),
     }
+}
+
+fn collect_query_params_from_scoped_term(term: &ScopedTerm, params: &mut Vec<QueryParam>) {
+    match term {
+        Term::Var { name, min, max, .. } if name != "_" && (min.is_some() || max.is_some()) => {
+            if !params.iter().any(|p| p.name == *name) {
+                params.push(QueryParam {
+                    name: name.clone(),
+                    min: *min,
+                    max: *max,
+                    default_value: None,
+                });
+            }
+        }
+        Term::Struct { args, .. } => {
+            for arg in args {
+                collect_query_params_from_scoped_term(arg, params);
+            }
+        }
+        Term::List { items, tail } => {
+            for item in items {
+                collect_query_params_from_scoped_term(item, params);
+            }
+            if let Some(t) = tail {
+                collect_query_params_from_scoped_term(t, params);
+            }
+        }
+        Term::InfixExpr { left, right, .. } => {
+            collect_query_params_from_scoped_term(left, params);
+            collect_query_params_from_scoped_term(right, params);
+        }
+        _ => {}
+    }
+}
+
+pub fn collect_query_params_from_scoped(terms: &[ScopedTerm]) -> Vec<QueryParam> {
+    let mut params = Vec::new();
+    for term in terms {
+        collect_query_params_from_scoped_term(term, &mut params);
+    }
+    params
+}
+
+fn substitute_scoped_term(
+    term: &ScopedTerm,
+    values: &std::collections::HashMap<String, f64>,
+) -> ScopedTerm {
+    match term {
+        Term::Var { name, scope, min, max, span, .. } if name != "_" => {
+            if let Some(&val) = values.get(name) {
+                Term::Var {
+                    name: name.clone(),
+                    scope: *scope,
+                    default_value: Some(FixedPoint::from_f64(val)),
+                    min: *min,
+                    max: *max,
+                    span: *span,
+                }
+            } else {
+                term.clone()
+            }
+        }
+        Term::Struct { functor, args, span } => Term::Struct {
+            functor: functor.clone(),
+            args: args.iter().map(|a| substitute_scoped_term(a, values)).collect(),
+            span: *span,
+        },
+        Term::List { items, tail } => Term::List {
+            items: items.iter().map(|i| substitute_scoped_term(i, values)).collect(),
+            tail: tail.as_ref().map(|t| Box::new(substitute_scoped_term(t, values))),
+        },
+        Term::InfixExpr { op, left, right } => Term::InfixExpr {
+            op: *op,
+            left: Box::new(substitute_scoped_term(left, values)),
+            right: Box::new(substitute_scoped_term(right, values)),
+        },
+        _ => term.clone(),
+    }
+}
+
+pub fn substitute_scoped_vars(
+    terms: &mut Vec<ScopedTerm>,
+    values: &std::collections::HashMap<String, f64>,
+) {
+    *terms = terms.iter().map(|t| substitute_scoped_term(t, values)).collect();
 }
 
 #[cfg(test)]

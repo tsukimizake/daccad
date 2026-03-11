@@ -185,7 +185,7 @@ pub(super) fn egui_ui(
                         query_param_overrides: Default::default(),
                     });
                 }
-                if ui.button("Add Collision").clicked() {
+                if ui.button("Add Collision Check").clicked() {
                     let preview_id = **next_preview_id;
                     **next_preview_id += 1;
                     let query_text = "main.".to_string();
