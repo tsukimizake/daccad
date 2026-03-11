@@ -12,8 +12,8 @@ use cadhr_lang::bom::BomExtractor;
 use cadhr_lang::manifold_bridge::{MeshGenerator, extract_control_points};
 use cadhr_lang::module::resolve_modules;
 use cadhr_lang::parse::{
-    SrcSpan, collect_query_params, collect_query_params_from_scoped, database, parse_error_span,
-    query as parse_query, substitute_query_params, substitute_scoped_vars,
+    SrcSpan, collect_query_params, database, parse_error_span,
+    query as parse_query, substitute_query_params,
 };
 use cadhr_lang::term_processor::TermProcessor;
 use cadhr_lang::term_rewrite::{CadhrError, execute};
@@ -99,31 +99,6 @@ fn spawn_mesh_job(async_world: AsyncWorld, req: GeneratePreviewRequest) {
                         (format!("Rewrite error: {}", e), span)
                     })?;
                 logs.push(format!("Resolved terms: {:?}", resolved));
-
-                let inferred_params = collect_query_params_from_scoped(&resolved);
-                let mut inferred_values: std::collections::HashMap<String, f64> =
-                    std::collections::HashMap::new();
-                for param in &inferred_params {
-                    if !query_params.iter().any(|p| p.name == param.name) {
-                        let val = req
-                            .query_param_overrides
-                            .get(&param.name)
-                            .copied()
-                            .unwrap_or_else(|| {
-                                match (param.min.as_ref(), param.max.as_ref()) {
-                                    (Some(min), Some(max)) => {
-                                        (min.value.to_f64() + max.value.to_f64()) / 2.0
-                                    }
-                                    _ => 0.0,
-                                }
-                            });
-                        inferred_values.insert(param.name.clone(), val);
-                        query_params.push(param.clone());
-                    }
-                }
-                if !inferred_values.is_empty() {
-                    substitute_scoped_vars(&mut resolved, &inferred_values);
-                }
 
                 let control_points = extract_control_points(&mut resolved, &req.control_point_overrides);
                 env.update_query_param_ranges(&mut query_params);
