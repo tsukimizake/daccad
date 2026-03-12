@@ -16,7 +16,7 @@ use cadhr_lang::parse::{
     query as parse_query, substitute_query_params,
 };
 use cadhr_lang::term_processor::TermProcessor;
-use cadhr_lang::term_rewrite::{CadhrError, execute};
+use cadhr_lang::term_rewrite::{CadhrError, execute, infer_query_param_ranges};
 use manifold_rs::Mesh as RsMesh;
 
 pub struct CadhrLangPlugin;
@@ -71,6 +71,8 @@ fn spawn_mesh_job(async_world: AsyncWorld, req: GeneratePreviewRequest) {
                 .map_err(|e| (format!("Module error: {}", e), None))?;
 
                 let mut query_params = collect_query_params(&query_terms);
+                infer_query_param_ranges(&query_terms, &db, &mut query_params)
+                    .map_err(|e| (format!("Range inference error: {}", e), None))?;
 
                 // Build substitution values: override > default_value > midpoint > 0
                 let mut values = req.query_param_overrides.clone();

@@ -4,8 +4,8 @@ use std::fmt;
 
 use crate::constraint::{ArithEq, ArithExpr, solve_constraints};
 use crate::parse::{
-    ArithOp, Bound, Clause, FixedPoint, ScopeId, ScopedTerm, SrcSpan, Term, first_span, list,
-    number, struc, var,
+    ArithOp, Bound, Clause, FixedPoint, QueryParam, ScopeId, ScopedTerm, SrcSpan, Term,
+    first_span, list, number, struc, var,
 };
 use crate::term_processor::{
     all_builtin_functors, is_builtin_functor, is_builtin_functor_with_arity, should_resolve_args,
@@ -405,6 +405,148 @@ fn intersect_max(a: Option<Bound>, b: Option<Bound>) -> Option<Bound> {
             }
         }
     }
+}
+
+fn bound_add(a: Bound, b: Bound) -> Bound {
+    Bound {
+        value: FixedPoint::from_f64(a.value.to_f64() + b.value.to_f64()),
+        inclusive: a.inclusive && b.inclusive,
+    }
+}
+
+fn bound_sub(a: Bound, b: Bound) -> Bound {
+    Bound {
+        value: FixedPoint::from_f64(a.value.to_f64() - b.value.to_f64()),
+        inclusive: a.inclusive && b.inclusive,
+    }
+}
+
+fn bound_mul(a: Bound, b: Bound) -> Bound {
+    Bound {
+        value: FixedPoint::from_f64(a.value.to_f64() * b.value.to_f64()),
+        inclusive: a.inclusive && b.inclusive,
+    }
+}
+
+type Range = (Option<Bound>, Option<Bound>);
+
+fn compute_term_range<S>(term: &Term<S>) -> Result<Range, String> {
+    match term {
+        Term::Number { value } => Ok((
+            Some(Bound { value: *value, inclusive: true }),
+            Some(Bound { value: *value, inclusive: true }),
+        )),
+        Term::Var { min, max, .. } => Ok((*min, *max)),
+        Term::InfixExpr { op, left, right } => {
+            let (l_min, l_max) = compute_term_range(left)?;
+            let (r_min, r_max) = compute_term_range(right)?;
+            match op {
+                ArithOp::Add => Ok((
+                    l_min.zip(r_min).map(|(a, b)| bound_add(a, b)),
+                    l_max.zip(r_max).map(|(a, b)| bound_add(a, b)),
+                )),
+                ArithOp::Sub => Ok((
+                    l_min.zip(r_max).map(|(a, b)| bound_sub(a, b)),
+                    l_max.zip(r_min).map(|(a, b)| bound_sub(a, b)),
+                )),
+                ArithOp::Mul => {
+                    match (l_min, l_max, r_min, r_max) {
+                        (Some(l_lo), Some(l_hi), Some(r_lo), Some(r_hi)) => {
+                            let products = [
+                                bound_mul(l_lo, r_lo),
+                                bound_mul(l_lo, r_hi),
+                                bound_mul(l_hi, r_lo),
+                                bound_mul(l_hi, r_hi),
+                            ];
+                            let min = products.iter().copied()
+                                .min_by(|a, b| a.value.cmp(&b.value))
+                                .unwrap();
+                            let max = products.iter().copied()
+                                .max_by(|a, b| a.value.cmp(&b.value))
+                                .unwrap();
+                            Ok((Some(min), Some(max)))
+                        }
+                        _ => Ok((None, None)),
+                    }
+                }
+                ArithOp::Div => {
+                    match (r_min, r_max) {
+                        (Some(r_lo), Some(r_hi)) => {
+                            let r_lo_f = r_lo.value.to_f64();
+                            let r_hi_f = r_hi.value.to_f64();
+                            if (r_lo_f <= 0.0 && r_hi_f >= 0.0)
+                                || (r_lo_f >= 0.0 && r_hi_f <= 0.0)
+                            {
+                                return Err("Division by zero: divisor range includes zero".to_string());
+                            }
+                            let inv_lo = Bound {
+                                value: FixedPoint::from_f64(1.0 / r_hi_f),
+                                inclusive: r_hi.inclusive,
+                            };
+                            let inv_hi = Bound {
+                                value: FixedPoint::from_f64(1.0 / r_lo_f),
+                                inclusive: r_lo.inclusive,
+                            };
+                            match (l_min, l_max) {
+                                (Some(l_lo), Some(l_hi)) => {
+                                    let products = [
+                                        bound_mul(l_lo, inv_lo),
+                                        bound_mul(l_lo, inv_hi),
+                                        bound_mul(l_hi, inv_lo),
+                                        bound_mul(l_hi, inv_hi),
+                                    ];
+                                    let min = products.iter().copied()
+                                        .min_by(|a, b| a.value.cmp(&b.value))
+                                        .unwrap();
+                                    let max = products.iter().copied()
+                                        .max_by(|a, b| a.value.cmp(&b.value))
+                                        .unwrap();
+                                    Ok((Some(min), Some(max)))
+                                }
+                                _ => Ok((None, None)),
+                            }
+                        }
+                        _ => Ok((None, None)),
+                    }
+                }
+            }
+        }
+        _ => Ok((None, None)),
+    }
+}
+
+pub fn infer_query_param_ranges(
+    query_terms: &[Term],
+    db: &[Clause],
+    params: &mut [QueryParam],
+) -> Result<(), String> {
+    for q_term in query_terms {
+        if let Term::Struct { functor: q_func, args: q_args, .. } = q_term {
+            for clause in db {
+                let head = match clause {
+                    Clause::Rule { head, .. } => head,
+                    Clause::Fact(head) => head,
+                    _ => continue,
+                };
+                if let Term::Struct { functor: h_func, args: h_args, .. } = head {
+                    if q_func == h_func && q_args.len() == h_args.len() {
+                        for (q_arg, h_arg) in q_args.iter().zip(h_args.iter()) {
+                            if let Term::Var { name, .. } = q_arg {
+                                let (range_min, range_max) = compute_term_range(h_arg)?;
+                                for param in params.iter_mut() {
+                                    if &param.name == name {
+                                        param.min = intersect_min(param.min, range_min);
+                                        param.max = intersect_max(param.max, range_max);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// 範囲が空でないかチェック（少なくとも1つの整数値が含まれるか）
@@ -1110,16 +1252,6 @@ fn rewrite_term_recursive(
             let mut remaining_body: Vec<ScopedTerm> = body;
             let mut all_resolved = Vec::new();
 
-            // body 解決前に制約を解き、変数束縛を body と other_goals に伝播
-            {
-                let body_len = remaining_body.len();
-                let mut combined = remaining_body;
-                combined.extend(other_goals.drain(..));
-                try_resolve_constraints(&mut combined)?;
-                remaining_body = combined.drain(0..body_len).collect();
-                *other_goals = combined;
-            }
-
             while let Some(b) = remaining_body.first().cloned() {
                 remaining_body.remove(0);
 
@@ -1135,8 +1267,6 @@ fn rewrite_term_recursive(
                 remaining_body = temp_other_goals.drain(0..remaining_body.len()).collect();
                 *other_goals = temp_other_goals;
             }
-
-            try_resolve_constraints(other_goals)?;
 
             return Ok(all_resolved);
         }
@@ -1344,10 +1474,10 @@ pub fn execute(db: &mut [Clause], query: Vec<Term>) -> Result<(Vec<ScopedTerm>, 
         )?;
         results.extend(resolved);
         results.extend(other_goals);
-    }
 
-    // 最終的に残った Constraint を検証
-    try_resolve_constraints(&mut results)?;
+        // 各ゴールの rewrite 後に制約解決し、得られた束縛を後続に伝播
+        try_resolve_constraints(&mut results)?;
+    }
 
     // 解決済み Constraint を結果から除去
     results.retain(|t| !matches!(t, Term::Constraint { .. }));
@@ -1358,7 +1488,18 @@ pub fn execute(db: &mut [Clause], query: Vec<Term>) -> Result<(Vec<ScopedTerm>, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parse::{FixedPoint, database, query, struc, var};
+    use crate::parse::{FixedPoint, arith_expr, database, query, struc, var};
+
+    fn var_with_range(name: &str, min: Option<Bound>, max: Option<Bound>) -> Term {
+        Term::Var {
+            name: name.to_string(),
+            scope: (),
+            default_value: None,
+            min,
+            max,
+            span: None,
+        }
+    }
 
     /// テスト用: unscoped Term → scope 0 の ScopedTerm に変換
     fn scoped(term: Term) -> ScopedTerm {
@@ -2118,6 +2259,72 @@ mod tests {
             "f(7, 3, 2).",
         );
         assert_eq!(resolved, vec!["cube(4, 2, 2)"]);
+    }
+
+    #[test]
+    fn compute_term_range_add() {
+        use crate::parse::{ArithOp, Bound};
+        let term = arith_expr(
+            ArithOp::Add,
+            var_with_range("X", Some(Bound { value: FixedPoint::from_int(0), inclusive: false }), Some(Bound { value: FixedPoint::from_int(10), inclusive: false })),
+            var_with_range("Y", Some(Bound { value: FixedPoint::from_int(0), inclusive: false }), Some(Bound { value: FixedPoint::from_int(5), inclusive: false })),
+        );
+        let (min, max) = compute_term_range(&term).unwrap();
+        assert_eq!(min.unwrap().value, FixedPoint::from_int(0));
+        assert_eq!(max.unwrap().value, FixedPoint::from_int(15));
+    }
+
+    #[test]
+    fn compute_term_range_sub() {
+        use crate::parse::{ArithOp, Bound};
+        let term = arith_expr(
+            ArithOp::Sub,
+            var_with_range("X", Some(Bound { value: FixedPoint::from_int(0), inclusive: false }), Some(Bound { value: FixedPoint::from_int(10), inclusive: false })),
+            var_with_range("Y", Some(Bound { value: FixedPoint::from_int(0), inclusive: false }), Some(Bound { value: FixedPoint::from_int(5), inclusive: false })),
+        );
+        let (min, max) = compute_term_range(&term).unwrap();
+        assert_eq!(min.unwrap().value, FixedPoint::from_int(-5));
+        assert_eq!(max.unwrap().value, FixedPoint::from_int(10));
+    }
+
+    #[test]
+    fn infer_query_param_ranges_basic() {
+        use crate::parse::{Bound, collect_query_params};
+        let db_src = "box(0<X<100) :- cube(X, 10, 10).";
+        let query_src = "box(A).";
+        let db = database(db_src).expect("failed to parse db");
+        let (_, query_terms) = query(query_src).expect("failed to parse query");
+        let mut params = collect_query_params(&query_terms);
+        assert_eq!(params.len(), 1);
+        infer_query_param_ranges(&query_terms, &db, &mut params).unwrap();
+        assert_eq!(
+            params[0].min.unwrap(),
+            Bound { value: FixedPoint::from_int(0), inclusive: false }
+        );
+        assert_eq!(
+            params[0].max.unwrap(),
+            Bound { value: FixedPoint::from_int(100), inclusive: false }
+        );
+    }
+
+    #[test]
+    fn infer_query_param_ranges_infix() {
+        use crate::parse::{Bound, collect_query_params};
+        let db_src = "box(0<X<10 + 0<Y<5) :- cube(X, Y, 10).";
+        let query_src = "box(A).";
+        let db = database(db_src).expect("failed to parse db");
+        let (_, query_terms) = query(query_src).expect("failed to parse query");
+        let mut params = collect_query_params(&query_terms);
+        assert_eq!(params.len(), 1);
+        infer_query_param_ranges(&query_terms, &db, &mut params).unwrap();
+        assert_eq!(
+            params[0].min.unwrap(),
+            Bound { value: FixedPoint::from_int(0), inclusive: false }
+        );
+        assert_eq!(
+            params[0].max.unwrap(),
+            Bound { value: FixedPoint::from_int(15), inclusive: false }
+        );
     }
 
     #[test]
