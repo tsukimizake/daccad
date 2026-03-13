@@ -1,4 +1,4 @@
-use crate::parse::Term;
+use crate::parse::{Term, term_as_fixed_point};
 use crate::term_processor::{BuiltinFunctorSet, TermProcessor};
 
 inventory::submit! {
@@ -101,15 +101,15 @@ fn bom_entry_from_args<S>(args: &[Term<S>]) -> Result<BomEntry, BomError> {
 fn property_from_term<S>(term: &Term<S>) -> Result<(String, BomPropertyValue), BomError> {
     match term {
         Term::Struct { functor, args, .. } if args.len() == 1 => {
-            let value = match &args[0] {
-                Term::Number { value } => BomPropertyValue::Num(value.to_f64()),
-                Term::StringLit { value } => BomPropertyValue::Str(value.clone()),
-                other => {
-                    return Err(BomError::InvalidProperty(format!(
-                        "{}({:?})",
-                        functor, other
-                    )));
-                }
+            let value = if let Some((fp, _)) = term_as_fixed_point(&args[0]) {
+                BomPropertyValue::Num(fp.to_f64())
+            } else if let Term::StringLit { value } = &args[0] {
+                BomPropertyValue::Str(value.clone())
+            } else {
+                return Err(BomError::InvalidProperty(format!(
+                    "{}({:?})",
+                    functor, args[0]
+                )));
             };
             Ok((functor.clone(), value))
         }
@@ -176,6 +176,49 @@ mod tests {
         let entries = BomExtractor.process(&resolved).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "plate");
+    }
+
+    #[test]
+    fn test_bom_via_rule() {
+        let db_src = r#"main(L) :- cube(L, L, L), bom("frame", [len(L)])."#;
+        let query_src = "main(60).";
+        let (_, query_terms) = query(query_src).unwrap();
+        let mut db = database(db_src).unwrap();
+        let (resolved, _) = execute(&mut db, query_terms).unwrap();
+
+        let entries = BomExtractor.process(&resolved).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "frame");
+        assert_eq!(
+            entries[0].properties,
+            vec![("len".to_string(), BomPropertyValue::Num(60.0))]
+        );
+    }
+
+    #[test]
+    fn test_bom_via_rule_with_query_param() {
+        use crate::parse::{collect_query_params, substitute_query_params};
+        use crate::term_rewrite::infer_query_param_ranges;
+
+        let db_src = r#"main(50<L<2000) :- cube(L, L, L), bom("frame", [len(L)])."#;
+        let query_src = "main(60).";
+        let (_, query_terms) = query(query_src).unwrap();
+        let mut db = database(db_src).unwrap();
+
+        let mut query_params = collect_query_params(&query_terms);
+        infer_query_param_ranges(&query_terms, &db, &mut query_params).unwrap();
+        let substituted = substitute_query_params(&query_terms, &std::collections::HashMap::from([("L".to_string(), 60.0)]));
+
+        let (resolved, _) = execute(&mut db, substituted).unwrap();
+        eprintln!("resolved: {:#?}", resolved);
+
+        let entries = BomExtractor.process(&resolved).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "frame");
+        assert_eq!(
+            entries[0].properties,
+            vec![("len".to_string(), BomPropertyValue::Num(60.0))]
+        );
     }
 
     #[test]
