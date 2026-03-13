@@ -1785,18 +1785,9 @@ mod tests {
         let poly = make_polygon_term(vec![(0, 0), (10, 0), (10, 10), (0, 10)]);
         let hole = make_polygon_term(vec![(2, 2), (8, 2), (8, 8), (2, 8)]);
         let diff = struc("difference".into(), vec![poly, hole]);
-        let path: Term = struc(
-            "path".into(),
-            vec![
-                Term::List {
-                    items: vec![number_int(0), number_int(10), number_int(20)],
-                    tail: None,
-                },
-                Term::List {
-                    items: vec![number_int(0), number_int(5), number_int(0)],
-                    tail: None,
-                },
-            ],
+        let path = make_path_term(
+            (0, 0),
+            vec![line_to_term(10, 5), line_to_term(20, 0)],
         );
         let sweep = struc("sweep_extrude".into(), vec![diff, path]);
         let expr = ManifoldExpr::from_term(&sweep).unwrap();
