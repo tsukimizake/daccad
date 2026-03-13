@@ -131,6 +131,21 @@ fn spawn_mesh_job(async_world: AsyncWorld, req: GeneratePreviewRequest) {
                             error_span: span,
                         })
                         .await;
+                    let empty_mesh = Mesh::new(
+                        PrimitiveTopology::TriangleList,
+                        RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
+                    );
+                    async_world
+                        .send_message(PreviewGenerated {
+                            preview_id,
+                            query,
+                            mesh: empty_mesh,
+                            evaluated_nodes: vec![],
+                            control_points: vec![],
+                            bom_entries: vec![],
+                            query_params: vec![],
+                        })
+                        .await;
                     return;
                 }
             };
@@ -198,6 +213,21 @@ fn spawn_mesh_job(async_world: AsyncWorld, req: GeneratePreviewRequest) {
                             message: e,
                             is_error: true,
                             error_span: span,
+                        })
+                        .await;
+                    let empty_mesh = Mesh::new(
+                        PrimitiveTopology::TriangleList,
+                        RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
+                    );
+                    async_world
+                        .send_message(PreviewGenerated {
+                            preview_id,
+                            query,
+                            mesh: empty_mesh,
+                            evaluated_nodes: vec![],
+                            control_points,
+                            bom_entries,
+                            query_params,
                         })
                         .await;
                 }
@@ -330,6 +360,12 @@ fn spawn_collision_job(async_world: AsyncWorld, req: GenerateCollisionPreviewReq
 // Convert a manifold-rs Mesh into a Bevy Mesh
 fn rs_mesh_to_bevy_mesh(rs_mesh: &RsMesh) -> Result<Mesh, String> {
     let vertices = rs_mesh.vertices();
+    if vertices.is_empty() {
+        return Ok(Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
+        ));
+    }
     let stride = rs_mesh.num_props() as usize;
     if stride != 6 {
         return Err(format!(
