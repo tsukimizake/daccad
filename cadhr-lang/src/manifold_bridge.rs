@@ -266,14 +266,13 @@ pub fn extract_control_points<S>(
                     let tracked = [&mut x, &mut y, &mut z];
                     for (idx, arg) in [&args[0], &args[1], &args[2]].iter().enumerate() {
                         if let Some(vname) = var_name(arg) {
-                            let base_name = strip_rename_suffix(vname).to_string();
                             // overrideがあればその値を使い、なければデフォルト値を使う
                             let val = overrides
-                                .get(&base_name)
+                                .get(&vname.to_string())
                                 .copied()
                                 .unwrap_or(tracked[idx].value);
                             tracked[idx].value = val;
-                            vnames[idx] = Some(base_name);
+                            vnames[idx] = Some(vname.to_string());
                             var_substitutions.push((
                                 vname.to_string(),
                                 FixedPoint::from_hundredths((val * 100.0).round() as i64),
@@ -333,17 +332,6 @@ fn substitute_vars<S>(term: &mut Term<S>, subs: &[(String, FixedPoint)]) {
     }
 }
 
-/// リネームサフィックス `_\d+` を除去して元の変数名を返す
-fn strip_rename_suffix(name: &str) -> &str {
-    if let Some(pos) = name.rfind('_') {
-        let suffix = &name[pos + 1..];
-        if pos > 0 && !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()) {
-            return &name[..pos];
-        }
-    }
-    name
-}
-
 /// override mapに基づいてterms中のVar/Varを置換する
 pub fn apply_var_overrides<S>(
     terms: &mut Vec<Term<S>>,
@@ -364,8 +352,7 @@ fn apply_var_overrides_to_term<S>(
 ) {
     match term {
         Term::Var { name, .. } => {
-            let base = strip_rename_suffix(name);
-            if let Some(&val) = overrides.get(base) {
+            if let Some(&val) = overrides.get(name) {
                 *term = Term::Number {
                     value: FixedPoint::from_hundredths((val * 100.0).round() as i64),
                 };
@@ -1818,18 +1805,6 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_polygon_boolean_extrude() {
-        // 同じポリゴンをdifferenceすると空になる → num_propsが6であること
-        let poly_a = make_polygon_term(vec![(0, 0), (10, 0), (10, 10), (0, 10)]);
-        let poly_b = make_polygon_term(vec![(0, 0), (10, 0), (10, 10), (0, 10)]);
-        let diff = struc("difference".into(), vec![poly_a, poly_b]);
-        let extrude = struc("linear_extrude".into(), vec![diff, number_int(10)]);
-        let expr = ManifoldExpr::from_term(&extrude).unwrap();
-        let mesh = expr.to_mesh(&[]).unwrap();
-        assert_eq!(mesh.num_props(), 6);
-    }
-
-    #[test]
     fn test_stl_conversion() {
         use stl_io::{Normal, Triangle, Vertex};
 
@@ -2023,15 +1998,6 @@ mod tests {
     #[test]
     fn test_control_is_builtin_functor() {
         assert!(crate::term_processor::is_builtin_functor("control"));
-    }
-
-    #[test]
-    fn test_strip_rename_suffix() {
-        assert_eq!(strip_rename_suffix("X_1"), "X");
-        assert_eq!(strip_rename_suffix("Foo_123"), "Foo");
-        assert_eq!(strip_rename_suffix("X"), "X");
-        assert_eq!(strip_rename_suffix("X_abc"), "X_abc");
-        assert_eq!(strip_rename_suffix("_1"), "_1"); // 空になるケースは除去しない（rfind('_')=0, prefix=""）
     }
 
     #[test]

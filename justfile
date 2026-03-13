@@ -3,9 +3,6 @@ set shell := ["nu", "-c"]
 default:
     cargo run
 
-test arg:
-    cargo test cadhr-lang -- {{ arg }}
-
 build:
     cargo build
     cd tree-sitter-cadhr-lang; tree-sitter generate
