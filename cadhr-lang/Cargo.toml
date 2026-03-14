@@ -19,7 +19,6 @@ manifold = ["dep:manifold-rs", "dep:stl_io"]
 nom = "8.0.0"
 manifold-rs = { version = "0.6.4", optional = true }
 stl_io = { version = "0.8", optional = true }
-cadhr-lang-macros = { path = "../cadhr-lang-macros" }
 inventory = "0.3"
 serde_json = "1"
 

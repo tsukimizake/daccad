@@ -12,8 +12,8 @@ use cadhr_lang::bom::BomExtractor;
 use cadhr_lang::manifold_bridge::{MeshGenerator, extract_control_points};
 use cadhr_lang::module::resolve_modules;
 use cadhr_lang::parse::{
-    SrcSpan, collect_query_params, database, parse_error_span,
-    query as parse_query, substitute_query_params,
+    SrcSpan, collect_query_params, database, parse_error_span, query as parse_query,
+    substitute_query_params,
 };
 use cadhr_lang::term_processor::TermProcessor;
 use cadhr_lang::term_rewrite::{CadhrError, execute, infer_query_param_ranges};
@@ -119,6 +119,7 @@ fn spawn_mesh_job(async_world: AsyncWorld, req: GeneratePreviewRequest) {
                     .await;
             }
 
+            // TODO 正気にする
             let (resolved, control_points, query_params) = match resolve_result {
                 Ok(triple) => triple,
                 Err((e, span)) => {
@@ -259,7 +260,7 @@ fn spawn_collision_job(async_world: AsyncWorld, req: GenerateCollisionPreviewReq
             let query_str = req.query;
 
             let result = (|| -> Result<
-                (Vec<cadhr_lang::manifold_bridge::ManifoldExpr>, Vec<std::path::PathBuf>),
+                (Vec<cadhr_lang::manifold_bridge::Model3D>, Vec<std::path::PathBuf>),
                 (String, Option<cadhr_lang::parse::SrcSpan>),
             > {
                 let (_, query_terms) = parse_query(&query_str).map_err(|e| {
@@ -281,10 +282,10 @@ fn spawn_collision_job(async_world: AsyncWorld, req: GenerateCollisionPreviewReq
                     (format!("Rewrite error: {}", e), span)
                 })?;
 
-                use cadhr_lang::manifold_bridge::{ConversionError, ManifoldExpr};
-                let exprs: Vec<ManifoldExpr> = resolved
+                use cadhr_lang::manifold_bridge::{ConversionError, Model3D};
+                let exprs: Vec<Model3D> = resolved
                     .iter()
-                    .filter_map(|t| match ManifoldExpr::from_term(t) {
+                    .filter_map(|t| match Model3D::from_term(t) {
                         Ok(e) => Some(Ok(e)),
                         Err(ConversionError::UnknownPrimitive(_)) => None,
                         Err(e) => Some(Err(e)),
@@ -319,8 +320,8 @@ fn spawn_collision_job(async_world: AsyncWorld, req: GenerateCollisionPreviewReq
                 })
                 .and_then(|cr| {
                     let part_count = cr.part_count;
-                    let combined = rs_mesh_to_bevy_mesh(&cr.combined_mesh)
-                        .map_err(|e| (e, None))?;
+                    let combined =
+                        rs_mesh_to_bevy_mesh(&cr.combined_mesh).map_err(|e| (e, None))?;
                     let collisions: Vec<_> = cr
                         .collision_meshes
                         .iter()

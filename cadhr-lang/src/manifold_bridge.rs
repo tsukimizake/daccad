@@ -1,18 +1,13 @@
 //! Prolog Term -> manifold-rs Manifold 変換層
 //!
-//! Term（書き換え後の項）を ManifoldExpr 中間表現に変換し、
+//! Term（書き換え後の項）を Model3D / Model2D 中間表現に変換し、
 //! それを manifold-rs の Manifold オブジェクトに評価する。
 
 use crate::parse::{ArithOp, FixedPoint, SrcSpan, Term, term_as_fixed_point};
-use cadhr_lang_macros::define_manifold_expr;
 use manifold_rs::{Manifold, Mesh};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-
-// ============================================================
-// TrackedF64: ソーススパン付きf64値
-// ============================================================
 
 #[derive(Debug, Clone, Copy)]
 pub struct TrackedF64 {
@@ -36,56 +31,113 @@ impl TrackedF64 {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum Model3D {
+    Cube {
+        x: f64,
+        y: f64,
+        z: f64,
+    },
+    Sphere {
+        radius: f64,
+    },
+    Cylinder {
+        radius: f64,
+        height: f64,
+    },
+    Tetrahedron,
+    Union(Box<Model3D>, Box<Model3D>),
+    Difference(Box<Model3D>, Box<Model3D>),
+    Intersection(Box<Model3D>, Box<Model3D>),
+    Hull(Box<Model3D>, Box<Model3D>),
+    Translate {
+        model: Box<Model3D>,
+        x: f64,
+        y: f64,
+        z: f64,
+    },
+    Scale {
+        model: Box<Model3D>,
+        x: f64,
+        y: f64,
+        z: f64,
+    },
+    Rotate {
+        model: Box<Model3D>,
+        x: f64,
+        y: f64,
+        z: f64,
+    },
+    LinearExtrude {
+        profile: Model2D,
+        height: f64,
+    },
+    ComplexExtrude {
+        profile: Model2D,
+        height: f64,
+        twist: f64,
+        scale_x: f64,
+        scale_y: f64,
+    },
+    Revolve {
+        profile: Model2D,
+        degrees: f64,
+    },
+    Stl {
+        path: String,
+    },
+    SweepExtrude {
+        profile_data: Vec<(f64, f64)>,
+        path_data: Vec<(f64, f64)>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum Model2D {
+    SketchXY(Plane2D),
+    SketchYZ(Plane2D),
+    SketchXZ(Plane2D),
+    Path { points: Vec<f64> },
+    Union(Box<Model2D>, Box<Model2D>),
+    Difference(Box<Model2D>, Box<Model2D>),
+    Intersection(Box<Model2D>, Box<Model2D>),
+}
+
+#[derive(Debug, Clone)]
+pub enum Plane2D {
+    Sketch { points: Vec<f64> },
+    Circle { radius: f64 },
+}
+
 const DEFAULT_SEGMENTS: u32 = 32;
 
-// 以下を生成:
-// - pub enum ManifoldExpr { Cube{..}, Sphere{..}, ... }  (@no_variant付きは除外)
-// - pub enum ManifoldTag { Cube, Sphere, ..., Point, ... } (全エントリ)
-// - impl FromStr for ManifoldTag  (functor文字列 → タグ。@nameがあればその名前を使用)
-// - pub const BUILTIN_FUNCTORS: &[(&str, &[usize])]  (functor名 → 許容arity一覧)
-// - pub fn is_builtin_functor(functor: &str) -> bool
-define_manifold_expr! {
-    Cube { x: TrackedF64, y: TrackedF64, z: TrackedF64 };
-    @also_arity(1)
-    Sphere { radius: TrackedF64, segments: u32 };
-    @also_arity(2)
-    Cylinder { radius: TrackedF64, height: TrackedF64, segments: u32 };
-    Tetrahedron;
-    Union(Box<ManifoldExpr>, Box<ManifoldExpr>);
-    Difference(Box<ManifoldExpr>, Box<ManifoldExpr>);
-    Intersection(Box<ManifoldExpr>, Box<ManifoldExpr>);
-    Hull(Box<ManifoldExpr>, Box<ManifoldExpr>);
-    Translate { expr: Box<ManifoldExpr>, x: TrackedF64, y: TrackedF64, z: TrackedF64 };
-    Scale { expr: Box<ManifoldExpr>, x: TrackedF64, y: TrackedF64, z: TrackedF64 };
-    Rotate { expr: Box<ManifoldExpr>, x: TrackedF64, y: TrackedF64, z: TrackedF64 };
-    @name("p") @no_variant
-    Point { _x: TrackedF64, _y: TrackedF64 };
-    @name("sketchXY")
-    SketchXY { points: Vec<f64> };
-    @name("sketchYZ")
-    SketchYZ { points: Vec<f64> };
-    @name("sketchXZ")
-    SketchXZ { points: Vec<f64> };
-    @also_arity(1)
-    Circle { radius: TrackedF64, segments: u32 };
-    @name("linear_extrude")
-    LinearExtrude { profile: Box<ManifoldExpr>, height: TrackedF64 };
-    @name("complex_extrude")
-    ComplexExtrude { profile: Box<ManifoldExpr>, height: TrackedF64, twist: TrackedF64, scale_x: TrackedF64, scale_y: TrackedF64 };
-    @also_arity(2)
-    Revolve { profile: Box<ManifoldExpr>, degrees: TrackedF64, segments: u32 };
-    Polyhedron { points: Vec<f64>, faces: Vec<Vec<u32>> };
-    Stl { path: String };
-    @name("line_to") @no_variant
-    LineTo { _end: TrackedF64 };
-    @name("bezier_to") @also_arity(3) @no_variant
-    BezierTo { _cp1: TrackedF64, _cp2: TrackedF64, _end: TrackedF64 };
-    Path { points: Vec<f64> };
-    @name("sweep_extrude")
-    SweepExtrude { profile_data: Vec<(f64, f64)>, path_data: Vec<(f64, f64)> };
-    @also_arity(3) @no_variant
-    Control { x: TrackedF64, y: TrackedF64, z: TrackedF64, name: String };
-}
+pub const BUILTIN_FUNCTORS: &[(&str, &[usize])] = &[
+    ("cube", &[3]),
+    ("sphere", &[1, 2]),
+    ("cylinder", &[2, 3]),
+    ("tetrahedron", &[0]),
+    ("union", &[2]),
+    ("difference", &[2]),
+    ("intersection", &[2]),
+    ("hull", &[2]),
+    ("translate", &[4]),
+    ("scale", &[4]),
+    ("rotate", &[4]),
+    ("p", &[2, 3]),
+    ("sketchXY", &[1]),
+    ("sketchYZ", &[1]),
+    ("sketchXZ", &[1]),
+    ("circle", &[1, 2]),
+    ("linear_extrude", &[2]),
+    ("complex_extrude", &[5]),
+    ("revolve", &[2, 3]),
+    ("stl", &[1]),
+    ("line_to", &[1]),
+    ("bezier_to", &[2, 3]),
+    ("path", &[2]),
+    ("sweep_extrude", &[2]),
+    ("control", &[3, 4]),
+];
 
 inventory::submit! {
     crate::term_processor::BuiltinFunctorSet {
@@ -94,27 +146,124 @@ inventory::submit! {
     }
 }
 
-/// 変換エラー
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FunctorTag {
+    Cube,
+    Sphere,
+    Cylinder,
+    Tetrahedron,
+    Union,
+    Difference,
+    Intersection,
+    Hull,
+    Translate,
+    Scale,
+    Rotate,
+    Point,
+    SketchXY,
+    SketchYZ,
+    SketchXZ,
+    Circle,
+    LinearExtrude,
+    ComplexExtrude,
+    Revolve,
+    Stl,
+    LineTo,
+    BezierTo,
+    Path,
+    SweepExtrude,
+    Control,
+}
+
+impl FromStr for FunctorTag {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, ()> {
+        match s {
+            "cube" => Ok(FunctorTag::Cube),
+            "sphere" => Ok(FunctorTag::Sphere),
+            "cylinder" => Ok(FunctorTag::Cylinder),
+            "tetrahedron" => Ok(FunctorTag::Tetrahedron),
+            "union" => Ok(FunctorTag::Union),
+            "difference" => Ok(FunctorTag::Difference),
+            "intersection" => Ok(FunctorTag::Intersection),
+            "hull" => Ok(FunctorTag::Hull),
+            "translate" => Ok(FunctorTag::Translate),
+            "scale" => Ok(FunctorTag::Scale),
+            "rotate" => Ok(FunctorTag::Rotate),
+            "p" => Ok(FunctorTag::Point),
+            "sketchXY" => Ok(FunctorTag::SketchXY),
+            "sketchYZ" => Ok(FunctorTag::SketchYZ),
+            "sketchXZ" => Ok(FunctorTag::SketchXZ),
+            "circle" => Ok(FunctorTag::Circle),
+            "linear_extrude" => Ok(FunctorTag::LinearExtrude),
+            "complex_extrude" => Ok(FunctorTag::ComplexExtrude),
+            "revolve" => Ok(FunctorTag::Revolve),
+            "stl" => Ok(FunctorTag::Stl),
+            "line_to" => Ok(FunctorTag::LineTo),
+            "bezier_to" => Ok(FunctorTag::BezierTo),
+            "path" => Ok(FunctorTag::Path),
+            "sweep_extrude" => Ok(FunctorTag::SweepExtrude),
+            "control" => Ok(FunctorTag::Control),
+            _ => Err(()),
+        }
+    }
+}
+
+impl fmt::Display for FunctorTag {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            FunctorTag::Cube => "cube",
+            FunctorTag::Sphere => "sphere",
+            FunctorTag::Cylinder => "cylinder",
+            FunctorTag::Tetrahedron => "tetrahedron",
+            FunctorTag::Union => "union",
+            FunctorTag::Difference => "difference",
+            FunctorTag::Intersection => "intersection",
+            FunctorTag::Hull => "hull",
+            FunctorTag::Translate => "translate",
+            FunctorTag::Scale => "scale",
+            FunctorTag::Rotate => "rotate",
+            FunctorTag::Point => "p",
+            FunctorTag::SketchXY => "sketchXY",
+            FunctorTag::SketchYZ => "sketchYZ",
+            FunctorTag::SketchXZ => "sketchXZ",
+            FunctorTag::Circle => "circle",
+            FunctorTag::LinearExtrude => "linear_extrude",
+            FunctorTag::ComplexExtrude => "complex_extrude",
+            FunctorTag::Revolve => "revolve",
+            FunctorTag::Stl => "stl",
+            FunctorTag::LineTo => "line_to",
+            FunctorTag::BezierTo => "bezier_to",
+            FunctorTag::Path => "path",
+            FunctorTag::SweepExtrude => "sweep_extrude",
+            FunctorTag::Control => "control",
+        };
+        f.write_str(s)
+    }
+}
+
+// ============================================================
+// ConversionError
+// ============================================================
+
 #[derive(Debug, Clone)]
 pub enum ConversionError {
-    /// 未知のプリミティブ/functor
     UnknownPrimitive(String),
-    /// 引数の数が不一致
     ArityMismatch {
         functor: String,
         expected: String,
         got: usize,
     },
-    /// 引数の型が不正
     TypeMismatch {
         functor: String,
         arg_index: usize,
         expected: &'static str,
     },
-    /// 未束縛変数
     UnboundVariable(String),
-    /// I/Oエラー（ファイル読み込み失敗など）
-    IoError { functor: String, message: String },
+    IoError {
+        functor: String,
+        message: String,
+    },
 }
 
 impl fmt::Display for ConversionError {
@@ -176,7 +325,7 @@ pub struct ControlPoint {
     pub y: TrackedF64,
     pub z: TrackedF64,
     pub name: Option<String>,
-    /// リネーム前の変数名 (サフィックス _\d+ 除去済み)。x,y,zそれぞれに対応。
+    /// x,y,zそれぞれに対応するVar名。override mapのキーとして使用。
     pub var_names: [Option<String>; 3],
 }
 
@@ -241,6 +390,7 @@ pub fn extract_control_points<S>(
     overrides: &std::collections::HashMap<String, f64>,
 ) -> Vec<ControlPoint> {
     let mut control_points = Vec::new();
+
     // Var名 → 置換するNumber値 のマッピング
     let mut var_substitutions: Vec<(String, FixedPoint)> = Vec::new();
 
@@ -379,7 +529,10 @@ fn apply_var_overrides_to_term<S>(
     }
 }
 
-/// 引数抽出用ヘルパー
+// ============================================================
+// Args: 引数抽出用ヘルパー
+// ============================================================
+
 struct Args<'a, S> {
     args: &'a [Term<S>],
     functor: &'a str,
@@ -394,52 +547,24 @@ impl<'a, S> Args<'a, S> {
         self.args.len()
     }
 
-    fn tracked_f64(&self, i: usize) -> Result<TrackedF64, ConversionError> {
-        if let Some((fp, span)) = term_as_fixed_point(&self.args[i]) {
-            return Ok(TrackedF64 {
-                value: fp.to_f64(),
-                source_span: span,
-            });
+    fn f64(&self, i: usize) -> Result<f64, ConversionError> {
+        if let Some((fp, _)) = term_as_fixed_point(&self.args[i]) {
+            return Ok(fp.to_f64());
         }
         match &self.args[i] {
             Term::Var {
                 min: Some(lo),
                 max: Some(hi),
-                span,
                 ..
             } => {
                 let mid = (lo.value.to_f64() + hi.value.to_f64()) / 2.0;
-                Ok(TrackedF64 {
-                    value: mid,
-                    source_span: *span,
-                })
+                Ok(mid)
             }
             Term::Var { name, .. } => Err(ConversionError::UnboundVariable(name.clone())),
             _ => Err(ConversionError::TypeMismatch {
                 functor: self.functor.to_string(),
                 arg_index: i,
                 expected: "number",
-            }),
-        }
-    }
-
-    fn u32(&self, i: usize) -> Result<u32, ConversionError> {
-        if let Some((fp, _)) = term_as_fixed_point(&self.args[i]) {
-            return match fp.to_i64_checked() {
-                Some(v) if v >= 0 => Ok(v as u32),
-                _ => Err(ConversionError::TypeMismatch {
-                    functor: self.functor.to_string(),
-                    arg_index: i,
-                    expected: "non-negative integer",
-                }),
-            };
-        }
-        match &self.args[i] {
-            Term::Var { name, .. } => Err(ConversionError::UnboundVariable(name.clone())),
-            _ => Err(ConversionError::TypeMismatch {
-                functor: self.functor.to_string(),
-                arg_index: i,
-                expected: "integer",
             }),
         }
     }
@@ -455,8 +580,12 @@ impl<'a, S> Args<'a, S> {
         }
     }
 
-    fn term(&self, i: usize) -> Result<ManifoldExpr, ConversionError> {
-        ManifoldExpr::from_term(&self.args[i])
+    fn term_3d(&self, i: usize) -> Result<Model3D, ConversionError> {
+        Model3D::from_term(&self.args[i])
+    }
+
+    fn term_2d(&self, i: usize) -> Result<Model2D, ConversionError> {
+        Model2D::from_term(&self.args[i])
     }
 
     fn arity_error(&self, expected: &str) -> ConversionError {
@@ -468,12 +597,9 @@ impl<'a, S> Args<'a, S> {
     }
 }
 
-fn apply_plane_rotation(m: Manifold, profile: &ManifoldExpr) -> Manifold {
-    match profile.plane_rotation() {
-        Some((rx, ry, rz)) => m.rotate(rx, ry, rz),
-        None => m,
-    }
-}
+// ============================================================
+// Term → Model2D 変換
+// ============================================================
 
 fn extract_polygon_points<S>(
     list_term: &Term<S>,
@@ -519,109 +645,9 @@ fn extract_polygon_points<S>(
     }
 }
 
-fn extract_polyhedron_points<S>(
-    list_term: &Term<S>,
-    functor: &str,
-) -> Result<Vec<f64>, ConversionError> {
-    match list_term {
-        Term::List { items, .. } => {
-            let mut points = Vec::with_capacity(items.len() * 3);
-            for (i, item) in items.iter().enumerate() {
-                match item {
-                    Term::Struct {
-                        functor: f, args, ..
-                    } if f == "p" && args.len() == 3 => {
-                        for arg in args.iter() {
-                            match term_as_fixed_point(arg) {
-                                Some((fp, _)) => points.push(fp.to_f64()),
-                                None => {
-                                    return Err(ConversionError::TypeMismatch {
-                                        functor: functor.to_string(),
-                                        arg_index: i,
-                                        expected: "p(number, number, number)",
-                                    });
-                                }
-                            }
-                        }
-                    }
-                    _ => {
-                        return Err(ConversionError::TypeMismatch {
-                            functor: functor.to_string(),
-                            arg_index: i,
-                            expected: "p(x, y, z)",
-                        });
-                    }
-                }
-            }
-            Ok(points)
-        }
-        _ => Err(ConversionError::TypeMismatch {
-            functor: functor.to_string(),
-            arg_index: 0,
-            expected: "list of p(x, y, z)",
-        }),
-    }
-}
-
-fn extract_polyhedron_faces<S>(
-    list_term: &Term<S>,
-    functor: &str,
-) -> Result<Vec<Vec<u32>>, ConversionError> {
-    match list_term {
-        Term::List { items, .. } => {
-            let mut faces = Vec::with_capacity(items.len());
-            for (i, item) in items.iter().enumerate() {
-                match item {
-                    Term::List {
-                        items: indices,
-                        tail: None,
-                    } => {
-                        let mut face = Vec::with_capacity(indices.len());
-                        for idx_term in indices.iter() {
-                            match term_as_fixed_point(idx_term) {
-                                Some((fp, _)) => match fp.to_i64_checked() {
-                                    Some(v) if v >= 0 => face.push(v as u32),
-                                    _ => {
-                                        return Err(ConversionError::TypeMismatch {
-                                            functor: functor.to_string(),
-                                            arg_index: i,
-                                            expected: "non-negative integer index",
-                                        });
-                                    }
-                                },
-                                None => {
-                                    return Err(ConversionError::TypeMismatch {
-                                        functor: functor.to_string(),
-                                        arg_index: i,
-                                        expected: "list of integers",
-                                    });
-                                }
-                            }
-                        }
-                        faces.push(face);
-                    }
-                    _ => {
-                        return Err(ConversionError::TypeMismatch {
-                            functor: functor.to_string(),
-                            arg_index: i,
-                            expected: "[v0, v1, v2, ...]",
-                        });
-                    }
-                }
-            }
-            Ok(faces)
-        }
-        _ => Err(ConversionError::TypeMismatch {
-            functor: functor.to_string(),
-            arg_index: 1,
-            expected: "list of face index lists",
-        }),
-    }
-}
-
 fn extract_point_2d<S>(
     term: &Term<S>,
-    tag: ManifoldTag,
+    tag: FunctorTag,
     arg_index: usize,
 ) -> Result<(f64, f64), ConversionError> {
     match term {
@@ -658,7 +684,7 @@ fn extract_path_points<S>(
     start_term: &Term<S>,
     segments_term: &Term<S>,
 ) -> Result<Vec<f64>, ConversionError> {
-    let mut current = extract_point_2d(start_term, ManifoldTag::Path, 0)?;
+    let mut current = extract_point_2d(start_term, FunctorTag::Path, 0)?;
     let mut points = vec![current.0, current.1];
 
     let segments = match segments_term {
@@ -675,20 +701,20 @@ fn extract_path_points<S>(
     for (i, seg) in segments.iter().enumerate() {
         let (tag, args) = match seg {
             Term::Struct { functor, args, .. } => {
-                (ManifoldTag::from_str(functor).ok(), Some(args.as_slice()))
+                (FunctorTag::from_str(functor).ok(), Some(args.as_slice()))
             }
             _ => (None, None),
         };
         match (tag, args) {
-            (Some(ManifoldTag::LineTo), Some([end_term])) => {
-                let end = extract_point_2d(end_term, ManifoldTag::LineTo, i)?;
+            (Some(FunctorTag::LineTo), Some([end_term])) => {
+                let end = extract_point_2d(end_term, FunctorTag::LineTo, i)?;
                 points.push(end.0);
                 points.push(end.1);
                 current = end;
             }
-            (Some(ManifoldTag::BezierTo), Some([cp_term, end_term])) => {
-                let cp = extract_point_2d(cp_term, ManifoldTag::BezierTo, i)?;
-                let end = extract_point_2d(end_term, ManifoldTag::BezierTo, i)?;
+            (Some(FunctorTag::BezierTo), Some([cp_term, end_term])) => {
+                let cp = extract_point_2d(cp_term, FunctorTag::BezierTo, i)?;
+                let end = extract_point_2d(end_term, FunctorTag::BezierTo, i)?;
                 for (x, y) in crate::bezier::evaluate_quadratic(
                     current,
                     cp,
@@ -700,10 +726,10 @@ fn extract_path_points<S>(
                 }
                 current = end;
             }
-            (Some(ManifoldTag::BezierTo), Some([cp1_term, cp2_term, end_term])) => {
-                let cp1 = extract_point_2d(cp1_term, ManifoldTag::BezierTo, i)?;
-                let cp2 = extract_point_2d(cp2_term, ManifoldTag::BezierTo, i)?;
-                let end = extract_point_2d(end_term, ManifoldTag::BezierTo, i)?;
+            (Some(FunctorTag::BezierTo), Some([cp1_term, cp2_term, end_term])) => {
+                let cp1 = extract_point_2d(cp1_term, FunctorTag::BezierTo, i)?;
+                let cp2 = extract_point_2d(cp2_term, FunctorTag::BezierTo, i)?;
+                let end = extract_point_2d(end_term, FunctorTag::BezierTo, i)?;
                 for (x, y) in crate::bezier::evaluate_cubic(
                     current,
                     cp1,
@@ -729,27 +755,145 @@ fn extract_path_points<S>(
     Ok(points)
 }
 
-fn flat_to_pairs(flat: &[f64]) -> Vec<(f64, f64)> {
-    flat.chunks_exact(2).map(|c| (c[0], c[1])).collect()
+impl Model2D {
+    fn from_term<S>(term: &Term<S>) -> Result<Self, ConversionError> {
+        match term {
+            Term::Struct { functor, args, .. } => Self::from_struct(functor, args),
+            Term::InfixExpr { op, left, right } => Self::from_infix_expr(*op, left, right),
+            Term::Var { name, .. } => Err(ConversionError::UnboundVariable(name.clone())),
+            _ => Err(ConversionError::UnknownPrimitive(format!(
+                "expected 2D profile, got {:?}",
+                term
+            ))),
+        }
+    }
+
+    fn from_infix_expr<S>(
+        op: ArithOp,
+        left: &Term<S>,
+        right: &Term<S>,
+    ) -> Result<Self, ConversionError> {
+        let left_expr = Box::new(Self::from_term(left)?);
+        let right_expr = Box::new(Self::from_term(right)?);
+        match op {
+            ArithOp::Add => Ok(Model2D::Union(left_expr, right_expr)),
+            ArithOp::Sub => Ok(Model2D::Difference(left_expr, right_expr)),
+            ArithOp::Mul => Ok(Model2D::Intersection(left_expr, right_expr)),
+            ArithOp::Div => Err(ConversionError::UnknownPrimitive(
+                "division operator (/) is not supported for CAD operations".to_string(),
+            )),
+        }
+    }
+
+    fn from_struct<S>(functor: &str, args: &[Term<S>]) -> Result<Self, ConversionError> {
+        let a = Args::new(functor, args);
+        let tag = FunctorTag::from_str(functor)
+            .map_err(|_| ConversionError::UnknownPrimitive(functor.to_string()))?;
+
+        match tag {
+            FunctorTag::SketchXY if a.len() == 1 => {
+                let points = extract_polygon_points(&a.args[0], a.functor)?;
+                Ok(Model2D::SketchXY(Plane2D::Sketch { points }))
+            }
+            FunctorTag::SketchXY => Err(a.arity_error("1")),
+
+            FunctorTag::SketchYZ if a.len() == 1 => {
+                let points = extract_polygon_points(&a.args[0], a.functor)?;
+                Ok(Model2D::SketchYZ(Plane2D::Sketch { points }))
+            }
+            FunctorTag::SketchYZ => Err(a.arity_error("1")),
+
+            FunctorTag::SketchXZ if a.len() == 1 => {
+                let mut points = extract_polygon_points(&a.args[0], a.functor)?;
+                // Rx(-90°)で+Y押し出しにするため、第2座標(Z)を反転
+                for y in points.iter_mut().skip(1).step_by(2) {
+                    *y = -*y;
+                }
+                Ok(Model2D::SketchXZ(Plane2D::Sketch { points }))
+            }
+            FunctorTag::SketchXZ => Err(a.arity_error("1")),
+
+            FunctorTag::Circle if a.len() == 1 => {
+                Ok(Model2D::SketchXY(Plane2D::Circle { radius: a.f64(0)? }))
+            }
+            FunctorTag::Circle if a.len() == 2 => {
+                // segments引数は無視（常にDEFAULT_SEGMENTS）
+                Ok(Model2D::SketchXY(Plane2D::Circle { radius: a.f64(0)? }))
+            }
+            FunctorTag::Circle => Err(a.arity_error("1 or 2")),
+
+            FunctorTag::Path if a.len() == 2 => {
+                let points = extract_path_points(&a.args[0], &a.args[1])?;
+                Ok(Model2D::Path { points })
+            }
+            FunctorTag::Path => Err(a.arity_error("2")),
+
+            FunctorTag::Union if a.len() == 2 => Ok(Model2D::Union(
+                Box::new(Model2D::from_term(&a.args[0])?),
+                Box::new(Model2D::from_term(&a.args[1])?),
+            )),
+            FunctorTag::Difference if a.len() == 2 => Ok(Model2D::Difference(
+                Box::new(Model2D::from_term(&a.args[0])?),
+                Box::new(Model2D::from_term(&a.args[1])?),
+            )),
+            FunctorTag::Intersection if a.len() == 2 => Ok(Model2D::Intersection(
+                Box::new(Model2D::from_term(&a.args[0])?),
+                Box::new(Model2D::from_term(&a.args[1])?),
+            )),
+
+            _ => Err(ConversionError::UnknownPrimitive(format!(
+                "expected 2D profile, got {}",
+                functor
+            ))),
+        }
+    }
+
+    fn to_polygon_rings(&self) -> Option<Vec<Vec<f64>>> {
+        match self {
+            Model2D::SketchXY(Plane2D::Sketch { points })
+            | Model2D::SketchYZ(Plane2D::Sketch { points })
+            | Model2D::SketchXZ(Plane2D::Sketch { points })
+            | Model2D::Path { points } => Some(vec![points.clone()]),
+            Model2D::SketchXY(Plane2D::Circle { radius }) => {
+                let mut points = Vec::with_capacity(DEFAULT_SEGMENTS as usize * 2);
+                for i in 0..DEFAULT_SEGMENTS {
+                    let angle = 2.0 * std::f64::consts::PI * (i as f64) / (DEFAULT_SEGMENTS as f64);
+                    points.push(radius * angle.cos());
+                    points.push(radius * angle.sin());
+                }
+                Some(vec![points])
+            }
+            Model2D::SketchYZ(Plane2D::Circle { radius })
+            | Model2D::SketchXZ(Plane2D::Circle { radius }) => {
+                let mut points = Vec::with_capacity(DEFAULT_SEGMENTS as usize * 2);
+                for i in 0..DEFAULT_SEGMENTS {
+                    let angle = 2.0 * std::f64::consts::PI * (i as f64) / (DEFAULT_SEGMENTS as f64);
+                    points.push(radius * angle.cos());
+                    points.push(radius * angle.sin());
+                }
+                Some(vec![points])
+            }
+            Model2D::Union(a, b) => polygon_boolean_2d(a, b, |ma, mb| ma.union(mb)),
+            Model2D::Difference(a, b) => polygon_boolean_2d(a, b, |ma, mb| ma.difference(mb)),
+            Model2D::Intersection(a, b) => polygon_boolean_2d(a, b, |ma, mb| ma.intersection(mb)),
+        }
+    }
+
+    /// スケッチ平面に応じた回転角度 (rx, ry, rz) を返す
+    fn plane_rotation(&self) -> Option<(f64, f64, f64)> {
+        match self {
+            Model2D::SketchYZ(_) => Some((90.0, 0.0, 90.0)),
+            Model2D::SketchXZ(_) => Some((-90.0, 0.0, 0.0)),
+            _ => None,
+        }
+    }
 }
 
 const THIN_EXTRUDE_HEIGHT: f64 = 1.0;
 
-fn polygon_rings_or_err(
-    expr: &ManifoldExpr,
-    functor: &str,
-) -> Result<Vec<Vec<f64>>, ConversionError> {
-    expr.to_polygon_rings()
-        .ok_or_else(|| ConversionError::TypeMismatch {
-            functor: functor.to_string(),
-            arg_index: 0,
-            expected: "polygon data",
-        })
-}
-
 fn polygon_boolean_2d(
-    a: &ManifoldExpr,
-    b: &ManifoldExpr,
+    a: &Model2D,
+    b: &Model2D,
     op: impl FnOnce(&Manifold, &Manifold) -> Manifold,
 ) -> Option<Vec<Vec<f64>>> {
     let rings_a = a.to_polygon_rings()?;
@@ -767,42 +911,35 @@ fn polygon_boolean_2d(
     Some(rings)
 }
 
-impl ManifoldExpr {
-    fn to_polygon_rings(&self) -> Option<Vec<Vec<f64>>> {
-        match self {
-            ManifoldExpr::SketchXY { points }
-            | ManifoldExpr::SketchYZ { points }
-            | ManifoldExpr::SketchXZ { points }
-            | ManifoldExpr::Path { points } => Some(vec![points.clone()]),
-            ManifoldExpr::Circle { radius, segments } => {
-                let r = radius.value;
-                let mut points = Vec::with_capacity(*segments as usize * 2);
-                for i in 0..*segments {
-                    let angle = 2.0 * std::f64::consts::PI * (i as f64) / (*segments as f64);
-                    points.push(r * angle.cos());
-                    points.push(r * angle.sin());
-                }
-                Some(vec![points])
-            }
-            ManifoldExpr::Union(a, b) => polygon_boolean_2d(a, b, |ma, mb| ma.union(mb)),
-            ManifoldExpr::Difference(a, b) => polygon_boolean_2d(a, b, |ma, mb| ma.difference(mb)),
-            ManifoldExpr::Intersection(a, b) => {
-                polygon_boolean_2d(a, b, |ma, mb| ma.intersection(mb))
-            }
-            _ => None,
-        }
-    }
+fn polygon_rings_or_err(
+    profile: &Model2D,
+    functor: &str,
+) -> Result<Vec<Vec<f64>>, ConversionError> {
+    profile
+        .to_polygon_rings()
+        .ok_or_else(|| ConversionError::TypeMismatch {
+            functor: functor.to_string(),
+            arg_index: 0,
+            expected: "polygon data",
+        })
+}
 
-    /// スケッチ平面に応じた回転角度 (rx, ry, rz) を返す
-    fn plane_rotation(&self) -> Option<(f64, f64, f64)> {
-        match self {
-            ManifoldExpr::SketchYZ { .. } => Some((90.0, 0.0, 90.0)),
-            ManifoldExpr::SketchXZ { .. } => Some((-90.0, 0.0, 0.0)),
-            _ => None,
-        }
-    }
+fn flat_to_pairs(flat: &[f64]) -> Vec<(f64, f64)> {
+    flat.chunks_exact(2).map(|c| (c[0], c[1])).collect()
+}
 
-    /// Prolog Term から ManifoldExpr へ変換
+fn apply_plane_rotation(m: Manifold, profile: &Model2D) -> Manifold {
+    match profile.plane_rotation() {
+        Some((rx, ry, rz)) => m.rotate(rx, ry, rz),
+        None => m,
+    }
+}
+
+// ============================================================
+// Term → Model3D 変換
+// ============================================================
+
+impl Model3D {
     pub fn from_term<S>(term: &Term<S>) -> Result<Self, ConversionError> {
         match term {
             Term::Struct { functor, args, .. } => Self::from_struct(functor, args),
@@ -822,13 +959,15 @@ impl ManifoldExpr {
         left: &Term<S>,
         right: &Term<S>,
     ) -> Result<Self, ConversionError> {
+        // depth-first: まず2Dとして両辺を試み、両方成功したら2Dを含む3D(extrude)ではなく
+        // 呼び出し元が3Dを期待しているので、3Dとして解釈する
         let left_expr = Box::new(Self::from_term(left)?);
         let right_expr = Box::new(Self::from_term(right)?);
 
         match op {
-            ArithOp::Add => Ok(ManifoldExpr::Union(left_expr, right_expr)),
-            ArithOp::Sub => Ok(ManifoldExpr::Difference(left_expr, right_expr)),
-            ArithOp::Mul => Ok(ManifoldExpr::Intersection(left_expr, right_expr)),
+            ArithOp::Add => Ok(Model3D::Union(left_expr, right_expr)),
+            ArithOp::Sub => Ok(Model3D::Difference(left_expr, right_expr)),
+            ArithOp::Mul => Ok(Model3D::Intersection(left_expr, right_expr)),
             ArithOp::Div => Err(ConversionError::UnknownPrimitive(
                 "division operator (/) is not supported for CAD operations".to_string(),
             )),
@@ -837,178 +976,128 @@ impl ManifoldExpr {
 
     fn from_struct<S>(functor: &str, args: &[Term<S>]) -> Result<Self, ConversionError> {
         let a = Args::new(functor, args);
-        let tag = ManifoldTag::from_str(functor)
+        let tag = FunctorTag::from_str(functor)
             .map_err(|_| ConversionError::UnknownPrimitive(functor.to_string()))?;
 
         match tag {
-            ManifoldTag::Cube if a.len() == 3 => Ok(ManifoldExpr::Cube {
-                x: a.tracked_f64(0)?,
-                y: a.tracked_f64(1)?,
-                z: a.tracked_f64(2)?,
+            FunctorTag::Cube if a.len() == 3 => Ok(Model3D::Cube {
+                x: a.f64(0)?,
+                y: a.f64(1)?,
+                z: a.f64(2)?,
             }),
-            ManifoldTag::Cube => Err(a.arity_error("3")),
+            FunctorTag::Cube => Err(a.arity_error("3")),
 
-            ManifoldTag::Sphere if a.len() == 1 => Ok(ManifoldExpr::Sphere {
-                radius: a.tracked_f64(0)?,
-                segments: DEFAULT_SEGMENTS,
-            }),
-            ManifoldTag::Sphere if a.len() == 2 => Ok(ManifoldExpr::Sphere {
-                radius: a.tracked_f64(0)?,
-                segments: a.u32(1)?,
-            }),
-            ManifoldTag::Sphere => Err(a.arity_error("1 or 2")),
-
-            ManifoldTag::Cylinder if a.len() == 2 => Ok(ManifoldExpr::Cylinder {
-                radius: a.tracked_f64(0)?,
-                height: a.tracked_f64(1)?,
-                segments: DEFAULT_SEGMENTS,
-            }),
-            ManifoldTag::Cylinder if a.len() == 3 => Ok(ManifoldExpr::Cylinder {
-                radius: a.tracked_f64(0)?,
-                height: a.tracked_f64(1)?,
-                segments: a.u32(2)?,
-            }),
-            ManifoldTag::Cylinder => Err(a.arity_error("2 or 3")),
-
-            ManifoldTag::Tetrahedron if a.len() == 0 => Ok(ManifoldExpr::Tetrahedron),
-            ManifoldTag::Tetrahedron => Err(a.arity_error("0")),
-
-            ManifoldTag::Union if a.len() == 2 => Ok(ManifoldExpr::Union(
-                Box::new(a.term(0)?),
-                Box::new(a.term(1)?),
-            )),
-            ManifoldTag::Union => Err(a.arity_error("2")),
-
-            ManifoldTag::Difference if a.len() == 2 => Ok(ManifoldExpr::Difference(
-                Box::new(a.term(0)?),
-                Box::new(a.term(1)?),
-            )),
-            ManifoldTag::Difference => Err(a.arity_error("2")),
-
-            ManifoldTag::Intersection if a.len() == 2 => Ok(ManifoldExpr::Intersection(
-                Box::new(a.term(0)?),
-                Box::new(a.term(1)?),
-            )),
-            ManifoldTag::Intersection => Err(a.arity_error("2")),
-
-            ManifoldTag::Hull if a.len() == 2 => Ok(ManifoldExpr::Hull(
-                Box::new(a.term(0)?),
-                Box::new(a.term(1)?),
-            )),
-            ManifoldTag::Hull => Err(a.arity_error("2")),
-
-            ManifoldTag::Translate if a.len() == 4 => Ok(ManifoldExpr::Translate {
-                expr: Box::new(a.term(0)?),
-                x: a.tracked_f64(1)?,
-                y: a.tracked_f64(2)?,
-                z: a.tracked_f64(3)?,
-            }),
-            ManifoldTag::Translate => Err(a.arity_error("4")),
-
-            ManifoldTag::Scale if a.len() == 4 => Ok(ManifoldExpr::Scale {
-                expr: Box::new(a.term(0)?),
-                x: a.tracked_f64(1)?,
-                y: a.tracked_f64(2)?,
-                z: a.tracked_f64(3)?,
-            }),
-            ManifoldTag::Scale => Err(a.arity_error("4")),
-
-            ManifoldTag::Rotate if a.len() == 4 => Ok(ManifoldExpr::Rotate {
-                expr: Box::new(a.term(0)?),
-                x: a.tracked_f64(1)?,
-                y: a.tracked_f64(2)?,
-                z: a.tracked_f64(3)?,
-            }),
-            ManifoldTag::Rotate => Err(a.arity_error("4")),
-
-            ManifoldTag::Point => Err(ConversionError::UnknownPrimitive(
-                "p is a data constructor, not a shape primitive".to_string(),
-            )),
-
-            ManifoldTag::SketchXY if a.len() == 1 => {
-                let points = extract_polygon_points(&a.args[0], a.functor)?;
-                Ok(ManifoldExpr::SketchXY { points })
+            FunctorTag::Sphere if a.len() == 1 => Ok(Model3D::Sphere { radius: a.f64(0)? }),
+            FunctorTag::Sphere if a.len() == 2 => {
+                // segments引数は無視（常にDEFAULT_SEGMENTS）
+                Ok(Model3D::Sphere { radius: a.f64(0)? })
             }
-            ManifoldTag::SketchXY => Err(a.arity_error("1")),
+            FunctorTag::Sphere => Err(a.arity_error("1 or 2")),
 
-            ManifoldTag::SketchYZ if a.len() == 1 => {
-                let points = extract_polygon_points(&a.args[0], a.functor)?;
-                Ok(ManifoldExpr::SketchYZ { points })
+            FunctorTag::Cylinder if a.len() == 2 => Ok(Model3D::Cylinder {
+                radius: a.f64(0)?,
+                height: a.f64(1)?,
+            }),
+            FunctorTag::Cylinder if a.len() == 3 => {
+                // segments引数は無視（常にDEFAULT_SEGMENTS）
+                Ok(Model3D::Cylinder {
+                    radius: a.f64(0)?,
+                    height: a.f64(1)?,
+                })
             }
-            ManifoldTag::SketchYZ => Err(a.arity_error("1")),
+            FunctorTag::Cylinder => Err(a.arity_error("2 or 3")),
 
-            ManifoldTag::SketchXZ if a.len() == 1 => {
-                let mut points = extract_polygon_points(&a.args[0], a.functor)?;
-                // Rx(-90°)で+Y押し出しにするため、第2座標(Z)を反転
-                for y in points.iter_mut().skip(1).step_by(2) {
-                    *y = -*y;
-                }
-                Ok(ManifoldExpr::SketchXZ { points })
+            FunctorTag::Tetrahedron if a.len() == 0 => Ok(Model3D::Tetrahedron),
+            FunctorTag::Tetrahedron => Err(a.arity_error("0")),
+
+            FunctorTag::Union if a.len() == 2 => Ok(Model3D::Union(
+                Box::new(a.term_3d(0)?),
+                Box::new(a.term_3d(1)?),
+            )),
+            FunctorTag::Union => Err(a.arity_error("2")),
+
+            FunctorTag::Difference if a.len() == 2 => Ok(Model3D::Difference(
+                Box::new(a.term_3d(0)?),
+                Box::new(a.term_3d(1)?),
+            )),
+            FunctorTag::Difference => Err(a.arity_error("2")),
+
+            FunctorTag::Intersection if a.len() == 2 => Ok(Model3D::Intersection(
+                Box::new(a.term_3d(0)?),
+                Box::new(a.term_3d(1)?),
+            )),
+            FunctorTag::Intersection => Err(a.arity_error("2")),
+
+            FunctorTag::Hull if a.len() == 2 => Ok(Model3D::Hull(
+                Box::new(a.term_3d(0)?),
+                Box::new(a.term_3d(1)?),
+            )),
+            FunctorTag::Hull => Err(a.arity_error("2")),
+
+            FunctorTag::Translate if a.len() == 4 => Ok(Model3D::Translate {
+                model: Box::new(a.term_3d(0)?),
+                x: a.f64(1)?,
+                y: a.f64(2)?,
+                z: a.f64(3)?,
+            }),
+            FunctorTag::Translate => Err(a.arity_error("4")),
+
+            FunctorTag::Scale if a.len() == 4 => Ok(Model3D::Scale {
+                model: Box::new(a.term_3d(0)?),
+                x: a.f64(1)?,
+                y: a.f64(2)?,
+                z: a.f64(3)?,
+            }),
+            FunctorTag::Scale => Err(a.arity_error("4")),
+
+            FunctorTag::Rotate if a.len() == 4 => Ok(Model3D::Rotate {
+                model: Box::new(a.term_3d(0)?),
+                x: a.f64(1)?,
+                y: a.f64(2)?,
+                z: a.f64(3)?,
+            }),
+            FunctorTag::Rotate => Err(a.arity_error("4")),
+
+            FunctorTag::LinearExtrude if a.len() == 2 => Ok(Model3D::LinearExtrude {
+                profile: a.term_2d(0)?,
+                height: a.f64(1)?,
+            }),
+            FunctorTag::LinearExtrude => Err(a.arity_error("2")),
+
+            FunctorTag::ComplexExtrude if a.len() == 5 => Ok(Model3D::ComplexExtrude {
+                profile: a.term_2d(0)?,
+                height: a.f64(1)?,
+                twist: a.f64(2)?,
+                scale_x: a.f64(3)?,
+                scale_y: a.f64(4)?,
+            }),
+            FunctorTag::ComplexExtrude => Err(a.arity_error("5")),
+
+            FunctorTag::Revolve if a.len() == 2 => Ok(Model3D::Revolve {
+                profile: a.term_2d(0)?,
+                degrees: a.f64(1)?,
+            }),
+            FunctorTag::Revolve if a.len() == 3 => {
+                // segments引数は無視（常にDEFAULT_SEGMENTS）
+                Ok(Model3D::Revolve {
+                    profile: a.term_2d(0)?,
+                    degrees: a.f64(1)?,
+                })
             }
-            ManifoldTag::SketchXZ => Err(a.arity_error("1")),
+            FunctorTag::Revolve => Err(a.arity_error("2 or 3")),
 
-            ManifoldTag::Path if a.len() == 2 => {
-                let points = extract_path_points(&a.args[0], &a.args[1])?;
-                Ok(ManifoldExpr::Path { points })
-            }
-            ManifoldTag::Path => Err(a.arity_error("2")),
-
-            ManifoldTag::Circle if a.len() == 1 => Ok(ManifoldExpr::Circle {
-                radius: a.tracked_f64(0)?,
-                segments: DEFAULT_SEGMENTS,
-            }),
-            ManifoldTag::Circle if a.len() == 2 => Ok(ManifoldExpr::Circle {
-                radius: a.tracked_f64(0)?,
-                segments: a.u32(1)?,
-            }),
-            ManifoldTag::Circle => Err(a.arity_error("1 or 2")),
-
-            ManifoldTag::LinearExtrude if a.len() == 2 => Ok(ManifoldExpr::LinearExtrude {
-                profile: Box::new(a.term(0)?),
-                height: a.tracked_f64(1)?,
-            }),
-            ManifoldTag::LinearExtrude => Err(a.arity_error("2")),
-
-            ManifoldTag::ComplexExtrude if a.len() == 5 => Ok(ManifoldExpr::ComplexExtrude {
-                profile: Box::new(a.term(0)?),
-                height: a.tracked_f64(1)?,
-                twist: a.tracked_f64(2)?,
-                scale_x: a.tracked_f64(3)?,
-                scale_y: a.tracked_f64(4)?,
-            }),
-            ManifoldTag::ComplexExtrude => Err(a.arity_error("5")),
-
-            ManifoldTag::Revolve if a.len() == 2 => Ok(ManifoldExpr::Revolve {
-                profile: Box::new(a.term(0)?),
-                degrees: a.tracked_f64(1)?,
-                segments: DEFAULT_SEGMENTS,
-            }),
-            ManifoldTag::Revolve if a.len() == 3 => Ok(ManifoldExpr::Revolve {
-                profile: Box::new(a.term(0)?),
-                degrees: a.tracked_f64(1)?,
-                segments: a.u32(2)?,
-            }),
-            ManifoldTag::Revolve => Err(a.arity_error("2 or 3")),
-
-            ManifoldTag::Polyhedron if a.len() == 2 => {
-                let points = extract_polyhedron_points(&a.args[0], a.functor)?;
-                let faces = extract_polyhedron_faces(&a.args[1], a.functor)?;
-                Ok(ManifoldExpr::Polyhedron { points, faces })
-            }
-            ManifoldTag::Polyhedron => Err(a.arity_error("2")),
-
-            ManifoldTag::Stl if a.len() == 1 => {
+            FunctorTag::Stl if a.len() == 1 => {
                 let path = a.string(0)?;
-                Ok(ManifoldExpr::Stl { path })
+                Ok(Model3D::Stl { path })
             }
-            ManifoldTag::Stl => Err(a.arity_error("1")),
+            FunctorTag::Stl => Err(a.arity_error("1")),
 
-            ManifoldTag::SweepExtrude if a.len() == 2 => {
-                let profile_expr = a.term(0)?;
-                let path_expr = a.term(1)?;
-                let profile_rings = polygon_rings_or_err(&profile_expr, "sweep_extrude")?;
+            FunctorTag::SweepExtrude if a.len() == 2 => {
+                let profile_2d = a.term_2d(0)?;
+                let path_2d = a.term_2d(1)?;
+                let profile_rings = polygon_rings_or_err(&profile_2d, "sweep_extrude")?;
                 let path_rings =
-                    path_expr
+                    path_2d
                         .to_polygon_rings()
                         .ok_or_else(|| ConversionError::TypeMismatch {
                             functor: "sweep_extrude".to_string(),
@@ -1017,96 +1106,86 @@ impl ManifoldExpr {
                         })?;
                 let profile_data = flat_to_pairs(&profile_rings[0]);
                 let path_data = flat_to_pairs(&path_rings[0]);
-                Ok(ManifoldExpr::SweepExtrude {
+                Ok(Model3D::SweepExtrude {
                     profile_data,
                     path_data,
                 })
             }
-            ManifoldTag::SweepExtrude => Err(a.arity_error("2")),
+            FunctorTag::SweepExtrude => Err(a.arity_error("2")),
 
-            ManifoldTag::LineTo | ManifoldTag::BezierTo => {
+            FunctorTag::Point => Err(ConversionError::UnknownPrimitive(
+                "p is a data constructor, not a shape primitive".to_string(),
+            )),
+            FunctorTag::LineTo | FunctorTag::BezierTo => {
                 Err(ConversionError::UnknownPrimitive(format!(
                     "{} is a data constructor for path, not a shape primitive",
                     functor
                 )))
             }
-
-            ManifoldTag::Control => Err(ConversionError::UnknownPrimitive(
+            FunctorTag::Control => Err(ConversionError::UnknownPrimitive(
                 "control is a data constructor, not a shape primitive".to_string(),
             )),
+
+            // 2D functors used as top-level 3D: wrap as thin extrude
+            FunctorTag::SketchXY
+            | FunctorTag::SketchYZ
+            | FunctorTag::SketchXZ
+            | FunctorTag::Circle
+            | FunctorTag::Path => {
+                // 2Dプロファイルを薄いextrudeとして3D化
+                let profile = Model2D::from_struct(functor, args)?;
+                Ok(Model3D::LinearExtrude {
+                    profile,
+                    height: 0.001,
+                })
+            }
         }
     }
 
-    /// ManifoldExpr を manifold-rs の Manifold に評価
+    /// Model3D を manifold-rs の Manifold に評価
     pub fn evaluate(&self, include_paths: &[PathBuf]) -> Result<Manifold, ConversionError> {
         match self {
-            ManifoldExpr::Cube { x, y, z } => Ok(Manifold::cube(x.value, y.value, z.value)),
-            ManifoldExpr::Sphere { radius, segments } => {
-                Ok(Manifold::sphere(radius.value, *segments))
-            }
-            ManifoldExpr::Cylinder {
-                radius,
-                height,
-                segments,
-            } => Ok(Manifold::cylinder(
-                radius.value,
-                radius.value,
-                height.value,
-                *segments,
+            Model3D::Cube { x, y, z } => Ok(Manifold::cube(*x, *y, *z)),
+            Model3D::Sphere { radius } => Ok(Manifold::sphere(*radius, DEFAULT_SEGMENTS)),
+            Model3D::Cylinder { radius, height } => Ok(Manifold::cylinder(
+                *radius,
+                *radius,
+                *height,
+                DEFAULT_SEGMENTS,
             )),
-            ManifoldExpr::Tetrahedron => Ok(Manifold::tetrahedron()),
+            Model3D::Tetrahedron => Ok(Manifold::tetrahedron()),
 
-            ManifoldExpr::Union(a, b) => Ok(a
+            Model3D::Union(a, b) => Ok(a
                 .evaluate(include_paths)?
                 .union(&b.evaluate(include_paths)?)),
-            ManifoldExpr::Difference(a, b) => Ok(a
+            Model3D::Difference(a, b) => Ok(a
                 .evaluate(include_paths)?
                 .difference(&b.evaluate(include_paths)?)),
-            ManifoldExpr::Intersection(a, b) => Ok(a
+            Model3D::Intersection(a, b) => Ok(a
                 .evaluate(include_paths)?
                 .intersection(&b.evaluate(include_paths)?)),
-            ManifoldExpr::Hull(a, b) => Ok(a
+            Model3D::Hull(a, b) => Ok(a
                 .evaluate(include_paths)?
                 .union(&b.evaluate(include_paths)?)
                 .hull()),
 
-            ManifoldExpr::Translate { expr, x, y, z } => Ok(expr
-                .evaluate(include_paths)?
-                .translate(x.value, y.value, z.value)),
-            ManifoldExpr::Scale { expr, x, y, z } => Ok(expr
-                .evaluate(include_paths)?
-                .scale(x.value, y.value, z.value)),
-            ManifoldExpr::Rotate { expr, x, y, z } => Ok(expr
-                .evaluate(include_paths)?
-                .rotate(x.value, y.value, z.value)),
-
-            ManifoldExpr::SketchXY { points } | ManifoldExpr::Path { points } => {
-                Ok(Manifold::extrude(&[points], 0.001, 0, 0.0, 1.0, 1.0))
+            Model3D::Translate { model, x, y, z } => {
+                Ok(model.evaluate(include_paths)?.translate(*x, *y, *z))
             }
-            ManifoldExpr::SketchYZ { points } | ManifoldExpr::SketchXZ { points } => {
-                let m = Manifold::extrude(&[points], 0.001, 0, 0.0, 1.0, 1.0);
-                let (rx, ry, rz) = self.plane_rotation().unwrap();
-                Ok(m.rotate(rx, ry, rz))
+            Model3D::Scale { model, x, y, z } => {
+                Ok(model.evaluate(include_paths)?.scale(*x, *y, *z))
             }
-            ManifoldExpr::Circle { .. } => {
-                let rings =
-                    self.to_polygon_rings()
-                        .ok_or_else(|| ConversionError::TypeMismatch {
-                            functor: "circle".to_string(),
-                            arg_index: 0,
-                            expected: "polygon data",
-                        })?;
-                let refs: Vec<&[f64]> = rings.iter().map(|r| r.as_slice()).collect();
-                Ok(Manifold::extrude(&refs, 0.001, 0, 0.0, 1.0, 1.0))
+            Model3D::Rotate { model, x, y, z } => {
+                Ok(model.evaluate(include_paths)?.rotate(*x, *y, *z))
             }
 
-            ManifoldExpr::LinearExtrude { profile, height } => {
+            Model3D::LinearExtrude { profile, height } => {
                 let rings = polygon_rings_or_err(profile, "linear_extrude")?;
                 let refs: Vec<&[f64]> = rings.iter().map(|r| r.as_slice()).collect();
-                let m = Manifold::extrude(&refs, height.value, 0, 0.0, 1.0, 1.0);
+                let m = Manifold::extrude(&refs, *height, 0, 0.0, 1.0, 1.0);
                 Ok(apply_plane_rotation(m, profile))
             }
-            ManifoldExpr::ComplexExtrude {
+            Model3D::ComplexExtrude {
                 profile,
                 height,
                 twist,
@@ -1115,29 +1194,18 @@ impl ManifoldExpr {
             } => {
                 let rings = polygon_rings_or_err(profile, "complex_extrude")?;
                 let refs: Vec<&[f64]> = rings.iter().map(|r| r.as_slice()).collect();
-                let n_divisions = (height.value.abs() as u32).max(1);
-                let m = Manifold::extrude(
-                    &refs,
-                    height.value,
-                    n_divisions,
-                    twist.value,
-                    scale_x.value,
-                    scale_y.value,
-                );
+                let n_divisions = (height.abs() as u32).max(1);
+                let m = Manifold::extrude(&refs, *height, n_divisions, *twist, *scale_x, *scale_y);
                 Ok(apply_plane_rotation(m, profile))
             }
-            ManifoldExpr::Revolve {
-                profile,
-                degrees,
-                segments,
-            } => {
+            Model3D::Revolve { profile, degrees } => {
                 let rings = polygon_rings_or_err(profile, "revolve")?;
                 let refs: Vec<&[f64]> = rings.iter().map(|r| r.as_slice()).collect();
-                let m = Manifold::revolve(&refs, *segments, degrees.value);
+                let m = Manifold::revolve(&refs, DEFAULT_SEGMENTS, *degrees);
                 Ok(apply_plane_rotation(m, profile))
             }
 
-            ManifoldExpr::SweepExtrude {
+            Model3D::SweepExtrude {
                 profile_data,
                 path_data,
             } => {
@@ -1146,21 +1214,7 @@ impl ManifoldExpr {
                 Ok(Manifold::from_mesh(mesh))
             }
 
-            ManifoldExpr::Polyhedron { points, faces } => {
-                let verts: Vec<f32> = points.iter().map(|&v| v as f32).collect();
-                let tri_indices: Vec<u32> = faces
-                    .iter()
-                    .flat_map(|face| {
-                        (1..face.len() - 1).flat_map(move |i| {
-                            vec![face[0], face[i as usize], face[i as usize + 1]]
-                        })
-                    })
-                    .collect();
-                let mesh = Mesh::new(&verts, &tri_indices);
-                Ok(Manifold::from_mesh(mesh))
-            }
-
-            ManifoldExpr::Stl { path } => {
+            Model3D::Stl { path } => {
                 let raw = Path::new(path);
                 let resolved = if raw.is_absolute() {
                     PathBuf::from(path)
@@ -1198,7 +1252,7 @@ impl ManifoldExpr {
         }
     }
 
-    /// ManifoldExpr を Mesh に変換（法線計算込み）
+    /// Model3D を Mesh に変換（法線計算込み）
     pub fn to_mesh(&self, include_paths: &[PathBuf]) -> Result<Mesh, ConversionError> {
         let manifold = self.evaluate(include_paths)?;
         let with_normals = manifold.calculate_normals(0, 30.0);
@@ -1206,11 +1260,13 @@ impl ManifoldExpr {
     }
 }
 
-/// 評価済みノード: ManifoldExpr + Manifold + Mesh + AABB + children
-/// raycastによるノード特定に使用
+// ============================================================
+// EvaluatedNode: raycastによるノード特定に使用
+// ============================================================
+
 #[derive(Clone)]
 pub struct EvaluatedNode {
-    pub expr: ManifoldExpr,
+    pub expr: Model3D,
     pub mesh_verts: Vec<f32>,
     pub mesh_indices: Vec<u32>,
     pub aabb_min: [f64; 3],
@@ -1218,54 +1274,8 @@ pub struct EvaluatedNode {
     pub children: Vec<EvaluatedNode>,
 }
 
-impl EvaluatedNode {
-    /// ManifoldExprからTrackedF64のsource_spanを収集
-    pub fn collect_tracked_spans(&self) -> Vec<(String, TrackedF64)> {
-        collect_tracked_spans_from_expr(&self.expr)
-    }
-}
-
-pub fn collect_tracked_spans_from_expr(expr: &ManifoldExpr) -> Vec<(String, TrackedF64)> {
-    match expr {
-        ManifoldExpr::Cube { x, y, z } => {
-            vec![("x".into(), *x), ("y".into(), *y), ("z".into(), *z)]
-        }
-        ManifoldExpr::Sphere { radius, .. } => vec![("radius".into(), *radius)],
-        ManifoldExpr::Cylinder { radius, height, .. } => {
-            vec![("radius".into(), *radius), ("height".into(), *height)]
-        }
-        ManifoldExpr::Translate { x, y, z, .. } => {
-            vec![("x".into(), *x), ("y".into(), *y), ("z".into(), *z)]
-        }
-        ManifoldExpr::Scale { x, y, z, .. } => {
-            vec![("x".into(), *x), ("y".into(), *y), ("z".into(), *z)]
-        }
-        ManifoldExpr::Rotate { x, y, z, .. } => {
-            vec![("x".into(), *x), ("y".into(), *y), ("z".into(), *z)]
-        }
-        ManifoldExpr::LinearExtrude { height, .. } => vec![("height".into(), *height)],
-        ManifoldExpr::ComplexExtrude {
-            height,
-            twist,
-            scale_x,
-            scale_y,
-            ..
-        } => {
-            vec![
-                ("height".into(), *height),
-                ("twist".into(), *twist),
-                ("scale_x".into(), *scale_x),
-                ("scale_y".into(), *scale_y),
-            ]
-        }
-        ManifoldExpr::Revolve { degrees, .. } => vec![("degrees".into(), *degrees)],
-        ManifoldExpr::Circle { radius, .. } => vec![("radius".into(), *radius)],
-        _ => vec![],
-    }
-}
-
 fn build_evaluated_node(
-    expr: &ManifoldExpr,
+    expr: &Model3D,
     include_paths: &[PathBuf],
 ) -> Result<EvaluatedNode, ConversionError> {
     let manifold = expr.evaluate(include_paths)?;
@@ -1293,21 +1303,18 @@ fn build_evaluated_node(
     }
 
     let children = match expr {
-        ManifoldExpr::Union(a, b)
-        | ManifoldExpr::Difference(a, b)
-        | ManifoldExpr::Intersection(a, b)
-        | ManifoldExpr::Hull(a, b) => {
+        Model3D::Union(a, b)
+        | Model3D::Difference(a, b)
+        | Model3D::Intersection(a, b)
+        | Model3D::Hull(a, b) => {
             vec![
                 build_evaluated_node(a, include_paths)?,
                 build_evaluated_node(b, include_paths)?,
             ]
         }
-        ManifoldExpr::Translate { expr: e, .. }
-        | ManifoldExpr::Scale { expr: e, .. }
-        | ManifoldExpr::Rotate { expr: e, .. }
-        | ManifoldExpr::LinearExtrude { profile: e, .. }
-        | ManifoldExpr::ComplexExtrude { profile: e, .. }
-        | ManifoldExpr::Revolve { profile: e, .. } => {
+        Model3D::Translate { model: e, .. }
+        | Model3D::Scale { model: e, .. }
+        | Model3D::Rotate { model: e, .. } => {
             vec![build_evaluated_node(e, include_paths)?]
         }
         _ => vec![],
@@ -1323,6 +1330,10 @@ fn build_evaluated_node(
     })
 }
 
+// ============================================================
+// MeshGenerator: TermProcessor実装
+// ============================================================
+
 pub struct MeshGenerator {
     pub include_paths: Vec<PathBuf>,
 }
@@ -1332,9 +1343,9 @@ impl<S> crate::term_processor::TermProcessor<S> for MeshGenerator {
     type Error = ConversionError;
 
     fn process(&self, terms: &[Term<S>]) -> Result<Self::Output, Self::Error> {
-        let exprs: Vec<ManifoldExpr> = terms
+        let exprs: Vec<Model3D> = terms
             .iter()
-            .filter_map(|t| match ManifoldExpr::from_term(t) {
+            .filter_map(|t| match Model3D::from_term(t) {
                 Ok(e) => Some(Ok(e)),
                 Err(ConversionError::UnknownPrimitive(_)) => None,
                 Err(e) => Some(Err(e)),
@@ -1385,12 +1396,12 @@ mod tests {
             "cube".into(),
             vec![number_int(10), number_int(20), number_int(30)],
         );
-        let expr = ManifoldExpr::from_term(&term).unwrap();
+        let expr = Model3D::from_term(&term).unwrap();
         match expr {
-            ManifoldExpr::Cube { x, y, z } => {
-                assert_eq!(x.value, 10.0);
-                assert_eq!(y.value, 20.0);
-                assert_eq!(z.value, 30.0);
+            Model3D::Cube { x, y, z } => {
+                assert_eq!(x, 10.0);
+                assert_eq!(y, 20.0);
+                assert_eq!(z, 30.0);
             }
             _ => panic!("Expected Cube"),
         }
@@ -1399,11 +1410,10 @@ mod tests {
     #[test]
     fn test_sphere_default_segments() {
         let term: Term = struc("sphere".into(), vec![number_int(5)]);
-        let expr = ManifoldExpr::from_term(&term).unwrap();
+        let expr = Model3D::from_term(&term).unwrap();
         match expr {
-            ManifoldExpr::Sphere { radius, segments } => {
-                assert_eq!(radius.value, 5.0);
-                assert_eq!(segments, DEFAULT_SEGMENTS);
+            Model3D::Sphere { radius } => {
+                assert_eq!(radius, 5.0);
             }
             _ => panic!("Expected Sphere"),
         }
@@ -1412,11 +1422,10 @@ mod tests {
     #[test]
     fn test_sphere_explicit_segments() {
         let term: Term = struc("sphere".into(), vec![number_int(5), number_int(16)]);
-        let expr = ManifoldExpr::from_term(&term).unwrap();
+        let expr = Model3D::from_term(&term).unwrap();
         match expr {
-            ManifoldExpr::Sphere { radius, segments } => {
-                assert_eq!(radius.value, 5.0);
-                assert_eq!(segments, 16);
+            Model3D::Sphere { radius } => {
+                assert_eq!(radius, 5.0);
             }
             _ => panic!("Expected Sphere"),
         }
@@ -1425,16 +1434,11 @@ mod tests {
     #[test]
     fn test_cylinder_default_segments() {
         let term: Term = struc("cylinder".into(), vec![number_int(3), number_int(10)]);
-        let expr = ManifoldExpr::from_term(&term).unwrap();
+        let expr = Model3D::from_term(&term).unwrap();
         match expr {
-            ManifoldExpr::Cylinder {
-                radius,
-                height,
-                segments,
-            } => {
-                assert_eq!(radius.value, 3.0);
-                assert_eq!(height.value, 10.0);
-                assert_eq!(segments, DEFAULT_SEGMENTS);
+            Model3D::Cylinder { radius, height } => {
+                assert_eq!(radius, 3.0);
+                assert_eq!(height, 10.0);
             }
             _ => panic!("Expected Cylinder"),
         }
@@ -1451,8 +1455,8 @@ mod tests {
             vec![number_int(2), number_int(2), number_int(2)],
         );
         let union_term = struc("union".into(), vec![cube1, cube2]);
-        let expr = ManifoldExpr::from_term(&union_term).unwrap();
-        assert!(matches!(expr, ManifoldExpr::Union(_, _)));
+        let expr = Model3D::from_term(&union_term).unwrap();
+        assert!(matches!(expr, Model3D::Union(_, _)));
     }
 
     #[test]
@@ -1465,12 +1469,12 @@ mod tests {
             "translate".into(),
             vec![cube, number_int(5), number_int(10), number_int(15)],
         );
-        let expr = ManifoldExpr::from_term(&translated).unwrap();
+        let expr = Model3D::from_term(&translated).unwrap();
         match expr {
-            ManifoldExpr::Translate { x, y, z, .. } => {
-                assert_eq!(x.value, 5.0);
-                assert_eq!(y.value, 10.0);
-                assert_eq!(z.value, 15.0);
+            Model3D::Translate { x, y, z, .. } => {
+                assert_eq!(x, 5.0);
+                assert_eq!(y, 10.0);
+                assert_eq!(z, 15.0);
             }
             _ => panic!("Expected Translate"),
         }
@@ -1482,21 +1486,21 @@ mod tests {
             "cube".into(),
             vec![var("X".into()), number_int(1), number_int(1)],
         );
-        let result = ManifoldExpr::from_term(&term);
+        let result = Model3D::from_term(&term);
         assert!(matches!(result, Err(ConversionError::UnboundVariable(_))));
     }
 
     #[test]
     fn test_arity_mismatch() {
         let term: Term = struc("cube".into(), vec![number_int(1), number_int(2)]);
-        let result = ManifoldExpr::from_term(&term);
+        let result = Model3D::from_term(&term);
         assert!(matches!(result, Err(ConversionError::ArityMismatch { .. })));
     }
 
     #[test]
     fn test_unknown_primitive() {
         let term: Term = struc("unknown_shape".into(), vec![number_int(1)]);
-        let result = ManifoldExpr::from_term(&term);
+        let result = Model3D::from_term(&term);
         assert!(matches!(result, Err(ConversionError::UnknownPrimitive(_))));
     }
 
@@ -1515,8 +1519,8 @@ mod tests {
         let sphere = struc("sphere".into(), vec![number_int(1)]);
         let diff = struc("difference".into(), vec![union_term, sphere]);
 
-        let expr = ManifoldExpr::from_term(&diff).unwrap();
-        assert!(matches!(expr, ManifoldExpr::Difference(_, _)));
+        let expr = Model3D::from_term(&diff).unwrap();
+        assert!(matches!(expr, Model3D::Difference(_, _)));
     }
 
     #[test]
@@ -1532,8 +1536,8 @@ mod tests {
         let sphere = struc("sphere".into(), vec![number_int(1)]);
         let add_term = arith_expr(ArithOp::Add, cube, sphere);
 
-        let expr = ManifoldExpr::from_term(&add_term).unwrap();
-        assert!(matches!(expr, ManifoldExpr::Union(_, _)));
+        let expr = Model3D::from_term(&add_term).unwrap();
+        assert!(matches!(expr, Model3D::Union(_, _)));
     }
 
     #[test]
@@ -1549,8 +1553,8 @@ mod tests {
         let sphere = struc("sphere".into(), vec![number_int(1)]);
         let sub_term = arith_expr(ArithOp::Sub, cube, sphere);
 
-        let expr = ManifoldExpr::from_term(&sub_term).unwrap();
-        assert!(matches!(expr, ManifoldExpr::Difference(_, _)));
+        let expr = Model3D::from_term(&sub_term).unwrap();
+        assert!(matches!(expr, Model3D::Difference(_, _)));
     }
 
     #[test]
@@ -1566,8 +1570,8 @@ mod tests {
         let sphere = struc("sphere".into(), vec![number_int(1)]);
         let mul_term = arith_expr(ArithOp::Mul, cube, sphere);
 
-        let expr = ManifoldExpr::from_term(&mul_term).unwrap();
-        assert!(matches!(expr, ManifoldExpr::Intersection(_, _)));
+        let expr = Model3D::from_term(&mul_term).unwrap();
+        assert!(matches!(expr, Model3D::Intersection(_, _)));
     }
 
     #[test]
@@ -1586,10 +1590,10 @@ mod tests {
         let union_term = arith_expr(ArithOp::Add, cube, sphere);
         let diff_term = arith_expr(ArithOp::Sub, union_term, cylinder);
 
-        let expr = ManifoldExpr::from_term(&diff_term).unwrap();
+        let expr = Model3D::from_term(&diff_term).unwrap();
         match expr {
-            ManifoldExpr::Difference(left, _) => {
-                assert!(matches!(*left, ManifoldExpr::Union(_, _)));
+            Model3D::Difference(left, _) => {
+                assert!(matches!(*left, Model3D::Union(_, _)));
             }
             _ => panic!("Expected Difference"),
         }
@@ -1608,7 +1612,7 @@ mod tests {
         let sphere = struc("sphere".into(), vec![number_int(1)]);
         let div_term = arith_expr(ArithOp::Div, cube, sphere);
 
-        let result = ManifoldExpr::from_term(&div_term);
+        let result = Model3D::from_term(&div_term);
         assert!(matches!(result, Err(ConversionError::UnknownPrimitive(_))));
     }
 
@@ -1623,25 +1627,24 @@ mod tests {
     #[test]
     fn test_polygon_conversion() {
         let term = make_polygon_term(vec![(1, 0), (0, 0), (0, 1), (1, 1)]);
-        let expr = ManifoldExpr::from_term(&term).unwrap();
+        let expr = Model2D::from_term(&term).unwrap();
         match expr {
-            ManifoldExpr::SketchXY { points } => {
+            Model2D::SketchXY(Plane2D::Sketch { points }) => {
                 assert_eq!(points, vec![1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0]);
             }
-            _ => panic!("Expected Polygon"),
+            _ => panic!("Expected SketchXY(Sketch)"),
         }
     }
 
     #[test]
     fn test_circle_default_segments() {
         let term: Term = struc("circle".into(), vec![number_int(5)]);
-        let expr = ManifoldExpr::from_term(&term).unwrap();
+        let expr = Model2D::from_term(&term).unwrap();
         match expr {
-            ManifoldExpr::Circle { radius, segments } => {
-                assert_eq!(radius.value, 5.0);
-                assert_eq!(segments, DEFAULT_SEGMENTS);
+            Model2D::SketchXY(Plane2D::Circle { radius }) => {
+                assert_eq!(radius, 5.0);
             }
-            _ => panic!("Expected Circle"),
+            _ => panic!("Expected SketchXY(Circle)"),
         }
     }
 
@@ -1649,11 +1652,11 @@ mod tests {
     fn test_extrude_polygon() {
         let polygon = make_polygon_term(vec![(1, 0), (0, 0), (0, 1), (1, 1)]);
         let term = struc("linear_extrude".into(), vec![polygon, number_int(3)]);
-        let expr = ManifoldExpr::from_term(&term).unwrap();
+        let expr = Model3D::from_term(&term).unwrap();
         match expr {
-            ManifoldExpr::LinearExtrude { profile, height } => {
-                assert!(matches!(*profile, ManifoldExpr::SketchXY { .. }));
-                assert_eq!(height.value, 3.0);
+            Model3D::LinearExtrude { profile, height } => {
+                assert!(matches!(profile, Model2D::SketchXY(Plane2D::Sketch { .. })));
+                assert_eq!(height, 3.0);
             }
             _ => panic!("Expected LinearExtrude"),
         }
@@ -1663,16 +1666,11 @@ mod tests {
     fn test_revolve_circle() {
         let circle: Term = struc("circle".into(), vec![number_int(5)]);
         let term = struc("revolve".into(), vec![circle, number_int(360)]);
-        let expr = ManifoldExpr::from_term(&term).unwrap();
+        let expr = Model3D::from_term(&term).unwrap();
         match expr {
-            ManifoldExpr::Revolve {
-                profile,
-                degrees,
-                segments,
-            } => {
-                assert!(matches!(*profile, ManifoldExpr::Circle { .. }));
-                assert_eq!(degrees.value, 360.0);
-                assert_eq!(segments, DEFAULT_SEGMENTS);
+            Model3D::Revolve { profile, degrees } => {
+                assert!(matches!(profile, Model2D::SketchXY(Plane2D::Circle { .. })));
+                assert_eq!(degrees, 360.0);
             }
             _ => panic!("Expected Revolve"),
         }
@@ -1682,11 +1680,11 @@ mod tests {
     fn test_extrude_circle() {
         let circle: Term = struc("circle".into(), vec![number_int(5)]);
         let term = struc("linear_extrude".into(), vec![circle, number_int(10)]);
-        let expr = ManifoldExpr::from_term(&term).unwrap();
+        let expr = Model3D::from_term(&term).unwrap();
         match expr {
-            ManifoldExpr::LinearExtrude { profile, height } => {
-                assert!(matches!(*profile, ManifoldExpr::Circle { .. }));
-                assert_eq!(height.value, 10.0);
+            Model3D::LinearExtrude { profile, height } => {
+                assert!(matches!(profile, Model2D::SketchXY(Plane2D::Circle { .. })));
+                assert_eq!(height, 10.0);
             }
             _ => panic!("Expected LinearExtrude"),
         }
@@ -1695,7 +1693,8 @@ mod tests {
     #[test]
     fn test_polygon_standalone_evaluate() {
         let term = make_polygon_term(vec![(1, 0), (0, 0), (0, 1), (1, 1)]);
-        let expr = ManifoldExpr::from_term(&term).unwrap();
+        // 2Dプロファイルをトップレベルで3Dとして使うと薄いextrudeになる
+        let expr = Model3D::from_term(&term).unwrap();
         let mesh = expr.to_mesh(&[]).unwrap();
         assert!(mesh.vertices().len() > 0);
     }
@@ -1704,7 +1703,7 @@ mod tests {
     fn test_extrude_evaluate() {
         let polygon = make_polygon_term(vec![(1, 0), (0, 0), (0, 1), (1, 1)]);
         let term = struc("linear_extrude".into(), vec![polygon, number_int(3)]);
-        let expr = ManifoldExpr::from_term(&term).unwrap();
+        let expr = Model3D::from_term(&term).unwrap();
         let mesh = expr.to_mesh(&[]).unwrap();
         assert!(mesh.vertices().len() > 0);
     }
@@ -1715,7 +1714,7 @@ mod tests {
         let poly_a = make_polygon_term(vec![(0, 0), (2, 0), (2, 2), (0, 2)]);
         let poly_b = make_polygon_term(vec![(1, 1), (3, 1), (3, 3), (1, 3)]);
         let union_term = struc("union".into(), vec![poly_a, poly_b]);
-        let expr = ManifoldExpr::from_term(&union_term).unwrap();
+        let expr = Model2D::from_term(&union_term).unwrap();
         let rings = expr.to_polygon_rings();
         assert!(
             rings.is_some(),
@@ -1730,7 +1729,7 @@ mod tests {
         let poly_a = make_polygon_term(vec![(0, 0), (4, 0), (4, 4), (0, 4)]);
         let poly_b = make_polygon_term(vec![(1, 1), (3, 1), (3, 3), (1, 3)]);
         let diff_term = struc("difference".into(), vec![poly_a, poly_b]);
-        let expr = ManifoldExpr::from_term(&diff_term).unwrap();
+        let expr = Model2D::from_term(&diff_term).unwrap();
         let rings = expr.to_polygon_rings();
         assert!(
             rings.is_some(),
@@ -1746,8 +1745,8 @@ mod tests {
         let poly_a = make_polygon_term(vec![(0, 0), (2, 0), (2, 2), (0, 2)]);
         let poly_b = make_polygon_term(vec![(1, 1), (3, 1), (3, 3), (1, 3)]);
         let add_term = arith_expr(ArithOp::Add, poly_a, poly_b);
-        let expr = ManifoldExpr::from_term(&add_term).unwrap();
-        assert!(matches!(expr, ManifoldExpr::Union(_, _)));
+        let expr = Model2D::from_term(&add_term).unwrap();
+        assert!(matches!(expr, Model2D::Union(_, _)));
         let rings = expr.to_polygon_rings();
         assert!(rings.is_some());
     }
@@ -1759,7 +1758,7 @@ mod tests {
         let circle: Term = struc("circle".into(), vec![number_int(3)]);
         let union_term: Term = struc("union".into(), vec![poly, circle]);
         let extrude_term = struc("linear_extrude".into(), vec![union_term, number_int(10)]);
-        let expr = ManifoldExpr::from_term(&extrude_term).unwrap();
+        let expr = Model3D::from_term(&extrude_term).unwrap();
         let mesh = expr.to_mesh(&[]).unwrap();
         assert!(mesh.vertices().len() > 0);
     }
@@ -1773,7 +1772,7 @@ mod tests {
         let diff1 = struc("difference".into(), vec![poly_a, poly_b]);
         let diff2 = struc("difference".into(), vec![diff1, poly_c]);
         let extrude = struc("linear_extrude".into(), vec![diff2, number_int(50)]);
-        let expr = ManifoldExpr::from_term(&extrude).unwrap();
+        let expr = Model3D::from_term(&extrude).unwrap();
         let mesh = expr.to_mesh(&[]).unwrap();
         assert!(mesh.vertices().len() > 0);
         assert_eq!(mesh.num_props(), 6); // xyz + normals
@@ -1785,12 +1784,9 @@ mod tests {
         let poly = make_polygon_term(vec![(0, 0), (10, 0), (10, 10), (0, 10)]);
         let hole = make_polygon_term(vec![(2, 2), (8, 2), (8, 8), (2, 8)]);
         let diff = struc("difference".into(), vec![poly, hole]);
-        let path = make_path_term(
-            (0, 0),
-            vec![line_to_term(10, 5), line_to_term(20, 0)],
-        );
+        let path = make_path_term((0, 0), vec![line_to_term(10, 5), line_to_term(20, 0)]);
         let sweep = struc("sweep_extrude".into(), vec![diff, path]);
-        let expr = ManifoldExpr::from_term(&sweep).unwrap();
+        let expr = Model3D::from_term(&sweep).unwrap();
         let mesh = expr.to_mesh(&[]).unwrap();
         assert!(mesh.vertices().len() > 0);
     }
@@ -1834,7 +1830,7 @@ mod tests {
             "stl".into(),
             vec![string_lit(stl_path.to_str().unwrap().into())],
         );
-        let expr = ManifoldExpr::from_term(&term).unwrap();
+        let expr = Model3D::from_term(&term).unwrap();
         let mesh = expr.to_mesh(&[]).unwrap();
         assert!(mesh.vertices().len() > 0);
 
@@ -2115,9 +2111,9 @@ mod tests {
                 line_to_term(0, 10),
             ],
         );
-        let expr = ManifoldExpr::from_term(&term).unwrap();
+        let expr = Model2D::from_term(&term).unwrap();
         match &expr {
-            ManifoldExpr::Path { points } => {
+            Model2D::Path { points } => {
                 // start + 3 line_to = 4 points = 8 floats
                 assert_eq!(points.len(), 8);
                 assert_eq!(points, &[0.0, 0.0, 10.0, 0.0, 10.0, 10.0, 0.0, 10.0]);
@@ -2129,9 +2125,9 @@ mod tests {
     #[test]
     fn test_path_quadratic_bezier() {
         let term = make_path_term((0, 0), vec![bezier_to_quad_term((5, 10), (10, 0))]);
-        let expr = ManifoldExpr::from_term(&term).unwrap();
+        let expr = Model2D::from_term(&term).unwrap();
         match &expr {
-            ManifoldExpr::Path { points } => {
+            Model2D::Path { points } => {
                 // start(1) + 16 bezier steps = 17 points = 34 floats
                 assert_eq!(points.len(), 34);
                 // first point is start
@@ -2151,9 +2147,9 @@ mod tests {
             (0, 0),
             vec![bezier_to_cubic_term((5, 10), (10, 10), (10, 0))],
         );
-        let expr = ManifoldExpr::from_term(&term).unwrap();
+        let expr = Model2D::from_term(&term).unwrap();
         match &expr {
-            ManifoldExpr::Path { points } => {
+            Model2D::Path { points } => {
                 assert_eq!(points.len(), 34);
                 assert!((points[32] - 10.0).abs() < 1e-9);
                 assert!((points[33] - 0.0).abs() < 1e-9);
@@ -2172,9 +2168,9 @@ mod tests {
                 bezier_to_cubic_term((5, 15), (0, 10), (0, 0)),
             ],
         );
-        let expr = ManifoldExpr::from_term(&term).unwrap();
+        let expr = Model2D::from_term(&term).unwrap();
         match &expr {
-            ManifoldExpr::Path { points } => {
+            Model2D::Path { points } => {
                 // start(1) + line(1) + quad(16) + cubic(16) = 34 points = 68 floats
                 assert_eq!(points.len(), 68);
             }
@@ -2192,7 +2188,8 @@ mod tests {
                 line_to_term(0, 10),
             ],
         );
-        let expr = ManifoldExpr::from_term(&term).unwrap();
+        // pathを3Dとして評価すると薄いextrudeになる
+        let expr = Model3D::from_term(&term).unwrap();
         let mesh = expr.to_mesh(&[]).unwrap();
         assert!(mesh.vertices().len() > 0);
     }
@@ -2208,11 +2205,11 @@ mod tests {
             ],
         );
         let term = struc("linear_extrude".into(), vec![path, number_int(5)]);
-        let expr = ManifoldExpr::from_term(&term).unwrap();
+        let expr = Model3D::from_term(&term).unwrap();
         match &expr {
-            ManifoldExpr::LinearExtrude { profile, height } => {
-                assert!(matches!(**profile, ManifoldExpr::Path { .. }));
-                assert_eq!(height.value, 5.0);
+            Model3D::LinearExtrude { profile, height } => {
+                assert!(matches!(profile, Model2D::Path { .. }));
+                assert_eq!(*height, 5.0);
             }
             _ => panic!("Expected LinearExtrude"),
         }
@@ -2225,8 +2222,8 @@ mod tests {
         let profile = make_polygon_term(vec![(0, 0), (5, 0), (5, 5), (0, 5)]);
         let path = make_path_term((0, 0), vec![line_to_term(0, 20)]);
         let term = struc("sweep_extrude".into(), vec![profile, path]);
-        let expr = ManifoldExpr::from_term(&term).unwrap();
-        assert!(matches!(&expr, ManifoldExpr::SweepExtrude { .. }));
+        let expr = Model3D::from_term(&term).unwrap();
+        assert!(matches!(&expr, Model3D::SweepExtrude { .. }));
         let mesh = expr.to_mesh(&[]).unwrap();
         assert!(mesh.vertices().len() > 0);
     }
@@ -2239,7 +2236,7 @@ mod tests {
             vec![bezier_to_cubic_term((5, 0), (10, 10), (10, 20))],
         );
         let term = struc("sweep_extrude".into(), vec![profile, path]);
-        let expr = ManifoldExpr::from_term(&term).unwrap();
+        let expr = Model3D::from_term(&term).unwrap();
         let mesh = expr.to_mesh(&[]).unwrap();
         assert!(mesh.vertices().len() > 0);
     }

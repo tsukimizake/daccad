@@ -1863,22 +1863,12 @@ dependencies = [
 name = "cadhr-lang"
 version = "0.1.0"
 dependencies = [
- "cadhr-lang-macros",
  "inventory",
  "manifold-rs",
  "nom 8.0.0",
  "serde_json",
  "stl_io",
  "tempfile",
-]
-
-[[package]]
-name = "cadhr-lang-macros"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]

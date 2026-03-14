@@ -1,4 +1,4 @@
-use crate::manifold_bridge::{ConversionError, ManifoldExpr};
+use crate::manifold_bridge::{ConversionError, Model3D};
 use manifold_rs::{Manifold, Mesh};
 use std::path::PathBuf;
 
@@ -37,7 +37,7 @@ fn aabb_overlap(a: &([f64; 3], [f64; 3]), b: &([f64; 3], [f64; 3])) -> bool {
 }
 
 pub fn check_collisions(
-    exprs: &[ManifoldExpr],
+    exprs: &[Model3D],
     include_paths: &[PathBuf],
 ) -> Result<CollisionResult, ConversionError> {
     if exprs.is_empty() {
@@ -89,28 +89,23 @@ pub fn check_collisions(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manifold_bridge::TrackedF64;
-
-    fn plain(v: f64) -> TrackedF64 {
-        TrackedF64::plain(v)
-    }
 
     #[test]
     fn test_overlapping_cubes_have_collision() {
-        let cube1 = ManifoldExpr::Cube {
-            x: plain(10.0),
-            y: plain(10.0),
-            z: plain(10.0),
+        let cube1 = Model3D::Cube {
+            x: 10.0,
+            y: 10.0,
+            z: 10.0,
         };
-        let cube2 = ManifoldExpr::Translate {
-            expr: Box::new(ManifoldExpr::Cube {
-                x: plain(10.0),
-                y: plain(10.0),
-                z: plain(10.0),
+        let cube2 = Model3D::Translate {
+            model: Box::new(Model3D::Cube {
+                x: 10.0,
+                y: 10.0,
+                z: 10.0,
             }),
-            x: plain(5.0),
-            y: plain(0.0),
-            z: plain(0.0),
+            x: 5.0,
+            y: 0.0,
+            z: 0.0,
         };
 
         let result = check_collisions(&[cube1, cube2], &[]).unwrap();
@@ -123,20 +118,20 @@ mod tests {
 
     #[test]
     fn test_separated_cubes_no_collision() {
-        let cube1 = ManifoldExpr::Cube {
-            x: plain(10.0),
-            y: plain(10.0),
-            z: plain(10.0),
+        let cube1 = Model3D::Cube {
+            x: 10.0,
+            y: 10.0,
+            z: 10.0,
         };
-        let cube2 = ManifoldExpr::Translate {
-            expr: Box::new(ManifoldExpr::Cube {
-                x: plain(10.0),
-                y: plain(10.0),
-                z: plain(10.0),
+        let cube2 = Model3D::Translate {
+            model: Box::new(Model3D::Cube {
+                x: 10.0,
+                y: 10.0,
+                z: 10.0,
             }),
-            x: plain(100.0),
-            y: plain(0.0),
-            z: plain(0.0),
+            x: 100.0,
+            y: 0.0,
+            z: 0.0,
         };
 
         let result = check_collisions(&[cube1, cube2], &[]).unwrap();

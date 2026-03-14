@@ -28,8 +28,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use bevy_egui::{EguiContexts, egui};
 use bevy_file_dialog::prelude::*;
-#[allow(unused_imports)]
-use cadhr_lang::manifold_bridge::{EvaluatedNode, collect_tracked_spans_from_expr};
+use cadhr_lang::manifold_bridge::EvaluatedNode;
 use cadhr_lang::parse::SrcSpan;
 use std::io::Cursor;
 use std::path::Path;
