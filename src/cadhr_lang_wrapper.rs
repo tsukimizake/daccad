@@ -119,81 +119,37 @@ fn spawn_mesh_job(async_world: AsyncWorld, req: GeneratePreviewRequest) {
                     .await;
             }
 
-            // TODO 正気にする
-            let (resolved, control_points, query_params) = match resolve_result {
-                Ok(triple) => triple,
-                Err((e, span)) => {
-                    bevy::log::error!("Failed to resolve: {}", e);
-                    async_world
-                        .send_message(CadhrLangOutput {
-                            preview_id: Some(preview_id),
-                            message: e,
-                            is_error: true,
-                            error_span: span,
-                        })
-                        .await;
+            let mesh_result = resolve_result.and_then(|(resolved, control_points, query_params)| {
+                let bom_entries = BomExtractor
+                    .process(&resolved)
+                    .unwrap_or_else(|e| {
+                        bevy::log::warn!("BOM extraction warning: {}", e);
+                        vec![]
+                    });
+
+                if resolved.is_empty() {
                     let empty_mesh = Mesh::new(
                         PrimitiveTopology::TriangleList,
                         RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
                     );
-                    async_world
-                        .send_message(PreviewGenerated {
-                            preview_id,
-                            query,
-                            mesh: empty_mesh,
-                            evaluated_nodes: vec![],
-                            control_points: vec![],
-                            bom_entries: vec![],
-                            query_params: vec![],
-                        })
-                        .await;
-                    return;
+                    return Ok((empty_mesh, vec![], control_points, bom_entries, query_params));
                 }
-            };
 
-            let bom_entries = BomExtractor
-                .process(&resolved)
-                .unwrap_or_else(|e| {
-                    bevy::log::warn!("BOM extraction warning: {}", e);
-                    vec![]
-                });
-
-            if resolved.is_empty() {
-                let empty_mesh = Mesh::new(
-                    PrimitiveTopology::TriangleList,
-                    RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
-                );
-                async_world
-                    .send_message(PreviewGenerated {
-                        preview_id,
-                        query,
-                        mesh: empty_mesh,
-                        evaluated_nodes: vec![],
-                        control_points,
-                        bom_entries,
-                        query_params,
-                    })
-                    .await;
-                return;
-            }
-
-            let mesh_generator = MeshGenerator {
-                include_paths: req.include_paths.clone(),
-            };
-            let mesh_result = mesh_generator
-                .process(&resolved)
-                .map_err(|e| {
-                    let span = e.span();
-                    (format!("Mesh error: {}", e), span)
-                })
-                .and_then(|(rs_mesh, evaluated_nodes)| {
-                    rs_mesh_to_bevy_mesh(&rs_mesh)
-                        .map(|m| (m, evaluated_nodes))
-                        .map_err(|e| (e, None))
-                });
+                let mesh_generator = MeshGenerator {
+                    include_paths: req.include_paths.clone(),
+                };
+                let (rs_mesh, evaluated_nodes) = mesh_generator
+                    .process(&resolved)
+                    .map_err(|e| {
+                        let span = e.span();
+                        (format!("Mesh error: {}", e), span)
+                    })?;
+                let mesh = rs_mesh_to_bevy_mesh(&rs_mesh).map_err(|e| (e, None))?;
+                Ok((mesh, evaluated_nodes, control_points, bom_entries, query_params))
+            });
 
             match mesh_result {
-                Ok((mesh, evaluated_nodes)) => {
+                Ok((mesh, evaluated_nodes, control_points, bom_entries, query_params)) => {
                     async_world
                         .send_message(PreviewGenerated {
                             preview_id,
@@ -226,9 +182,9 @@ fn spawn_mesh_job(async_world: AsyncWorld, req: GeneratePreviewRequest) {
                             query,
                             mesh: empty_mesh,
                             evaluated_nodes: vec![],
-                            control_points,
-                            bom_entries,
-                            query_params,
+                            control_points: vec![],
+                            bom_entries: vec![],
+                            query_params: vec![],
                         })
                         .await;
                 }
