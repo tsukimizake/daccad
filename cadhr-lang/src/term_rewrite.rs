@@ -176,6 +176,12 @@ fn is_builtin_term<S>(term: &Term<S>) -> bool {
     }
 }
 
+/// ジオメトリではないメタデータ用のビルトインファンクタ（bom等）かどうか
+fn is_metadata_term<S>(term: &Term<S>) -> bool {
+    matches!(term, Term::Struct { functor, .. }
+        if is_builtin_functor(functor) && !should_resolve_args(functor))
+}
+
 fn builtin_fact(functor: &str, arity: usize) -> Clause {
     let args = (0..arity)
         .map(|idx| var(format!("__builtin_arg_{}", idx)))
@@ -1372,6 +1378,16 @@ fn rewrite_term_recursive(
             let mut remaining_body: Vec<ScopedTerm> = body;
             let mut all_resolved = Vec::new();
 
+            // body 解決前に制約を解き、変数束縛を body と other_goals に伝播
+            {
+                let body_len = remaining_body.len();
+                let mut combined = remaining_body;
+                combined.extend(other_goals.drain(..));
+                try_resolve_constraints(&mut combined)?;
+                remaining_body = combined.drain(0..body_len).collect();
+                *other_goals = combined;
+            }
+
             while let Some(b) = remaining_body.first().cloned() {
                 remaining_body.remove(0);
 
@@ -1405,26 +1421,38 @@ fn rewrite_term_recursive(
             let new_right_terms =
                 rewrite_term_recursive(db, clause_counter, *right, other_goals, shared_env)?;
 
-            // InfixExpr の各オペランドは1つの項に解決されるべき
-            if new_left_terms.len() != 1 || new_right_terms.len() != 1 {
+            // メタデータ(bom等)やcontrolをother_goalsへ分離し、シェイプだけ残す
+            let (left_shapes, left_meta): (Vec<_>, Vec<_>) =
+                new_left_terms.into_iter().partition(|t| {
+                    !is_metadata_term(t)
+                        && !matches!(t, Term::Struct { functor, .. } if functor == "control")
+                });
+            let (right_shapes, right_meta): (Vec<_>, Vec<_>) =
+                new_right_terms.into_iter().partition(|t| {
+                    !is_metadata_term(t)
+                        && !matches!(t, Term::Struct { functor, .. } if functor == "control")
+                });
+
+            other_goals.extend(left_meta);
+            other_goals.extend(right_meta);
+
+            if left_shapes.len() != 1 || right_shapes.len() != 1 {
                 return Err(RewriteError {
                     message: "InfixExpr operand resolved to multiple terms".to_string(),
                     goal: Term::InfixExpr {
                         op,
-                        left: Box::new(new_left_terms.into_iter().next().unwrap_or(Term::Number {
+                        left: Box::new(left_shapes.into_iter().next().unwrap_or(Term::Number {
                             value: FixedPoint::from_int(0),
                         })),
-                        right: Box::new(new_right_terms.into_iter().next().unwrap_or(
-                            Term::Number {
-                                value: FixedPoint::from_int(0),
-                            },
-                        )),
+                        right: Box::new(right_shapes.into_iter().next().unwrap_or(Term::Number {
+                            value: FixedPoint::from_int(0),
+                        })),
                     },
                 });
             }
 
-            let new_left = new_left_terms.into_iter().next().unwrap();
-            let new_right = new_right_terms.into_iter().next().unwrap();
+            let new_left = left_shapes.into_iter().next().unwrap();
+            let new_right = right_shapes.into_iter().next().unwrap();
 
             let new_term = Term::InfixExpr {
                 op,
@@ -1530,7 +1558,9 @@ fn resolve_builtin_arg(
             if resolved.len() > 1 {
                 let mut shape = Vec::new();
                 for t in resolved {
-                    if matches!(&t, Term::Struct { functor, .. } if functor == "control") {
+                    if matches!(&t, Term::Struct { functor, .. } if functor == "control")
+                        || is_metadata_term(&t)
+                    {
                         other_goals.push(t);
                     } else {
                         shape.push(t);
@@ -2178,6 +2208,11 @@ mod tests {
         let resolved = run_success("f([a, b, c]).", "f(X).");
         assert_eq!(resolved, vec!["f([a, b, c])"]);
     }
+    #[test]
+    fn list_traverse() {
+        let resolved = run_success("f([]). f([X|T]) :- f(T).", "f([a, b, c]).");
+        assert_eq!(resolved, vec!["f([])"]);
+    }
 
     #[test]
     fn list_head_tail_pattern() {
@@ -2393,6 +2428,39 @@ mod tests {
         assert_eq!(resolved.len(), 2);
         assert!(resolved[0].starts_with("linear_extrude(path("));
         assert!(resolved[1].starts_with("control("));
+    }
+
+    #[test]
+    fn builtin_arg_rule_with_bom_separation() {
+        let resolved = run_success(
+            "part(X) :- cube(X, 10, 10), bom(\"cube\", []). main :- translate(part(5), 10, 0, 0).",
+            "main.",
+        );
+        assert_eq!(resolved.len(), 2);
+        assert!(resolved[0].starts_with("translate(cube("));
+        assert!(resolved[1].starts_with("bom("));
+    }
+
+    #[test]
+    fn infix_expr_with_bom_separation() {
+        let resolved = run_success(
+            "part :- cube(10, 10, 10), bom(\"cube\", []). main :- part + cube(5, 5, 5).",
+            "main.",
+        );
+        assert_eq!(resolved.len(), 2);
+        assert!(resolved[0].contains("+"));
+        assert!(resolved[1].starts_with("bom("));
+    }
+
+    #[test]
+    fn pipe_with_bom_separation() {
+        let resolved = run_success(
+            "part(X) :- cube(X, 10, 10), bom(\"cube\", []). main :- part(5) |> translate(10, 0, 0).",
+            "main.",
+        );
+        assert_eq!(resolved.len(), 2);
+        assert!(resolved[0].starts_with("translate(cube("));
+        assert!(resolved[1].starts_with("bom("));
     }
 
     #[test]
