@@ -277,165 +277,105 @@ mod tests {
     use super::*;
     use std::fs;
 
-    fn setup_test_dir() -> tempfile::TempDir {
-        tempfile::tempdir().unwrap()
+    /// ファイルを配置し、最初のディレクトリに対する #use を resolve して
+    /// 結果の clause から functor 名を収集して返す。
+    /// files: &[("path/to/db.cadhr", "contents")]
+    /// use_path: #use に渡すパス
+    /// expose: expose するfunctor名
+    fn resolve_test(
+        files: &[(&str, &str)],
+        use_path: &str,
+        expose: &[&str],
+    ) -> Result<Vec<String>, ModuleError> {
+        let dir = tempfile::tempdir().unwrap();
+        for (path, contents) in files {
+            let full = dir.path().join(path);
+            fs::create_dir_all(full.parent().unwrap()).unwrap();
+            fs::write(&full, contents).unwrap();
+        }
+
+        let clauses = vec![Clause::Use {
+            path: use_path.to_string(),
+            expose: expose.iter().map(|s| s.to_string()).collect(),
+            span: None,
+        }];
+
+        let mut visited = HashSet::new();
+        let result = resolve_modules(
+            clauses,
+            &[dir.path().to_path_buf()],
+            &mut visited,
+            &mut FileRegistry::new(),
+        )?;
+
+        let functors: Vec<String> = result
+            .iter()
+            .filter_map(|c| match c {
+                Clause::Fact(Term::Struct { functor, .. }) => Some(functor.clone()),
+                Clause::Rule { head: Term::Struct { functor, .. }, .. } => Some(functor.clone()),
+                _ => None,
+            })
+            .collect();
+        Ok(functors)
     }
 
     #[test]
     fn test_basic_module_resolution() {
-        let dir = setup_test_dir();
-        fs::create_dir(dir.path().join("bolts")).unwrap();
-        fs::write(
-            dir.path().join("bolts/db.cadhr"),
-            "m5(X) :- size(X, 5).\nsize(small, 3).\n",
+        let functors = resolve_test(
+            &[("bolts/db.cadhr", "m5(X) :- size(X, 5).\nsize(small, 3).\n")],
+            "bolts",
+            &[],
         )
         .unwrap();
 
-        let clauses = vec![Clause::Use {
-            path: "bolts".to_string(),
-            expose: vec![],
-            span: None,
-        }];
-
-        let mut visited = HashSet::new();
-        let result = resolve_modules(
-            clauses,
-            &[dir.path().to_path_buf()],
-            &mut visited,
-            &mut FileRegistry::new(),
-        )
-        .unwrap();
-
-        assert!(result.iter().any(|c| matches!(c, Clause::Rule { head, .. }
-                if matches!(head, Term::Struct { functor, .. } if functor == "bolts::m5"))));
-        assert!(
-            result
-                .iter()
-                .any(|c| matches!(c, Clause::Fact(Term::Struct { functor, .. })
-                if functor == "bolts::size"))
-        );
+        assert!(functors.contains(&"bolts::m5".to_string()));
+        assert!(functors.contains(&"bolts::size".to_string()));
     }
 
     #[test]
     fn test_expose() {
-        let dir = setup_test_dir();
-        fs::create_dir(dir.path().join("bolts")).unwrap();
-        fs::write(dir.path().join("bolts/db.cadhr"), "m5(5).\nm6(6).\n").unwrap();
-
-        let clauses = vec![Clause::Use {
-            path: "bolts".to_string(),
-            expose: vec!["m5".to_string()],
-            span: None,
-        }];
-
-        let mut visited = HashSet::new();
-        let result = resolve_modules(
-            clauses,
-            &[dir.path().to_path_buf()],
-            &mut visited,
-            &mut FileRegistry::new(),
+        let functors = resolve_test(
+            &[("bolts/db.cadhr", "m5(5).\nm6(6).\n")],
+            "bolts",
+            &["m5"],
         )
         .unwrap();
 
-        // bolts::m5 と m5 の両方が存在する
-        assert!(
-            result
-                .iter()
-                .any(|c| matches!(c, Clause::Fact(Term::Struct { functor, .. })
-                if functor == "bolts::m5"))
-        );
-        assert!(
-            result
-                .iter()
-                .any(|c| matches!(c, Clause::Fact(Term::Struct { functor, .. })
-                if functor == "m5"))
-        );
-        // m6 は expose されていないので非修飾版は無い
-        assert!(
-            !result
-                .iter()
-                .any(|c| matches!(c, Clause::Fact(Term::Struct { functor, .. })
-                if functor == "m6"))
-        );
-        assert!(
-            result
-                .iter()
-                .any(|c| matches!(c, Clause::Fact(Term::Struct { functor, .. })
-                if functor == "bolts::m6"))
-        );
+        assert!(functors.contains(&"bolts::m5".to_string()));
+        assert!(functors.contains(&"m5".to_string()));
+        assert!(functors.contains(&"bolts::m6".to_string()));
+        assert!(!functors.contains(&"m6".to_string()));
     }
 
     #[test]
     fn test_cyclic_dependency() {
-        let dir = setup_test_dir();
-        fs::create_dir(dir.path().join("a")).unwrap();
-        fs::create_dir(dir.path().join("b")).unwrap();
-        fs::write(dir.path().join("a/db.cadhr"), "#use(\"../b\").\nfoo(1).\n").unwrap();
-        fs::write(dir.path().join("b/db.cadhr"), "#use(\"../a\").\nbar(2).\n").unwrap();
-
-        let clauses = vec![Clause::Use {
-            path: "a".to_string(),
-            expose: vec![],
-            span: None,
-        }];
-
-        let mut visited = HashSet::new();
-        let result = resolve_modules(
-            clauses,
-            &[dir.path().to_path_buf()],
-            &mut visited,
-            &mut FileRegistry::new(),
+        let result = resolve_test(
+            &[
+                ("a/db.cadhr", "#use(\"../b\").\nfoo(1).\n"),
+                ("b/db.cadhr", "#use(\"../a\").\nbar(2).\n"),
+            ],
+            "a",
+            &[],
         );
         assert!(matches!(result, Err(ModuleError::CyclicDependency { .. })));
     }
 
     #[test]
     fn test_file_not_found() {
-        let dir = setup_test_dir();
-
-        let clauses = vec![Clause::Use {
-            path: "nonexistent".to_string(),
-            expose: vec![],
-            span: None,
-        }];
-
-        let mut visited = HashSet::new();
-        let result = resolve_modules(
-            clauses,
-            &[dir.path().to_path_buf()],
-            &mut visited,
-            &mut FileRegistry::new(),
-        );
+        let result = resolve_test(&[], "nonexistent", &[]);
         assert!(matches!(result, Err(ModuleError::FileNotFound { .. })));
     }
 
     #[test]
     fn test_nested_module() {
-        let dir = setup_test_dir();
-        fs::create_dir_all(dir.path().join("sub/parts")).unwrap();
-        fs::write(dir.path().join("sub/parts/db.cadhr"), "bolt(1).\n").unwrap();
-
-        let clauses = vec![Clause::Use {
-            path: "sub/parts".to_string(),
-            expose: vec![],
-            span: None,
-        }];
-
-        let mut visited = HashSet::new();
-        let result = resolve_modules(
-            clauses,
-            &[dir.path().to_path_buf()],
-            &mut visited,
-            &mut FileRegistry::new(),
+        let functors = resolve_test(
+            &[("sub/parts/db.cadhr", "bolt(1).\n")],
+            "sub/parts",
+            &[],
         )
         .unwrap();
 
-        assert!(
-            result
-                .iter()
-                .any(|c| matches!(c, Clause::Fact(Term::Struct { functor, .. })
-                if functor == "parts::bolt"))
-        );
+        assert!(functors.contains(&"parts::bolt".to_string()));
     }
 
     #[test]
