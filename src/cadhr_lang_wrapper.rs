@@ -19,6 +19,23 @@ use cadhr_lang::term_processor::TermProcessor;
 use cadhr_lang::term_rewrite::{CadhrError, execute, infer_query_param_ranges};
 use manifold_rs::Mesh as RsMesh;
 
+fn format_error(
+    label: &str,
+    msg: &str,
+    span: Option<SrcSpan>,
+    registry: &FileRegistry,
+) -> (String, Option<SrcSpan>) {
+    let location = span
+        .map(|s| registry.format_span(&s))
+        .unwrap_or_default();
+    let formatted = if location.is_empty() {
+        format!("{}: {}", label, msg)
+    } else {
+        format!("{} at {}: {}", label, location, msg)
+    };
+    (formatted, span)
+}
+
 pub struct CadhrLangPlugin;
 
 impl Plugin for CadhrLangPlugin {
@@ -55,16 +72,18 @@ fn spawn_mesh_job(async_world: AsyncWorld, req: GeneratePreviewRequest) {
             let resolve_result = (|| -> Result<(Vec<cadhr_lang::parse::ScopedTerm>, Vec<cadhr_lang::manifold_bridge::ControlPoint>, Vec<cadhr_lang::parse::QueryParam>), (String, Option<SrcSpan>)> {
                 let mut file_registry = FileRegistry::new();
                 file_registry.register_main("db".to_string(), db_src.clone());
+                let query_file_id = file_registry.register("query".to_string(), query.clone());
 
                 let (_, query_terms) =
                     parse_query(&query).map_err(|e| {
-                        let span = parse_error_span(&query, &e);
-                        (format!("Query parse error: {:?}", e), span)
+                        let span = parse_error_span(&query, &e)
+                            .map(|mut s| { s.file_id = query_file_id; s });
+                        format_error("Parse error", &format!("{:?}", e), span, &file_registry)
                     })?;
                 let db =
                     database(&db_src).map_err(|e| {
                         let span = parse_error_span(&db_src, &e);
-                        (format!("Database parse error: {:?}", e), span)
+                        format_error("Parse error", &format!("{:?}", e), span, &file_registry)
                     })?;
                 let mut db = resolve_modules(
                     db,
@@ -101,14 +120,7 @@ fn spawn_mesh_job(async_world: AsyncWorld, req: GeneratePreviewRequest) {
                 logs.push(format!("Database clauses: {:#?}", db));
                 let (mut resolved, env) =
                     execute(&mut db, substituted).map_err(|e| {
-                        let span = e.span();
-                        let location = span.map(|s| file_registry.format_span(&s)).unwrap_or_default();
-                        let msg = if location.is_empty() {
-                            format!("Rewrite error: {}", e)
-                        } else {
-                            format!("Rewrite error at {}: {}", location, e)
-                        };
-                        (msg, span)
+                        format_error("Rewrite error", &e.to_string(), e.span(), &file_registry)
                     })?;
                 logs.push(format!("Resolved terms: {:?}", resolved));
 
@@ -231,14 +243,16 @@ fn spawn_collision_job(async_world: AsyncWorld, req: GenerateCollisionPreviewReq
             > {
                 let mut file_registry = FileRegistry::new();
                 file_registry.register_main("db".to_string(), db_src.clone());
+                let query_file_id = file_registry.register("query".to_string(), query_str.clone());
 
                 let (_, query_terms) = parse_query(&query_str).map_err(|e| {
-                    let span = parse_error_span(&query_str, &e);
-                    (format!("Query parse error: {:?}", e), span)
+                    let span = parse_error_span(&query_str, &e)
+                        .map(|mut s| { s.file_id = query_file_id; s });
+                    format_error("Parse error", &format!("{:?}", e), span, &file_registry)
                 })?;
                 let db = database(&db_src).map_err(|e| {
                     let span = parse_error_span(&db_src, &e);
-                    (format!("Database parse error: {:?}", e), span)
+                    format_error("Parse error", &format!("{:?}", e), span, &file_registry)
                 })?;
                 let mut db = resolve_modules(
                     db,
@@ -248,14 +262,7 @@ fn spawn_collision_job(async_world: AsyncWorld, req: GenerateCollisionPreviewReq
                 )
                 .map_err(|e| (format!("Module error: {}", e), None))?;
                 let (resolved, _) = execute(&mut db, query_terms).map_err(|e| {
-                    let span = e.span();
-                    let location = span.map(|s| file_registry.format_span(&s)).unwrap_or_default();
-                    let msg = if location.is_empty() {
-                        format!("Rewrite error: {}", e)
-                    } else {
-                        format!("Rewrite error at {}: {}", location, e)
-                    };
-                    (msg, span)
+                    format_error("Rewrite error", &e.to_string(), e.span(), &file_registry)
                 })?;
 
                 use cadhr_lang::manifold_bridge::{ConversionError, Model3D};
