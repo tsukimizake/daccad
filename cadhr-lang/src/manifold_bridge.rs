@@ -366,6 +366,7 @@ fn term_to_tracked_f64<S>(term: &Term<S>) -> Option<TrackedF64> {
             source_span: span.map(|s| SrcSpan {
                 start: s.end,
                 end: s.end,
+                file_id: s.file_id,
             }),
         }),
         Term::Var { span, .. } => Some(TrackedF64 {

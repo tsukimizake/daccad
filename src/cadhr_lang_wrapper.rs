@@ -12,7 +12,7 @@ use cadhr_lang::bom::BomExtractor;
 use cadhr_lang::manifold_bridge::{MeshGenerator, extract_control_points};
 use cadhr_lang::module::resolve_modules;
 use cadhr_lang::parse::{
-    SrcSpan, collect_query_params, database, parse_error_span, query as parse_query,
+    FileRegistry, SrcSpan, collect_query_params, database, parse_error_span, query as parse_query,
     substitute_query_params,
 };
 use cadhr_lang::term_processor::TermProcessor;
@@ -53,6 +53,9 @@ fn spawn_mesh_job(async_world: AsyncWorld, req: GeneratePreviewRequest) {
 
             // Parse, discover query params, substitute overrides, execute
             let resolve_result = (|| -> Result<(Vec<cadhr_lang::parse::ScopedTerm>, Vec<cadhr_lang::manifold_bridge::ControlPoint>, Vec<cadhr_lang::parse::QueryParam>), (String, Option<SrcSpan>)> {
+                let mut file_registry = FileRegistry::new();
+                file_registry.register_main("db".to_string(), db_src.clone());
+
                 let (_, query_terms) =
                     parse_query(&query).map_err(|e| {
                         let span = parse_error_span(&query, &e);
@@ -67,6 +70,7 @@ fn spawn_mesh_job(async_world: AsyncWorld, req: GeneratePreviewRequest) {
                     db,
                     &req.include_paths,
                     &mut std::collections::HashSet::new(),
+                    &mut file_registry,
                 )
                 .map_err(|e| (format!("Module error: {}", e), None))?;
 
@@ -98,7 +102,13 @@ fn spawn_mesh_job(async_world: AsyncWorld, req: GeneratePreviewRequest) {
                 let (mut resolved, env) =
                     execute(&mut db, substituted).map_err(|e| {
                         let span = e.span();
-                        (format!("Rewrite error: {}", e), span)
+                        let location = span.map(|s| file_registry.format_span(&s)).unwrap_or_default();
+                        let msg = if location.is_empty() {
+                            format!("Rewrite error: {}", e)
+                        } else {
+                            format!("Rewrite error at {}: {}", location, e)
+                        };
+                        (msg, span)
                     })?;
                 logs.push(format!("Resolved terms: {:?}", resolved));
 
@@ -219,6 +229,9 @@ fn spawn_collision_job(async_world: AsyncWorld, req: GenerateCollisionPreviewReq
                 (Vec<cadhr_lang::manifold_bridge::Model3D>, Vec<std::path::PathBuf>),
                 (String, Option<cadhr_lang::parse::SrcSpan>),
             > {
+                let mut file_registry = FileRegistry::new();
+                file_registry.register_main("db".to_string(), db_src.clone());
+
                 let (_, query_terms) = parse_query(&query_str).map_err(|e| {
                     let span = parse_error_span(&query_str, &e);
                     (format!("Query parse error: {:?}", e), span)
@@ -231,11 +244,18 @@ fn spawn_collision_job(async_world: AsyncWorld, req: GenerateCollisionPreviewReq
                     db,
                     &req.include_paths,
                     &mut std::collections::HashSet::new(),
+                    &mut file_registry,
                 )
                 .map_err(|e| (format!("Module error: {}", e), None))?;
                 let (resolved, _) = execute(&mut db, query_terms).map_err(|e| {
                     let span = e.span();
-                    (format!("Rewrite error: {}", e), span)
+                    let location = span.map(|s| file_registry.format_span(&s)).unwrap_or_default();
+                    let msg = if location.is_empty() {
+                        format!("Rewrite error: {}", e)
+                    } else {
+                        format!("Rewrite error at {}: {}", location, e)
+                    };
+                    (msg, span)
                 })?;
 
                 use cadhr_lang::manifold_bridge::{ConversionError, Model3D};

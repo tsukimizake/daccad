@@ -13,10 +13,68 @@ use std::fmt;
 // SrcSpan: ソースコード上のバイトオフセット範囲
 // ============================================================
 
+/// パーサーでは file_id=0 で生成し、モジュール読み込み時に正しい file_id に書き換える
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SrcSpan {
     pub start: usize,
     pub end: usize,
+    pub file_id: u16,
+}
+
+pub struct LineCol {
+    pub line: usize,
+    pub col: usize,
+}
+
+impl SrcSpan {
+    pub fn start_line_col(&self, src: &str) -> LineCol {
+        let offset = self.start.min(src.len());
+        let before = &src[..offset];
+        let line = before.chars().filter(|&c| c == '\n').count() + 1;
+        let col = before.rfind('\n').map_or(offset, |pos| offset - pos - 1) + 1;
+        LineCol { line, col }
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct FileRegistry {
+    files: Vec<(String, String)>,
+}
+
+impl FileRegistry {
+    pub fn new() -> Self {
+        Self { files: Vec::new() }
+    }
+
+    pub fn register_main(&mut self, name: String, source: String) -> u16 {
+        assert!(self.files.is_empty());
+        self.files.push((name, source));
+        0
+    }
+
+    pub fn register(&mut self, name: String, source: String) -> u16 {
+        let id = self.files.len() as u16;
+        self.files.push((name, source));
+        id
+    }
+
+    pub fn file_name(&self, file_id: u16) -> Option<&str> {
+        self.files.get(file_id as usize).map(|(name, _)| name.as_str())
+    }
+
+    pub fn source(&self, file_id: u16) -> Option<&str> {
+        self.files.get(file_id as usize).map(|(_, src)| src.as_str())
+    }
+
+    pub fn format_span(&self, span: &SrcSpan) -> String {
+        let name = self.file_name(span.file_id).unwrap_or("<unknown>");
+        if let Some(src) = self.source(span.file_id) {
+            let lc = span.start_line_col(src);
+            format!("{}:{}:{}", name, lc.line, lc.col)
+        } else {
+            format!("{}:?:?", name)
+        }
+    }
 }
 
 // ============================================================
@@ -754,6 +812,7 @@ fn default_value_suffix(input: &str) -> PResult<'_, (FixedPoint, SrcSpan)> {
             SrcSpan {
                 start: value_start,
                 end: value_end,
+                file_id: 0,
             },
         ),
     ))
@@ -771,6 +830,7 @@ fn annotated_var_term(input: &str) -> PResult<'_, Term> {
     let var_name_span = SrcSpan {
         start: var_name_start,
         end: var_name_end,
+        file_id: 0,
     };
     // =value (optional)
     let (input, default_with_span) = opt(default_value_suffix).parse(input)?;
@@ -814,6 +874,7 @@ fn annotated_var_term(input: &str) -> PResult<'_, Term> {
             Some(SrcSpan {
                 start: var_name_span.end,
                 end: var_name_span.end,
+                file_id: 0,
             }),
         ),
     };
@@ -875,7 +936,7 @@ fn atom_term(input: &str) -> PResult<'_, Term> {
     .parse(input)?;
     let end = input.as_ptr() as usize;
     let (input, _) = space_or_comment0(input)?;
-    let span = SrcSpan { start, end };
+    let span = SrcSpan { start, end, file_id: 0 };
     let t = match maybe_args {
         Some(args) => struc_with_span(name, args, span),
         None => struc_with_span(name, vec![], span),
@@ -1006,7 +1067,7 @@ fn use_directive(input: &str) -> PResult<'_, Clause> {
     let (input, _) = char(')').parse(input)?;
     let end = input.as_ptr() as usize;
     let (input, _) = char('.').parse(input)?;
-    let span = SrcSpan { start, end };
+    let span = SrcSpan { start, end, file_id: 0 };
     Ok((
         input,
         Clause::Use {
@@ -1101,7 +1162,7 @@ pub fn parse_error_span(input: &str, err: &nom::Err<nom::error::Error<&str>>) ->
     };
     let start = rest.as_ptr() as usize - base;
     let end = (start + rest.len()).min(input.len());
-    Some(SrcSpan { start, end })
+    Some(SrcSpan { start, end, file_id: 0 })
 }
 
 pub fn database(input: &str) -> Result<Vec<Clause>, nom::Err<nom::error::Error<&str>>> {

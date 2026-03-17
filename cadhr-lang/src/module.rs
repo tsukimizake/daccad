@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use crate::parse::{Clause, Term, database};
+use crate::parse::{Clause, FileRegistry, Term, database};
 use crate::term_processor::is_builtin_functor;
 
 #[derive(Debug)]
@@ -56,13 +56,14 @@ pub fn resolve_modules(
     clauses: Vec<Clause>,
     include_paths: &[PathBuf],
     visited: &mut HashSet<PathBuf>,
+    file_registry: &mut FileRegistry,
 ) -> Result<Vec<Clause>, ModuleError> {
     let mut result = Vec::new();
 
     for clause in clauses {
         match clause {
             Clause::Use { path, expose, .. } => {
-                let resolved = resolve_use(&path, &expose, include_paths, visited)?;
+                let resolved = resolve_use(&path, &expose, include_paths, visited, file_registry)?;
                 result.extend(resolved);
             }
             other => result.push(other),
@@ -97,6 +98,7 @@ fn resolve_use(
     expose: &[String],
     include_paths: &[PathBuf],
     visited: &mut HashSet<PathBuf>,
+    file_registry: &mut FileRegistry,
 ) -> Result<Vec<Clause>, ModuleError> {
     let file_path =
         find_module_file(module_path, include_paths).ok_or_else(|| ModuleError::FileNotFound {
@@ -121,17 +123,23 @@ fn resolve_use(
         error: e,
     })?;
 
-    let clauses = database(&source).map_err(|e| ModuleError::ParseError {
+    let fid = file_registry.register(file_path.display().to_string(), source.clone());
+
+    let mut clauses = database(&source).map_err(|e| ModuleError::ParseError {
         path: file_path.clone(),
         message: format!("{:?}", e),
     })?;
+
+    for clause in &mut clauses {
+        set_file_id_in_clause(clause, fid);
+    }
 
     let child_include_paths: Vec<PathBuf> = file_path
         .parent()
         .map(|p| vec![p.to_path_buf()])
         .unwrap_or_default();
 
-    let clauses = resolve_modules(clauses, &child_include_paths, visited)?;
+    let clauses = resolve_modules(clauses, &child_include_paths, visited, file_registry)?;
 
     let module_name = module_name_from_path(module_path);
     let expose_set: HashSet<&str> = expose.iter().map(|s| s.as_str()).collect();
@@ -212,6 +220,58 @@ fn prefix_term(term: &Term, module_name: &str) -> Term {
     }
 }
 
+fn set_file_id_in_clause(clause: &mut Clause, file_id: u16) {
+    match clause {
+        Clause::Fact(term) => set_file_id_in_term(term, file_id),
+        Clause::Rule { head, body } => {
+            set_file_id_in_term(head, file_id);
+            for b in body {
+                set_file_id_in_term(b, file_id);
+            }
+        }
+        Clause::Use { span, .. } => {
+            if let Some(s) = span {
+                s.file_id = file_id;
+            }
+        }
+    }
+}
+
+fn set_file_id_in_term(term: &mut Term, file_id: u16) {
+    match term {
+        Term::Var { span, .. } => {
+            if let Some(s) = span {
+                s.file_id = file_id;
+            }
+        }
+        Term::Struct { args, span, .. } => {
+            if let Some(s) = span {
+                s.file_id = file_id;
+            }
+            for a in args {
+                set_file_id_in_term(a, file_id);
+            }
+        }
+        Term::InfixExpr { left, right, .. } => {
+            set_file_id_in_term(left, file_id);
+            set_file_id_in_term(right, file_id);
+        }
+        Term::List { items, tail } => {
+            for i in items {
+                set_file_id_in_term(i, file_id);
+            }
+            if let Some(t) = tail {
+                set_file_id_in_term(t, file_id);
+            }
+        }
+        Term::Constraint { left, right } => {
+            set_file_id_in_term(left, file_id);
+            set_file_id_in_term(right, file_id);
+        }
+        _ => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,7 +298,13 @@ mod tests {
         }];
 
         let mut visited = HashSet::new();
-        let result = resolve_modules(clauses, &[dir.path().to_path_buf()], &mut visited).unwrap();
+        let result = resolve_modules(
+            clauses,
+            &[dir.path().to_path_buf()],
+            &mut visited,
+            &mut FileRegistry::new(),
+        )
+        .unwrap();
 
         assert!(result.iter().any(|c| matches!(c, Clause::Rule { head, .. }
                 if matches!(head, Term::Struct { functor, .. } if functor == "bolts::m5"))));
@@ -263,7 +329,13 @@ mod tests {
         }];
 
         let mut visited = HashSet::new();
-        let result = resolve_modules(clauses, &[dir.path().to_path_buf()], &mut visited).unwrap();
+        let result = resolve_modules(
+            clauses,
+            &[dir.path().to_path_buf()],
+            &mut visited,
+            &mut FileRegistry::new(),
+        )
+        .unwrap();
 
         // bolts::m5 と m5 の両方が存在する
         assert!(
@@ -308,7 +380,12 @@ mod tests {
         }];
 
         let mut visited = HashSet::new();
-        let result = resolve_modules(clauses, &[dir.path().to_path_buf()], &mut visited);
+        let result = resolve_modules(
+            clauses,
+            &[dir.path().to_path_buf()],
+            &mut visited,
+            &mut FileRegistry::new(),
+        );
         assert!(matches!(result, Err(ModuleError::CyclicDependency { .. })));
     }
 
@@ -323,7 +400,12 @@ mod tests {
         }];
 
         let mut visited = HashSet::new();
-        let result = resolve_modules(clauses, &[dir.path().to_path_buf()], &mut visited);
+        let result = resolve_modules(
+            clauses,
+            &[dir.path().to_path_buf()],
+            &mut visited,
+            &mut FileRegistry::new(),
+        );
         assert!(matches!(result, Err(ModuleError::FileNotFound { .. })));
     }
 
@@ -340,7 +422,13 @@ mod tests {
         }];
 
         let mut visited = HashSet::new();
-        let result = resolve_modules(clauses, &[dir.path().to_path_buf()], &mut visited).unwrap();
+        let result = resolve_modules(
+            clauses,
+            &[dir.path().to_path_buf()],
+            &mut visited,
+            &mut FileRegistry::new(),
+        )
+        .unwrap();
 
         assert!(
             result
@@ -359,7 +447,7 @@ mod tests {
         })];
 
         let mut visited = HashSet::new();
-        let result = resolve_modules(clauses, &[], &mut visited).unwrap();
+        let result = resolve_modules(clauses, &[], &mut visited, &mut FileRegistry::new()).unwrap();
         assert_eq!(result.len(), 1);
         assert!(
             matches!(&result[0], Clause::Fact(Term::Struct { functor, .. }) if functor == "hello")
