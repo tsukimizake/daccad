@@ -113,7 +113,7 @@ fn resolve_inner(term: &ScopedTerm, env: &ScopedEnv, depth: usize) -> ScopedTerm
                 left: Box::new(new_left),
                 right: Box::new(new_right),
             };
-            if let Some(val) = eval_arith(&new_term) {
+            if let Some(val) = try_fold_number_literals(&new_term) {
                 number(val)
             } else {
                 new_term
@@ -309,15 +309,15 @@ fn apply_default_var_bindings(term: &mut ScopedTerm, goals: &mut Vec<ScopedTerm>
     }
 }
 
-/// 算術式を評価する。評価できない場合（未束縛変数を含む場合）はNoneを返す
-/// 注: Var は eval_arith では処理しない。unify の明示的な Var ハンドラが
-/// 名前ベースの置換を伴って処理するため、ここで Number に変換すると置換が抜け落ちる。
-fn eval_arith<S>(term: &Term<S>) -> Option<FixedPoint> {
+/// Number と InfixExpr だけで構成された算術式を畳み込む。
+/// Var は処理しない。unify の Var ハンドラが名前ベースの置換を伴って処理するため、
+/// ここで Number に変換すると置換が抜け落ちる。
+fn try_fold_number_literals<S>(term: &Term<S>) -> Option<FixedPoint> {
     match term {
         Term::Number { value } => Some(*value),
         Term::InfixExpr { op, left, right } => {
-            let l = eval_arith(left)?;
-            let r = eval_arith(right)?;
+            let l = try_fold_number_literals(left)?;
+            let r = try_fold_number_literals(right)?;
             Some(match op {
                 ArithOp::Add => l + r,
                 ArithOp::Sub => l - r,
@@ -325,38 +325,77 @@ fn eval_arith<S>(term: &Term<S>) -> Option<FixedPoint> {
                 ArithOp::Div => l / r,
             })
         }
-        _ => None,
+        Term::Var { .. }
+        | Term::Struct { .. }
+        | Term::List { .. }
+        | Term::StringLit { .. }
+        | Term::Constraint { .. }
+        | Term::Range { .. } => None,
     }
 }
 
-/// 算術式をインプレースで評価し、可能なら数値に置き換える
-pub fn eval_arith_in_place<S>(term: &mut Term<S>) {
-    if let Some(val) = eval_arith(term) {
+/// Var の default_value も数値として扱い算術式を評価する。
+/// unify 中では使わず、最終的な数値抽出（メッシュ生成など）で使う。
+pub fn try_eval_to_number<S>(term: &Term<S>) -> Option<FixedPoint> {
+    match term {
+        Term::Number { value } => Some(*value),
+        Term::Var {
+            default_value: Some(value),
+            ..
+        } => Some(*value),
+        Term::InfixExpr { op, left, right } => {
+            let l = try_eval_to_number(left)?;
+            let r = try_eval_to_number(right)?;
+            Some(match op {
+                ArithOp::Add => l + r,
+                ArithOp::Sub => l - r,
+                ArithOp::Mul => l * r,
+                ArithOp::Div => l / r,
+            })
+        }
+        Term::Var {
+            default_value: None,
+            ..
+        }
+        | Term::Struct { .. }
+        | Term::List { .. }
+        | Term::StringLit { .. }
+        | Term::Constraint { .. }
+        | Term::Range { .. } => None,
+    }
+}
+
+/// 算術式をインプレースで畳み込み、可能なら数値に置き換える
+pub fn fold_number_literals_in_place<S>(term: &mut Term<S>) {
+    if let Some(val) = try_fold_number_literals(term) {
         *term = number(val);
     } else {
         match term {
             Term::InfixExpr { left, right, .. } => {
-                eval_arith_in_place(left.as_mut());
-                eval_arith_in_place(right.as_mut());
+                fold_number_literals_in_place(left.as_mut());
+                fold_number_literals_in_place(right.as_mut());
             }
             Term::Struct { args, .. } => {
                 for arg in args.iter_mut() {
-                    eval_arith_in_place(arg);
+                    fold_number_literals_in_place(arg);
                 }
             }
             Term::List { items, tail } => {
                 for item in items.iter_mut() {
-                    eval_arith_in_place(item);
+                    fold_number_literals_in_place(item);
                 }
                 if let Some(t) = tail {
-                    eval_arith_in_place(t.as_mut());
+                    fold_number_literals_in_place(t.as_mut());
                 }
             }
             Term::Constraint { left, right } => {
-                eval_arith_in_place(left.as_mut());
-                eval_arith_in_place(right.as_mut());
+                fold_number_literals_in_place(left.as_mut());
+                fold_number_literals_in_place(right.as_mut());
             }
-            _ => {}
+            Term::Number { .. }
+            | Term::Var { .. }
+            | Term::StringLit { .. }
+            | Term::Range { .. } => {}
         }
     }
 }
@@ -679,10 +718,10 @@ pub fn unify(
             }
         }
 
-        if let Some(val) = eval_arith(&t1) {
+        if let Some(val) = try_fold_number_literals(&t1) {
             t1 = number(val);
         }
-        if let Some(val) = eval_arith(&t2) {
+        if let Some(val) = try_fold_number_literals(&t2) {
             t2 = number(val);
         }
 
@@ -1021,7 +1060,7 @@ pub fn unify(
     for (d1, d2) in deferred {
         let t1 = resolve(&d1, env);
         let t2 = resolve(&d2, env);
-        match (eval_arith(&t1), eval_arith(&t2)) {
+        match (try_fold_number_literals(&t1), try_fold_number_literals(&t2)) {
             (Some(n1), Some(n2)) => {
                 if n1 != n2 {
                     return Err(UnifyError {

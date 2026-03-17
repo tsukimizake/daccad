@@ -447,7 +447,7 @@ pub fn extract_control_points<S>(
     if !var_substitutions.is_empty() {
         for term in terms.iter_mut() {
             substitute_vars(term, &var_substitutions);
-            crate::term_rewrite::eval_arith_in_place(term);
+            crate::term_rewrite::fold_number_literals_in_place(term);
         }
     }
 
@@ -492,7 +492,7 @@ pub fn apply_var_overrides<S>(
     }
     for term in terms.iter_mut() {
         apply_var_overrides_to_term(term, overrides);
-        crate::term_rewrite::eval_arith_in_place(term);
+        crate::term_rewrite::fold_number_literals_in_place(term);
     }
 }
 
@@ -548,6 +548,9 @@ impl<'a, S> Args<'a, S> {
     }
 
     fn f64(&self, i: usize) -> Result<f64, ConversionError> {
+        if let Some(fp) = crate::term_rewrite::try_eval_to_number(&self.args[i]) {
+            return Ok(fp.to_f64());
+        }
         if let Some((fp, _)) = term_as_fixed_point(&self.args[i]) {
             return Ok(fp.to_f64());
         }
@@ -561,7 +564,13 @@ impl<'a, S> Args<'a, S> {
                 Ok(mid)
             }
             Term::Var { name, .. } => Err(ConversionError::UnboundVariable(name.clone())),
-            _ => Err(ConversionError::TypeMismatch {
+            Term::Number { .. }
+            | Term::InfixExpr { .. }
+            | Term::Struct { .. }
+            | Term::List { .. }
+            | Term::StringLit { .. }
+            | Term::Constraint { .. }
+            | Term::Range { .. } => Err(ConversionError::TypeMismatch {
                 functor: self.functor.to_string(),
                 arg_index: i,
                 expected: "number",
