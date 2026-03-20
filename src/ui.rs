@@ -9,6 +9,20 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
+#[derive(Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PreviewClickMode {
+    #[default]
+    Normal,
+    CpGenerate,
+    SnapTranslate,
+}
+
+#[derive(Default)]
+pub struct SnapTranslateState {
+    pub first_point: Option<[f64; 3]>,
+    pub result: Option<[f64; 3]>,
+}
+
 use crate::ui::update::DEFAULT_ZOOM;
 
 pub mod setup;
@@ -94,7 +108,7 @@ pub enum PreviewTarget {
         #[serde(skip)]
         bom_entries: Vec<BomEntry>,
         #[serde(skip)]
-        cp_generate_mode: bool,
+        click_mode: PreviewClickMode,
     },
     Collision {
         base: PreviewBase,
@@ -185,6 +199,7 @@ impl Plugin for UiPlugin {
 pub struct SelectedControlPoint {
     pub preview_id: Option<u64>,
     pub index: usize,
+    pub snap_translate: SnapTranslateState,
 }
 
 #[derive(Resource, Default, Clone, Deref, DerefMut)]

@@ -16,17 +16,18 @@ fn snap_to_char_boundary(s: &str, idx: usize) -> usize {
 }
 use crate::ui::{
     AutoReload, BomJsonFileContents, CurrentFilePath, EditorText, ErrorMessage, FreeRenderLayers,
-    NextPreviewId, PendingPreviewStates, PreviewBase, PreviewTarget, SelectedControlPoint,
-    SessionLoadContents, SessionPreviews, SessionSaveContents, ThreeMfFileContents, UnsavedChanges,
+    NextPreviewId, PendingPreviewStates, PreviewBase, PreviewClickMode, PreviewTarget,
+    SelectedControlPoint, SessionLoadContents, SessionPreviews, SessionSaveContents,
+    ThreeMfFileContents, UnsavedChanges,
 };
 use bevy::asset::RenderAssetUsages;
-use bevy::camera::RenderTarget;
 use bevy::camera::primitives::MeshAabb;
 use bevy::camera::visibility::RenderLayers;
+use bevy::camera::RenderTarget;
 use bevy::mesh::{Indices, VertexAttributeValues};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
-use bevy_egui::{EguiContexts, egui};
+use bevy_egui::{egui, EguiContexts};
 use bevy_file_dialog::prelude::*;
 use cadhr_lang::manifold_bridge::EvaluatedNode;
 use cadhr_lang::parse::SrcSpan;
@@ -172,7 +173,7 @@ pub(super) fn egui_ui(
                             control_sphere_entities: vec![],
                             query_params: vec![],
                             bom_entries: vec![],
-                            cp_generate_mode: false,
+                            click_mode: PreviewClickMode::Normal,
                         },
                     );
                     preview_events.generate.write(GeneratePreviewRequest {
@@ -967,7 +968,7 @@ pub(super) fn on_preview_generated(
                 query_params: ev.query_params.clone(),
                 query_param_overrides: saved_qp_overrides,
                 bom_entries: ev.bom_entries.clone(),
-                cp_generate_mode: false,
+                click_mode: PreviewClickMode::Normal,
             });
     }
 }
@@ -1255,7 +1256,11 @@ fn ray_triangle_intersect(
         return None;
     }
     let t = f * dot(&edge2, &q);
-    if t > 1e-10 { Some(t) } else { None }
+    if t > 1e-10 {
+        Some(t)
+    } else {
+        None
+    }
 }
 
 fn cross(a: &[f64; 3], b: &[f64; 3]) -> [f64; 3] {
@@ -1520,37 +1525,60 @@ fn preview_target_ui(
                 if ui.button("Update").clicked() {
                     action = PreviewAction::Update;
                 }
-                // Normal-mode-specific buttons
-                if let PreviewTarget::Normal {
-                    base,
-                    bom_entries,
-                    control_point_overrides,
-                    cp_generate_mode,
-                    ..
-                } = &mut *target
-                {
-                    if ui.button("Export 3MF").clicked() {
-                        action = PreviewAction::Export3MF;
+                ui.menu_button("menu", |ui| {
+                    if let PreviewTarget::Normal {
+                        base,
+                        bom_entries,
+                        control_point_overrides,
+                        click_mode,
+                        ..
+                    } = &mut *target
+                    {
+                        if ui.button("Export 3MF").clicked() {
+                            action = PreviewAction::Export3MF;
+                            ui.close();
+                        }
+                        if !bom_entries.is_empty() && ui.button("Export BOM").clicked() {
+                            action = PreviewAction::ExportBOM;
+                            ui.close();
+                        }
+                        if !control_point_overrides.is_empty() && ui.button("Reset CPs").clicked() {
+                            control_point_overrides.clear();
+                            cp_override_regenerate.push(base.preview_id);
+                            ui.close();
+                        }
+                        let cp_label = if *click_mode == PreviewClickMode::CpGenerate {
+                            "CP生成 ✓"
+                        } else {
+                            "CP生成"
+                        };
+                        if ui.button(cp_label).clicked() {
+                            *click_mode = if *click_mode == PreviewClickMode::CpGenerate {
+                                PreviewClickMode::Normal
+                            } else {
+                                PreviewClickMode::CpGenerate
+                            };
+                            ui.close();
+                        }
+                        let snap_label = if *click_mode == PreviewClickMode::SnapTranslate {
+                            "スナップ ✓"
+                        } else {
+                            "スナップ"
+                        };
+                        if ui.button(snap_label).clicked() {
+                            *click_mode = if *click_mode == PreviewClickMode::SnapTranslate {
+                                PreviewClickMode::Normal
+                            } else {
+                                PreviewClickMode::SnapTranslate
+                            };
+                            ui.close();
+                        }
                     }
-                    if !bom_entries.is_empty() && ui.button("Export BOM").clicked() {
-                        action = PreviewAction::ExportBOM;
+                    if ui.button("Close").clicked() {
+                        action = PreviewAction::Close;
+                        ui.close();
                     }
-                    if !control_point_overrides.is_empty() && ui.button("Reset CPs").clicked() {
-                        control_point_overrides.clear();
-                        cp_override_regenerate.push(base.preview_id);
-                    }
-                    let cp_label = if *cp_generate_mode {
-                        "CP生成 ✓"
-                    } else {
-                        "CP生成"
-                    };
-                    if ui.button(cp_label).clicked() {
-                        *cp_generate_mode = !*cp_generate_mode;
-                    }
-                }
-                if ui.button("Close").clicked() {
-                    action = PreviewAction::Close;
-                }
+                });
             });
             // Query parameters sliders
             if let PreviewTarget::Normal {
@@ -1672,7 +1700,7 @@ fn preview_target_ui(
 
             if let PreviewTarget::Normal {
                 base,
-                cp_generate_mode,
+                click_mode,
                 evaluated_nodes,
                 control_points,
                 control_point_overrides,
@@ -1680,52 +1708,90 @@ fn preview_target_ui(
             } = &mut *target
             {
                 if let Some((ray_origin, ray_dir)) = click_ray {
-                    if *cp_generate_mode {
-                        if let Some((t, _node)) =
-                            raycast_evaluated_nodes(&ray_origin, &ray_dir, evaluated_nodes)
-                        {
-                            let hit = [
-                                ray_origin[0] + t * ray_dir[0],
-                                ray_origin[1] + t * ray_dir[1],
-                                ray_origin[2] + t * ray_dir[2],
-                            ];
-                            action = PreviewAction::InsertControlPoint(hit[0], hit[1], hit[2]);
+                    let surface_hit =
+                        raycast_evaluated_nodes(&ray_origin, &ray_dir, evaluated_nodes).map(
+                            |(t, _node)| {
+                                [
+                                    ray_origin[0] + t * ray_dir[0],
+                                    ray_origin[1] + t * ray_dir[1],
+                                    ray_origin[2] + t * ray_dir[2],
+                                ]
+                            },
+                        );
+                    match *click_mode {
+                        PreviewClickMode::CpGenerate => {
+                            if let Some(hit) = surface_hit {
+                                action =
+                                    PreviewAction::InsertControlPoint(hit[0], hit[1], hit[2]);
+                            }
                         }
-                    } else if !control_points.is_empty() {
-                        let sphere_radius = CONTROL_SPHERE_HIT_RADIUS;
-                        let mut best_hit: Option<(f64, usize)> = None;
-                        for (ci, cp) in control_points.iter().enumerate() {
-                            let center = [cp.x.value, cp.y.value, cp.z.value];
-                            let oc = [
-                                ray_origin[0] - center[0],
-                                ray_origin[1] - center[1],
-                                ray_origin[2] - center[2],
-                            ];
-                            let a = dot(&ray_dir, &ray_dir);
-                            let b = 2.0 * dot(&oc, &ray_dir);
-                            let c = dot(&oc, &oc) - sphere_radius * sphere_radius;
-                            let discriminant = b * b - 4.0 * a * c;
-                            if discriminant >= 0.0 {
-                                let t = (-b - discriminant.sqrt()) / (2.0 * a);
-                                let t = if t > 0.0 {
-                                    t
+                        PreviewClickMode::SnapTranslate => {
+                            if let Some(hit) = surface_hit {
+                                if let Some(first) = selected_cp.snap_translate.first_point.take()
+                                {
+                                    selected_cp.snap_translate.result = Some([
+                                        first[0] - hit[0],
+                                        first[1] - hit[1],
+                                        first[2] - hit[2],
+                                    ]);
                                 } else {
-                                    (-b + discriminant.sqrt()) / (2.0 * a)
-                                };
-                                if t > 0.0 {
-                                    if best_hit.is_none() || t < best_hit.unwrap().0 {
-                                        best_hit = Some((t, ci));
-                                    }
+                                    selected_cp.snap_translate.first_point = Some(hit);
                                 }
                             }
                         }
+                        PreviewClickMode::Normal if !control_points.is_empty() => {
+                            let sphere_radius = CONTROL_SPHERE_HIT_RADIUS;
+                            let mut best_hit: Option<(f64, usize)> = None;
+                            for (ci, cp) in control_points.iter().enumerate() {
+                                let center = [cp.x.value, cp.y.value, cp.z.value];
+                                let oc = [
+                                    ray_origin[0] - center[0],
+                                    ray_origin[1] - center[1],
+                                    ray_origin[2] - center[2],
+                                ];
+                                let a = dot(&ray_dir, &ray_dir);
+                                let b = 2.0 * dot(&oc, &ray_dir);
+                                let c = dot(&oc, &oc) - sphere_radius * sphere_radius;
+                                let discriminant = b * b - 4.0 * a * c;
+                                if discriminant >= 0.0 {
+                                    let t = (-b - discriminant.sqrt()) / (2.0 * a);
+                                    let t = if t > 0.0 {
+                                        t
+                                    } else {
+                                        (-b + discriminant.sqrt()) / (2.0 * a)
+                                    };
+                                    if t > 0.0 {
+                                        if best_hit.is_none() || t < best_hit.unwrap().0 {
+                                            best_hit = Some((t, ci));
+                                        }
+                                    }
+                                }
+                            }
 
-                        if let Some((_t, ci)) = best_hit {
-                            selected_cp.preview_id = Some(base.preview_id);
-                            selected_cp.index = ci;
-                        } else if selected_cp.preview_id == Some(base.preview_id) {
-                            selected_cp.preview_id = None;
+                            if let Some((_t, ci)) = best_hit {
+                                selected_cp.preview_id = Some(base.preview_id);
+                                selected_cp.index = ci;
+                            } else if selected_cp.preview_id == Some(base.preview_id) {
+                                selected_cp.preview_id = None;
+                            }
                         }
+                        _ => {}
+                    }
+                }
+
+                if *click_mode == PreviewClickMode::SnapTranslate {
+                    ui.add_space(4.0);
+                    if selected_cp.snap_translate.first_point.is_some() {
+                        ui.label("1点目選択済み — 2点目をクリック");
+                    }
+                    if let Some(v) = selected_cp.snap_translate.result {
+                        let text = format!("translate({:.2}, {:.2}, {:.2})", v[0], v[1], v[2]);
+                        ui.horizontal(|ui| {
+                            ui.label(&text);
+                            if ui.button("Copy").clicked() {
+                                ui.ctx().copy_text(text.clone());
+                            }
+                        });
                     }
                 }
 
