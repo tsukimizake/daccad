@@ -1407,9 +1407,12 @@ fn insert_control_point_text(source: &mut String, query: &str, text: &str) {
             } else if bytes[i] == b'"' {
                 in_string = true;
             } else if bytes[i] == b'.' {
-                dot_pos = Some(i);
-                i += 1;
-                break;
+                let next_is_digit = i + 1 < bytes.len() && bytes[i + 1].is_ascii_digit();
+                if !next_is_digit {
+                    dot_pos = Some(i);
+                    i += 1;
+                    break;
+                }
             }
             i += 1;
         }
