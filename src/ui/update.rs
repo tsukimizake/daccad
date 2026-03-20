@@ -21,13 +21,13 @@ use crate::ui::{
     ThreeMfFileContents, UnsavedChanges,
 };
 use bevy::asset::RenderAssetUsages;
+use bevy::camera::RenderTarget;
 use bevy::camera::primitives::MeshAabb;
 use bevy::camera::visibility::RenderLayers;
-use bevy::camera::RenderTarget;
 use bevy::mesh::{Indices, VertexAttributeValues};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
-use bevy_egui::{egui, EguiContexts};
+use bevy_egui::{EguiContexts, egui};
 use bevy_file_dialog::prelude::*;
 use cadhr_lang::manifold_bridge::EvaluatedNode;
 use cadhr_lang::parse::SrcSpan;
@@ -1256,11 +1256,7 @@ fn ray_triangle_intersect(
         return None;
     }
     let t = f * dot(&edge2, &q);
-    if t > 1e-10 {
-        Some(t)
-    } else {
-        None
-    }
+    if t > 1e-10 { Some(t) } else { None }
 }
 
 fn cross(a: &[f64; 3], b: &[f64; 3]) -> [f64; 3] {
@@ -1574,11 +1570,11 @@ fn preview_target_ui(
                             ui.close();
                         }
                     }
-                    if ui.button("Close").clicked() {
-                        action = PreviewAction::Close;
-                        ui.close();
-                    }
                 });
+                if ui.button("Close").clicked() {
+                    action = PreviewAction::Close;
+                    ui.close();
+                }
             });
             // Query parameters sliders
             if let PreviewTarget::Normal {
@@ -1721,14 +1717,12 @@ fn preview_target_ui(
                     match *click_mode {
                         PreviewClickMode::CpGenerate => {
                             if let Some(hit) = surface_hit {
-                                action =
-                                    PreviewAction::InsertControlPoint(hit[0], hit[1], hit[2]);
+                                action = PreviewAction::InsertControlPoint(hit[0], hit[1], hit[2]);
                             }
                         }
                         PreviewClickMode::SnapTranslate => {
                             if let Some(hit) = surface_hit {
-                                if let Some(first) = selected_cp.snap_translate.first_point.take()
-                                {
+                                if let Some(first) = selected_cp.snap_translate.first_point.take() {
                                     selected_cp.snap_translate.result = Some([
                                         first[0] - hit[0],
                                         first[1] - hit[1],
