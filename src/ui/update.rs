@@ -792,7 +792,8 @@ pub(super) fn on_preview_generated(
         let mesh_handle = meshes.add(ev.mesh.clone());
 
         let material = materials.add(StandardMaterial {
-            base_color: Color::srgb(0.7, 0.2, 0.2),
+            base_color: Color::srgba(0.7, 0.2, 0.2, 0.5),
+            alpha_mode: AlphaMode::Blend,
             cull_mode: None,
             ..default()
         });
@@ -1051,7 +1052,8 @@ pub(super) fn on_collision_preview_generated(
 
         let mesh_handle = meshes.add(ev.combined_mesh.clone());
         let material = materials.add(StandardMaterial {
-            base_color: Color::srgb(0.7, 0.2, 0.2),
+            base_color: Color::srgba(0.7, 0.2, 0.2, 0.5),
+            alpha_mode: AlphaMode::Blend,
             cull_mode: None,
             ..default()
         });
