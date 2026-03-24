@@ -381,21 +381,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bevy-async-ecs"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e7436632a76d847873ec97ab882fcafe3835a4504f432f536998a2f2a842ebd"
-dependencies = [
- "async-channel",
- "bevy_app",
- "bevy_ecs",
- "bevy_log",
- "bevy_platform",
- "futures-lite",
- "pin-project-lite",
-]
-
-[[package]]
 name = "bevy_a11y"
 version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1848,7 +1833,6 @@ name = "cadhr"
 version = "0.1.0"
 dependencies = [
  "bevy",
- "bevy-async-ecs",
  "bevy_egui",
  "bevy_file_dialog",
  "cadhr-lang",

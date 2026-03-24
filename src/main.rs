@@ -10,8 +10,6 @@ use crate::events::{
     GeneratePreviewRequest, PreviewGenerated,
 };
 use crate::ui::UiPlugin;
-use bevy_async_ecs::AsyncEcsPlugin;
-
 pub fn main() {
     App::new()
         .add_plugins(
@@ -25,7 +23,6 @@ pub fn main() {
                     ..default()
                 }),
         )
-        .add_plugins(AsyncEcsPlugin)
         .add_message::<GeneratePreviewRequest>()
         .add_message::<PreviewGenerated>()
         .add_message::<GenerateCollisionPreviewRequest>()
