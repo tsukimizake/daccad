@@ -97,7 +97,7 @@ pub enum Model2D {
     SketchXY(Plane2D),
     SketchYZ(Plane2D),
     SketchXZ(Plane2D),
-    Path { points: Vec<f64> },
+    Path { points: Vec<(f64, f64)> },
     Union(Box<Model2D>, Box<Model2D>),
     Difference(Box<Model2D>, Box<Model2D>),
     Intersection(Box<Model2D>, Box<Model2D>),
@@ -105,7 +105,7 @@ pub enum Model2D {
 
 #[derive(Debug, Clone)]
 pub enum Plane2D {
-    Sketch { points: Vec<f64> },
+    Sketch { points: Vec<(f64, f64)> },
     Circle { radius: f64 },
 }
 
@@ -611,28 +611,48 @@ impl<'a, S> Args<'a, S> {
 // Term → Model2D 変換
 // ============================================================
 
+fn ensure_ccw(points: &mut Vec<(f64, f64)>) {
+    if points.len() < 3 {
+        return;
+    }
+    let signed_area: f64 = points
+        .iter()
+        .zip(points.iter().cycle().skip(1))
+        .map(|(a, b)| a.0 * b.1 - b.0 * a.1)
+        .sum();
+    if signed_area < 0.0 {
+        points.reverse();
+    }
+}
+
+fn pairs_to_flat(pairs: &[(f64, f64)]) -> Vec<f64> {
+    pairs.iter().flat_map(|&(x, y)| [x, y]).collect()
+}
+
 fn extract_polygon_points<S>(
     list_term: &Term<S>,
     functor: &str,
-) -> Result<Vec<f64>, ConversionError> {
+) -> Result<Vec<(f64, f64)>, ConversionError> {
     match list_term {
         Term::List { items, .. } => {
-            let mut points = Vec::with_capacity(items.len() * 2);
+            let mut points = Vec::with_capacity(items.len());
             for (i, item) in items.iter().enumerate() {
                 match item {
                     Term::Struct {
                         functor: f, args, ..
                     } if f == "p" && args.len() == 2 => {
-                        for arg in args.iter() {
-                            match term_as_fixed_point(arg) {
-                                Some((fp, _)) => points.push(fp.to_f64()),
-                                None => {
-                                    return Err(ConversionError::TypeMismatch {
-                                        functor: functor.to_string(),
-                                        arg_index: i,
-                                        expected: "p(number, number)",
-                                    });
-                                }
+                        let x = term_as_fixed_point(&args[0]);
+                        let y = term_as_fixed_point(&args[1]);
+                        match (x, y) {
+                            (Some((fx, _)), Some((fy, _))) => {
+                                points.push((fx.to_f64(), fy.to_f64()));
+                            }
+                            _ => {
+                                return Err(ConversionError::TypeMismatch {
+                                    functor: functor.to_string(),
+                                    arg_index: i,
+                                    expected: "p(number, number)",
+                                });
                             }
                         }
                     }
@@ -693,9 +713,9 @@ fn extract_point_2d<S>(
 fn extract_path_points<S>(
     start_term: &Term<S>,
     segments_term: &Term<S>,
-) -> Result<Vec<f64>, ConversionError> {
+) -> Result<Vec<(f64, f64)>, ConversionError> {
     let mut current = extract_point_2d(start_term, FunctorTag::Path, 0)?;
-    let mut points = vec![current.0, current.1];
+    let mut points = vec![current];
 
     let segments = match segments_term {
         Term::List { items, .. } => items,
@@ -718,38 +738,31 @@ fn extract_path_points<S>(
         match (tag, args) {
             (Some(FunctorTag::LineTo), Some([end_term])) => {
                 let end = extract_point_2d(end_term, FunctorTag::LineTo, i)?;
-                points.push(end.0);
-                points.push(end.1);
+                points.push(end);
                 current = end;
             }
             (Some(FunctorTag::BezierTo), Some([cp_term, end_term])) => {
                 let cp = extract_point_2d(cp_term, FunctorTag::BezierTo, i)?;
                 let end = extract_point_2d(end_term, FunctorTag::BezierTo, i)?;
-                for (x, y) in crate::bezier::evaluate_quadratic(
+                points.extend(crate::bezier::evaluate_quadratic(
                     current,
                     cp,
                     end,
                     crate::bezier::DEFAULT_STEPS,
-                ) {
-                    points.push(x);
-                    points.push(y);
-                }
+                ));
                 current = end;
             }
             (Some(FunctorTag::BezierTo), Some([cp1_term, cp2_term, end_term])) => {
                 let cp1 = extract_point_2d(cp1_term, FunctorTag::BezierTo, i)?;
                 let cp2 = extract_point_2d(cp2_term, FunctorTag::BezierTo, i)?;
                 let end = extract_point_2d(end_term, FunctorTag::BezierTo, i)?;
-                for (x, y) in crate::bezier::evaluate_cubic(
+                points.extend(crate::bezier::evaluate_cubic(
                     current,
                     cp1,
                     cp2,
                     end,
                     crate::bezier::DEFAULT_STEPS,
-                ) {
-                    points.push(x);
-                    points.push(y);
-                }
+                ));
                 current = end;
             }
             _ => {
@@ -816,8 +829,8 @@ impl Model2D {
             FunctorTag::SketchXZ if a.len() == 1 => {
                 let mut points = extract_polygon_points(&a.args[0], a.functor)?;
                 // Rx(-90°)で+Y押し出しにするため、第2座標(Z)を反転
-                for y in points.iter_mut().skip(1).step_by(2) {
-                    *y = -*y;
+                for p in points.iter_mut() {
+                    p.1 = -p.1;
                 }
                 Ok(Model2D::SketchXZ(Plane2D::Sketch { points }))
             }
@@ -863,24 +876,20 @@ impl Model2D {
             Model2D::SketchXY(Plane2D::Sketch { points })
             | Model2D::SketchYZ(Plane2D::Sketch { points })
             | Model2D::SketchXZ(Plane2D::Sketch { points })
-            | Model2D::Path { points } => Some(vec![points.clone()]),
-            Model2D::SketchXY(Plane2D::Circle { radius }) => {
-                let mut points = Vec::with_capacity(DEFAULT_SEGMENTS as usize * 2);
-                for i in 0..DEFAULT_SEGMENTS {
-                    let angle = 2.0 * std::f64::consts::PI * (i as f64) / (DEFAULT_SEGMENTS as f64);
-                    points.push(radius * angle.cos());
-                    points.push(radius * angle.sin());
-                }
-                Some(vec![points])
+            | Model2D::Path { points } => {
+                let mut pts = points.clone();
+                ensure_ccw(&mut pts);
+                Some(vec![pairs_to_flat(&pts)])
             }
-            Model2D::SketchYZ(Plane2D::Circle { radius })
+            Model2D::SketchXY(Plane2D::Circle { radius }) | Model2D::SketchYZ(Plane2D::Circle { radius })
             | Model2D::SketchXZ(Plane2D::Circle { radius }) => {
-                let mut points = Vec::with_capacity(DEFAULT_SEGMENTS as usize * 2);
-                for i in 0..DEFAULT_SEGMENTS {
-                    let angle = 2.0 * std::f64::consts::PI * (i as f64) / (DEFAULT_SEGMENTS as f64);
-                    points.push(radius * angle.cos());
-                    points.push(radius * angle.sin());
-                }
+                let points: Vec<f64> = (0..DEFAULT_SEGMENTS)
+                    .flat_map(|i| {
+                        let angle =
+                            2.0 * std::f64::consts::PI * (i as f64) / (DEFAULT_SEGMENTS as f64);
+                        [radius * angle.cos(), radius * angle.sin()]
+                    })
+                    .collect();
                 Some(vec![points])
             }
             Model2D::Union(a, b) => polygon_boolean_2d(a, b, |ma, mb| ma.union(mb)),
@@ -1640,7 +1649,7 @@ mod tests {
         let expr = Model2D::from_term(&term).unwrap();
         match expr {
             Model2D::SketchXY(Plane2D::Sketch { points }) => {
-                assert_eq!(points, vec![1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0]);
+                assert_eq!(points, vec![(1.0, 0.0), (0.0, 0.0), (0.0, 1.0), (1.0, 1.0)]);
             }
             _ => panic!("Expected SketchXY(Sketch)"),
         }
@@ -1744,6 +1753,42 @@ mod tests {
         assert!(
             rings.is_some(),
             "difference of polygons should produce polygon rings"
+        );
+    }
+
+    #[test]
+    fn test_polygon_difference_cw_subtrahend() {
+        // CW(時計回り)の引く側ポリゴンを使っても CCW と同じ結果になること
+        // CCW: (0,0)->(4,0)->(4,4)->(0,4)  CW: (0,0)->(0,4)->(4,4)->(4,0)
+        let base = make_polygon_term(vec![(0, 0), (10, 0), (10, 10), (0, 10)]);
+        let hole_ccw = make_polygon_term(vec![(0, 0), (5, 0), (5, 5), (0, 5)]);
+        let hole_cw = make_polygon_term(vec![(0, 0), (0, 5), (5, 5), (5, 0)]);
+
+        let diff_ccw = struc(
+            "difference".into(),
+            vec![base.clone(), hole_ccw],
+        );
+        let diff_cw = struc("difference".into(), vec![base, hole_cw]);
+
+        let rings_ccw = Model2D::from_term(&diff_ccw)
+            .unwrap()
+            .to_polygon_rings()
+            .unwrap();
+        let rings_cw = Model2D::from_term(&diff_cw)
+            .unwrap()
+            .to_polygon_rings()
+            .unwrap();
+
+        // 両方リングを持つこと
+        assert!(!rings_ccw.is_empty());
+        assert!(!rings_cw.is_empty());
+
+        // 総頂点数が一致すること(同じ形状)
+        let total_ccw: usize = rings_ccw.iter().map(|r| r.len()).sum();
+        let total_cw: usize = rings_cw.iter().map(|r| r.len()).sum();
+        assert_eq!(
+            total_ccw, total_cw,
+            "CW subtrahend should produce same shape as CCW"
         );
     }
 
@@ -2124,9 +2169,11 @@ mod tests {
         let expr = Model2D::from_term(&term).unwrap();
         match &expr {
             Model2D::Path { points } => {
-                // start + 3 line_to = 4 points = 8 floats
-                assert_eq!(points.len(), 8);
-                assert_eq!(points, &[0.0, 0.0, 10.0, 0.0, 10.0, 10.0, 0.0, 10.0]);
+                assert_eq!(points.len(), 4);
+                assert_eq!(
+                    points,
+                    &[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
+                );
             }
             _ => panic!("Expected Path"),
         }
@@ -2138,14 +2185,11 @@ mod tests {
         let expr = Model2D::from_term(&term).unwrap();
         match &expr {
             Model2D::Path { points } => {
-                // start(1) + 16 bezier steps = 17 points = 34 floats
-                assert_eq!(points.len(), 34);
-                // first point is start
-                assert_eq!(points[0], 0.0);
-                assert_eq!(points[1], 0.0);
-                // last point is end
-                assert!((points[32] - 10.0).abs() < 1e-9);
-                assert!((points[33] - 0.0).abs() < 1e-9);
+                // start(1) + 16 bezier steps = 17 points
+                assert_eq!(points.len(), 17);
+                assert_eq!(points[0], (0.0, 0.0));
+                assert!((points[16].0 - 10.0).abs() < 1e-9);
+                assert!((points[16].1 - 0.0).abs() < 1e-9);
             }
             _ => panic!("Expected Path"),
         }
@@ -2160,9 +2204,9 @@ mod tests {
         let expr = Model2D::from_term(&term).unwrap();
         match &expr {
             Model2D::Path { points } => {
-                assert_eq!(points.len(), 34);
-                assert!((points[32] - 10.0).abs() < 1e-9);
-                assert!((points[33] - 0.0).abs() < 1e-9);
+                assert_eq!(points.len(), 17);
+                assert!((points[16].0 - 10.0).abs() < 1e-9);
+                assert!((points[16].1 - 0.0).abs() < 1e-9);
             }
             _ => panic!("Expected Path"),
         }
@@ -2181,8 +2225,8 @@ mod tests {
         let expr = Model2D::from_term(&term).unwrap();
         match &expr {
             Model2D::Path { points } => {
-                // start(1) + line(1) + quad(16) + cubic(16) = 34 points = 68 floats
-                assert_eq!(points.len(), 68);
+                // start(1) + line(1) + quad(16) + cubic(16) = 34 points
+                assert_eq!(points.len(), 34);
             }
             _ => panic!("Expected Path"),
         }
