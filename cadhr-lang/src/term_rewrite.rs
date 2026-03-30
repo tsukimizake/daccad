@@ -16,15 +16,12 @@ pub type Env = HashMap<String, ScopedTerm>;
 #[derive(Debug, Clone)]
 pub struct ScopedEnv {
     scopes: HashMap<ScopeId, HashMap<String, ScopedTerm>>,
-    /// unify 中の Var 交差で得られた range 情報（値束縛とは別に保持）
-    ranges: HashMap<(ScopeId, String), (Option<Bound>, Option<Bound>)>,
 }
 
 impl ScopedEnv {
     pub fn new() -> Self {
         Self {
             scopes: HashMap::new(),
-            ranges: HashMap::new(),
         }
     }
 
@@ -34,25 +31,6 @@ impl ScopedEnv {
 
     pub fn get(&self, scope: ScopeId, name: &str) -> Option<&ScopedTerm> {
         self.scopes.get(&scope)?.get(name)
-    }
-
-    pub fn insert_range(
-        &mut self,
-        scope: ScopeId,
-        name: String,
-        min: Option<Bound>,
-        max: Option<Bound>,
-    ) {
-        self.ranges.insert((scope, name), (min, max));
-    }
-
-    pub fn update_query_param_ranges(&self, params: &mut [crate::parse::QueryParam]) {
-        for param in params.iter_mut() {
-            if let Some((min, max)) = self.ranges.get(&(0, param.name.clone())) {
-                param.min = intersect_min(param.min, *min);
-                param.max = intersect_max(param.max, *max);
-            }
-        }
     }
 }
 
@@ -88,17 +66,6 @@ fn resolve_inner(term: &ScopedTerm, env: &ScopedEnv, depth: usize) -> ScopedTerm
                     default_value: Some(*new_val),
                     min: *min,
                     max: *max,
-                    span: *span,
-                },
-                Some(Term::Range {
-                    min: r_min,
-                    max: r_max,
-                }) if has_annotation => Term::Var {
-                    name: name.clone(),
-                    scope: *scope,
-                    default_value: *default_value,
-                    min: intersect_min(*min, *r_min),
-                    max: intersect_max(*max, *r_max),
                     span: *span,
                 },
                 Some(val) => resolve_inner(val, env, depth + 1),
@@ -288,7 +255,6 @@ fn collect_default_var_bindings(
             collect_default_var_bindings(left, bindings);
             collect_default_var_bindings(right, bindings);
         }
-        Term::Range { .. } => {}
         Term::Constraint { left, right } => {
             collect_default_var_bindings(left, bindings);
             collect_default_var_bindings(right, bindings);
@@ -330,7 +296,7 @@ fn try_fold_number_literals<S>(term: &Term<S>) -> Option<FixedPoint> {
         | Term::List { .. }
         | Term::StringLit { .. }
         | Term::Constraint { .. }
-        | Term::Range { .. } => None,
+        => None,
     }
 }
 
@@ -361,7 +327,7 @@ pub fn try_eval_to_number<S>(term: &Term<S>) -> Option<FixedPoint> {
         | Term::List { .. }
         | Term::StringLit { .. }
         | Term::Constraint { .. }
-        | Term::Range { .. } => None,
+        => None,
     }
 }
 
@@ -395,7 +361,7 @@ pub fn fold_number_literals_in_place<S>(term: &mut Term<S>) {
             Term::Number { .. }
             | Term::Var { .. }
             | Term::StringLit { .. }
-            | Term::Range { .. } => {}
+            => {}
         }
     }
 }
@@ -423,7 +389,7 @@ fn occurs_check_scoped(var_name: &str, var_scope: ScopeId, term: &ScopedTerm) ->
             occurs_check_scoped(var_name, var_scope, left)
                 || occurs_check_scoped(var_name, var_scope, right)
         }
-        Term::Number { .. } | Term::StringLit { .. } | Term::Range { .. } => false,
+        Term::Number { .. } | Term::StringLit { .. } => false,
     }
 }
 
@@ -585,7 +551,50 @@ fn compute_term_range<S>(term: &Term<S>) -> Result<Range, String> {
     }
 }
 
-// TODO fixme O(query*solved_db_terms)で効率が悪いのと、queryに二重以上のfunctorがある場合にバグ
+fn collect_ranges_from_body_terms(
+    body: &[Term],
+    ranges: &mut HashMap<String, (Option<Bound>, Option<Bound>)>,
+) {
+    for term in body {
+        collect_ranges_from_body_term(term, ranges);
+    }
+}
+
+fn collect_ranges_from_body_term(
+    term: &Term,
+    ranges: &mut HashMap<String, (Option<Bound>, Option<Bound>)>,
+) {
+    match term {
+        Term::Var { name, min, max, .. } if name != "_" && (min.is_some() || max.is_some()) => {
+            let entry = ranges.entry(name.clone()).or_insert((None, None));
+            entry.0 = intersect_min(entry.0, *min);
+            entry.1 = intersect_max(entry.1, *max);
+        }
+        Term::Struct { args, .. } => {
+            for arg in args {
+                collect_ranges_from_body_term(arg, ranges);
+            }
+        }
+        Term::List { items, tail } => {
+            for item in items {
+                collect_ranges_from_body_term(item, ranges);
+            }
+            if let Some(t) = tail {
+                collect_ranges_from_body_term(t, ranges);
+            }
+        }
+        Term::InfixExpr { left, right, .. } => {
+            collect_ranges_from_body_term(left, ranges);
+            collect_ranges_from_body_term(right, ranges);
+        }
+        Term::Constraint { left, right } => {
+            collect_ranges_from_body_term(left, ranges);
+            collect_ranges_from_body_term(right, ranges);
+        }
+        _ => {}
+    }
+}
+
 pub fn infer_query_param_ranges(
     query_terms: &[Term],
     solved_db: &[Clause],
@@ -599,9 +608,9 @@ pub fn infer_query_param_ranges(
         } = q_term
         {
             for clause in solved_db {
-                let head = match clause {
-                    Clause::Rule { head, .. } => head,
-                    Clause::Fact(head) => head,
+                let (head, body) = match clause {
+                    Clause::Rule { head, body } => (head, body.as_slice()),
+                    Clause::Fact(head) => (head, [].as_slice()),
                     _ => continue,
                 };
                 if let Term::Struct {
@@ -611,13 +620,42 @@ pub fn infer_query_param_ranges(
                 } = head
                 {
                     if q_func == h_func && q_args.len() == h_args.len() {
+                        // body内のrange付きVarを収集
+                        let mut body_ranges: HashMap<String, (Option<Bound>, Option<Bound>)> =
+                            HashMap::new();
+                        collect_ranges_from_body_terms(body, &mut body_ranges);
+
+                        // query arg → head arg name → body range のマッピング
                         for (q_arg, h_arg) in q_args.iter().zip(h_args.iter()) {
-                            if let Term::Var { name, .. } = q_arg {
-                                let (range_min, range_max) = compute_term_range(h_arg)?;
-                                for param in params.iter_mut() {
-                                    if &param.name == name {
-                                        param.min = intersect_min(param.min, range_min);
-                                        param.max = intersect_max(param.max, range_max);
+                            if let Term::Var {
+                                name: q_name, ..
+                            } = q_arg
+                            {
+                                // head arg の変数名を取得
+                                if let Term::Var {
+                                    name: h_name, ..
+                                } = h_arg
+                                {
+                                    if let Some((r_min, r_max)) = body_ranges.get(h_name) {
+                                        for param in params.iter_mut() {
+                                            if &param.name == q_name {
+                                                param.min = intersect_min(param.min, *r_min);
+                                                param.max = intersect_max(param.max, *r_max);
+                                            }
+                                        }
+                                    }
+                                }
+                                // head arg が InfixExpr の場合: compute_term_range で body の range 付き変数を含めて計算
+                                if let Term::InfixExpr { .. } = h_arg {
+                                    // InfixExpr内の変数にbody rangeを適用してrange推定
+                                    let mut patched = h_arg.clone();
+                                    apply_body_ranges_to_term(&mut patched, &body_ranges);
+                                    let (range_min, range_max) = compute_term_range(&patched)?;
+                                    for param in params.iter_mut() {
+                                        if &param.name == q_name {
+                                            param.min = intersect_min(param.min, range_min);
+                                            param.max = intersect_max(param.max, range_max);
+                                        }
                                     }
                                 }
                             }
@@ -630,20 +668,22 @@ pub fn infer_query_param_ranges(
     Ok(())
 }
 
-/// 範囲が空でないかチェック（少なくとも1つの整数値が含まれるか）
-fn range_is_valid(min: Option<Bound>, max: Option<Bound>) -> bool {
-    match (min, max) {
-        (None, _) | (_, None) => true,
-        (Some(min_b), Some(max_b)) => {
-            if min_b.value > max_b.value {
-                false
-            } else if min_b.value < max_b.value {
-                true
-            } else {
-                // min_b.value == max_b.value: 両方がinclusiveでないと空
-                min_b.inclusive && max_b.inclusive
+fn apply_body_ranges_to_term(
+    term: &mut Term,
+    ranges: &HashMap<String, (Option<Bound>, Option<Bound>)>,
+) {
+    match term {
+        Term::Var { name, min, max, .. } if name != "_" => {
+            if let Some((r_min, r_max)) = ranges.get(name) {
+                *min = intersect_min(*min, *r_min);
+                *max = intersect_max(*max, *r_max);
             }
         }
+        Term::InfixExpr { left, right, .. } => {
+            apply_body_ranges_to_term(left, ranges);
+            apply_body_ranges_to_term(right, ranges);
+        }
+        _ => {}
     }
 }
 
@@ -688,34 +728,29 @@ pub fn unify(
         let mut t1 = resolve(&t1_raw, env);
         let mut t2 = resolve(&t2_raw, env);
 
-        // 両方が注釈付きVarの場合は range 交差を先にするため、default 適用を後回し
-        let both_annotated = matches!(&t1, Term::Var { default_value, min, max, .. } if default_value.is_some() || min.is_some() || max.is_some())
-            && matches!(&t2, Term::Var { default_value, min, max, .. } if default_value.is_some() || min.is_some() || max.is_some());
-        if !both_annotated {
-            if let Term::Var {
-                name,
-                scope,
-                default_value: Some(value),
-                ..
-            } = &t1
-            {
-                if name != "_" {
-                    env.insert(*scope, name.clone(), number(*value));
-                }
-                t1 = number(*value);
+        if let Term::Var {
+            name,
+            scope,
+            default_value: Some(value),
+            ..
+        } = &t1
+        {
+            if name != "_" {
+                env.insert(*scope, name.clone(), number(*value));
             }
-            if let Term::Var {
-                name,
-                scope,
-                default_value: Some(value),
-                ..
-            } = &t2
-            {
-                if name != "_" {
-                    env.insert(*scope, name.clone(), number(*value));
-                }
-                t2 = number(*value);
+            t1 = number(*value);
+        }
+        if let Term::Var {
+            name,
+            scope,
+            default_value: Some(value),
+            ..
+        } = &t2
+        {
+            if name != "_" {
+                env.insert(*scope, name.clone(), number(*value));
             }
+            t2 = number(*value);
         }
 
         if let Some(val) = try_fold_number_literals(&t1) {
@@ -751,100 +786,15 @@ pub fn unify(
                     ..
                 },
             ) if n1 == n2 && s1 == s2 => {}
-            // Var同士（少なくとも一方に range or default あり）: 範囲の交差を計算
-            (
-                Term::Var {
-                    name: n1,
-                    scope: s1,
-                    min: min1,
-                    max: max1,
-                    ..
-                },
-                Term::Var {
-                    name: n2,
-                    scope: s2,
-                    min: min2,
-                    max: max2,
-                    ..
-                },
-            ) if both_annotated => {
-                let new_min = intersect_min(*min1, *min2);
-                let new_max = intersect_max(*max1, *max2);
-
-                if !range_is_valid(new_min, new_max) {
-                    return Err(UnifyError {
-                        message: format!("range intersection is empty"),
-                        term1: t1,
-                        term2: t2,
-                    });
-                }
-
-                let intersected = Term::Range {
-                    min: new_min,
-                    max: new_max,
-                };
-                if n1 != "_" {
-                    env.insert_range(*s1, n1.clone(), new_min, new_max);
-                    env.insert(*s1, n1.clone(), intersected.clone());
-                }
-                if n2 != "_" && (n2 != n1 || s2 != s1) {
-                    env.insert_range(*s2, n2.clone(), new_min, new_max);
-                    env.insert(*s2, n2.clone(), intersected.clone());
-                }
-
-                // default 値がある場合は交差 range 内かチェックして束縛
-                let default1 = match &t1 {
-                    Term::Var {
-                        default_value: Some(v),
-                        ..
-                    } => Some(*v),
-                    _ => None,
-                };
-                let default2 = match &t2 {
-                    Term::Var {
-                        default_value: Some(v),
-                        ..
-                    } => Some(*v),
-                    _ => None,
-                };
-                let chosen_default = default1.or(default2);
-                if let Some(dv) = chosen_default {
-                    let dv = if value_in_range(dv, new_min, new_max) {
-                        dv
-                    } else {
-                        match (new_min, new_max) {
-                            (Some(lo), Some(hi)) => {
-                                FixedPoint::from_f64((lo.value.to_f64() + hi.value.to_f64()) / 2.0)
-                            }
-                            _ => dv,
-                        }
-                    };
-                    if n1 != "_" {
-                        env.insert(*s1, n1.clone(), number(dv));
-                    }
-                    if n2 != "_" {
-                        env.insert(*s2, n2.clone(), number(dv));
-                    }
-                }
-            }
-            // Var vs Number: 範囲内かチェック (value_in_range(v, None, None) は常に true)
+            // Var vs Number
             (
                 Term::Var {
                     name,
                     scope,
-                    min,
-                    max,
                     ..
                 },
-                Term::Number { value },
+                Term::Number { .. },
             ) => {
-                if !value_in_range(*value, *min, *max) {
-                    return Err(UnifyError {
-                        message: format!("value {} is out of range {:?}", value, t1),
-                        term1: t1,
-                        term2: t2,
-                    });
-                }
                 if name != "_" {
                     env.insert(*scope, name.clone(), t2.clone());
                 }
@@ -857,8 +807,6 @@ pub fn unify(
                 Term::Var {
                     name,
                     scope,
-                    min,
-                    max,
                     ..
                 },
                 _,
@@ -869,17 +817,6 @@ pub fn unify(
                         term1: t1,
                         term2: t2,
                     });
-                }
-                env.insert_range(*scope, name.clone(), *min, *max);
-                if let Term::Var {
-                    name: v_name,
-                    scope: v_scope,
-                    ..
-                } = &t2
-                {
-                    if v_name != "_" {
-                        env.insert_range(*v_scope, v_name.clone(), *min, *max);
-                    }
                 }
                 env.insert(*scope, name.clone(), t2.clone());
             }
@@ -1003,40 +940,6 @@ pub fn unify(
                     }
                 }
             }
-            // Range同士: intersection
-            (
-                Term::Range {
-                    min: min1,
-                    max: max1,
-                },
-                Term::Range {
-                    min: min2,
-                    max: max2,
-                },
-            ) => {
-                let new_min = intersect_min(*min1, *min2);
-                let new_max = intersect_max(*max1, *max2);
-                if !range_is_valid(new_min, new_max) {
-                    return Err(UnifyError {
-                        message: "range intersection is empty".to_string(),
-                        term1: t1,
-                        term2: t2,
-                    });
-                }
-            }
-            // Range と Number: 範囲内かチェック
-            (Term::Range { min, max }, Term::Number { value }) => {
-                if !value_in_range(*value, *min, *max) {
-                    return Err(UnifyError {
-                        message: format!("value {} is out of range {:?}", value, t1),
-                        term1: t1,
-                        term2: t2,
-                    });
-                }
-            }
-            (Term::Number { .. }, Term::Range { .. }) => {
-                stack.push((t2, t1));
-            }
             _ => {
                 return Err(UnifyError {
                     message: format!("cannot unify {:?} with {:?}", t1, t2),
@@ -1072,8 +975,6 @@ pub fn unify(
             }
             _ => {
                 if is_potentially_arithmetic(&t1) && is_potentially_arithmetic(&t2) {
-                    store_ranges_from_term(&t1, env);
-                    store_ranges_from_term(&t2, env);
                     constraints.push(Term::Constraint {
                         left: Box::new(t1),
                         right: Box::new(t2),
@@ -1146,117 +1047,6 @@ fn try_resolve_constraints(goals: &mut Vec<ScopedTerm>) -> Result<(), RewriteErr
     Ok(())
 }
 
-fn store_ranges_from_term(term: &ScopedTerm, env: &mut ScopedEnv) {
-    match term {
-        Term::Var {
-            name,
-            scope,
-            min,
-            max,
-            ..
-        } if name != "_" && (min.is_some() || max.is_some()) => {
-            env.insert_range(*scope, name.clone(), *min, *max);
-        }
-        Term::InfixExpr { left, right, .. } => {
-            store_ranges_from_term(left, env);
-            store_ranges_from_term(right, env);
-        }
-        _ => {}
-    }
-}
-
-fn collect_ranges_from_term(
-    term: &ScopedTerm,
-    ranges: &mut HashMap<String, (Option<Bound>, Option<Bound>)>,
-) {
-    match term {
-        Term::Var { name, min, max, .. } if name != "_" && (min.is_some() || max.is_some()) => {
-            let entry = ranges.entry(name.clone()).or_insert((None, None));
-            entry.0 = intersect_min(entry.0, *min);
-            entry.1 = intersect_max(entry.1, *max);
-        }
-        Term::InfixExpr { left, right, .. } => {
-            collect_ranges_from_term(left, ranges);
-            collect_ranges_from_term(right, ranges);
-        }
-        Term::Struct { args, .. } => {
-            for arg in args {
-                collect_ranges_from_term(arg, ranges);
-            }
-        }
-        Term::List { items, tail } => {
-            for item in items {
-                collect_ranges_from_term(item, ranges);
-            }
-            if let Some(t) = tail {
-                collect_ranges_from_term(t, ranges);
-            }
-        }
-        Term::Constraint { left, right } => {
-            collect_ranges_from_term(left, ranges);
-            collect_ranges_from_term(right, ranges);
-        }
-        _ => {}
-    }
-}
-
-fn apply_ranges_to_term(
-    term: &mut ScopedTerm,
-    ranges: &HashMap<String, (Option<Bound>, Option<Bound>)>,
-) {
-    match term {
-        Term::Var { name, min, max, .. } if name != "_" => {
-            if let Some((r_min, r_max)) = ranges.get(name) {
-                *min = intersect_min(*min, *r_min);
-                *max = intersect_max(*max, *r_max);
-            }
-        }
-        Term::InfixExpr { left, right, .. } => {
-            apply_ranges_to_term(left, ranges);
-            apply_ranges_to_term(right, ranges);
-        }
-        Term::Struct { args, .. } => {
-            for arg in args {
-                apply_ranges_to_term(arg, ranges);
-            }
-        }
-        Term::List { items, tail, .. } => {
-            for item in items {
-                apply_ranges_to_term(item, ranges);
-            }
-            if let Some(t) = tail {
-                apply_ranges_to_term(t, ranges);
-            }
-        }
-        Term::Constraint { left, right } => {
-            apply_ranges_to_term(left, ranges);
-            apply_ranges_to_term(right, ranges);
-        }
-        _ => {}
-    }
-}
-
-fn propagate_ranges_in_clause(clause: &mut Clause<ScopeId>) {
-    let mut ranges = HashMap::new();
-    match clause {
-        Clause::Fact(term) => {
-            collect_ranges_from_term(term, &mut ranges);
-            apply_ranges_to_term(term, &ranges);
-        }
-        Clause::Rule { head, body } => {
-            collect_ranges_from_term(head, &mut ranges);
-            for b in body.iter() {
-                collect_ranges_from_term(b, &mut ranges);
-            }
-            apply_ranges_to_term(head, &ranges);
-            for b in body.iter_mut() {
-                apply_ranges_to_term(b, &ranges);
-            }
-        }
-        Clause::Use { .. } => {}
-    }
-}
-
 fn assign_scope_to_clause(clause: Clause, scope_id: ScopeId) -> Clause<ScopeId> {
     match clause {
         Clause::Fact(term) => Clause::Fact(assign_scope_to_term(term, scope_id)),
@@ -1318,7 +1108,6 @@ fn assign_scope_to_term(term: Term, scope_id: ScopeId) -> ScopedTerm {
             left: Box::new(assign_scope_to_term(*left, scope_id)),
             right: Box::new(assign_scope_to_term(*right, scope_id)),
         },
-        Term::Range { min, max } => Term::Range { min, max },
     }
 }
 
@@ -1333,9 +1122,7 @@ fn try_rewrite_single_with_result(
 ) -> Option<(ScopedTerm, Vec<ScopedTerm>)> {
     for clause in db.iter() {
         *clause_counter += 1;
-        let mut scoped = assign_scope_to_clause(clause.clone(), *clause_counter);
-        propagate_ranges_in_clause(&mut scoped);
-
+        let scoped = assign_scope_to_clause(clause.clone(), *clause_counter);
         let (head, body) = match scoped {
             Clause::Fact(t) => (t, vec![]),
             Clause::Rule { head, body } => (head, body),
@@ -1372,6 +1159,27 @@ fn rewrite_term_recursive(
 ) -> Result<Vec<ScopedTerm>, RewriteError> {
     let mut term = term;
     apply_default_var_bindings(&mut term, other_goals);
+
+    // range付きVarがゴールとして出現: 値の範囲チェックのみ行い、結果は返さない
+    if let Term::Var {
+        default_value,
+        min,
+        max,
+        ..
+    } = &term
+    {
+        if min.is_some() || max.is_some() {
+            if let Some(dv) = default_value {
+                if !value_in_range(*dv, *min, *max) {
+                    return Err(RewriteError {
+                        message: format!("value {} is out of range", dv),
+                        goal: term,
+                    });
+                }
+            }
+            return Ok(vec![]);
+        }
+    }
 
     // ビルトインファンクターは引数を解決してそのまま返す（builtin factとのunifyを避ける）
     if let Term::Struct {
@@ -1423,7 +1231,9 @@ fn rewrite_term_recursive(
                 let mut combined = remaining_body;
                 combined.extend(other_goals.drain(..));
                 try_resolve_constraints(&mut combined)?;
-                remaining_body = combined.drain(0..body_len).collect();
+                // 制約解消で要素が除去されうるので、body_len を上限にclamp
+                let split = body_len.min(combined.len());
+                remaining_body = combined.drain(0..split).collect();
                 *other_goals = combined;
             }
 
@@ -1553,7 +1363,7 @@ fn resolve_builtin_arg(
     shared_env: &mut ScopedEnv,
 ) -> Result<ScopedTerm, RewriteError> {
     match term {
-        Term::Number { .. } | Term::Var { .. } | Term::StringLit { .. } | Term::Range { .. } => {
+        Term::Number { .. } | Term::Var { .. } | Term::StringLit { .. } => {
             Ok(term)
         }
         Term::List { items, tail } => {
@@ -1754,227 +1564,6 @@ mod tests {
 
     // ===== RangeVar unify tests =====
 
-    #[test]
-    fn test_rangevar_number_in_range() {
-        use crate::parse::{Bound, number_int, range_var};
-        let rv = range_var(
-            "X".to_string(),
-            Some(Bound {
-                value: FixedPoint::from_int(0),
-                inclusive: false,
-            }),
-            Some(Bound {
-                value: FixedPoint::from_int(10),
-                inclusive: false,
-            }),
-        );
-        let n = number_int(5);
-        let mut env = ScopedEnv::new();
-        unify(scoped(rv), scoped(n.clone()), &mut env).unwrap();
-        assert_eq!(resolve(&scoped(var("X".to_string())), &env), scoped(n));
-    }
-
-    #[test]
-    fn test_rangevar_number_out_of_range() {
-        use crate::parse::{Bound, number_int, range_var};
-        let rv = range_var(
-            "X".to_string(),
-            Some(Bound {
-                value: FixedPoint::from_int(0),
-                inclusive: false,
-            }),
-            Some(Bound {
-                value: FixedPoint::from_int(10),
-                inclusive: false,
-            }),
-        );
-        let n = number_int(15);
-        assert!(unify(scoped(rv), scoped(n), &mut ScopedEnv::new()).is_err());
-    }
-
-    #[test]
-    fn test_rangevar_number_boundary_exclusive() {
-        use crate::parse::{Bound, number_int, range_var};
-        let make_rv = || {
-            range_var(
-                "X".to_string(),
-                Some(Bound {
-                    value: FixedPoint::from_int(0),
-                    inclusive: false,
-                }),
-                Some(Bound {
-                    value: FixedPoint::from_int(10),
-                    inclusive: false,
-                }),
-            )
-        };
-        assert!(
-            unify(
-                scoped(make_rv()),
-                scoped(number_int(0)),
-                &mut ScopedEnv::new()
-            )
-            .is_err()
-        );
-        assert!(
-            unify(
-                scoped(make_rv()),
-                scoped(number_int(10)),
-                &mut ScopedEnv::new()
-            )
-            .is_err()
-        );
-        assert!(
-            unify(
-                scoped(make_rv()),
-                scoped(number_int(1)),
-                &mut ScopedEnv::new()
-            )
-            .is_ok()
-        );
-        assert!(
-            unify(
-                scoped(make_rv()),
-                scoped(number_int(9)),
-                &mut ScopedEnv::new()
-            )
-            .is_ok()
-        );
-    }
-
-    #[test]
-    fn test_rangevar_number_boundary_inclusive() {
-        use crate::parse::{Bound, number_int, range_var};
-        let make_rv = || {
-            range_var(
-                "X".to_string(),
-                Some(Bound {
-                    value: FixedPoint::from_int(0),
-                    inclusive: true,
-                }),
-                Some(Bound {
-                    value: FixedPoint::from_int(10),
-                    inclusive: true,
-                }),
-            )
-        };
-        assert!(
-            unify(
-                scoped(make_rv()),
-                scoped(number_int(0)),
-                &mut ScopedEnv::new()
-            )
-            .is_ok()
-        );
-        assert!(
-            unify(
-                scoped(make_rv()),
-                scoped(number_int(10)),
-                &mut ScopedEnv::new()
-            )
-            .is_ok()
-        );
-    }
-
-    #[test]
-    fn test_rangevar_intersection() {
-        use crate::parse::{Bound, range_var};
-        let rv1 = range_var(
-            "X".to_string(),
-            Some(Bound {
-                value: FixedPoint::from_int(0),
-                inclusive: false,
-            }),
-            Some(Bound {
-                value: FixedPoint::from_int(10),
-                inclusive: false,
-            }),
-        );
-        let rv2 = range_var(
-            "Y".to_string(),
-            Some(Bound {
-                value: FixedPoint::from_int(5),
-                inclusive: false,
-            }),
-            Some(Bound {
-                value: FixedPoint::from_int(15),
-                inclusive: false,
-            }),
-        );
-        let mut env = ScopedEnv::new();
-        unify(scoped(rv1), scoped(rv2), &mut env).unwrap();
-        let resolved_x = resolve(&scoped(var("X".to_string())), &env);
-        assert_eq!(
-            resolved_x,
-            Term::Range {
-                min: Some(Bound {
-                    value: FixedPoint::from_int(5),
-                    inclusive: false
-                }),
-                max: Some(Bound {
-                    value: FixedPoint::from_int(10),
-                    inclusive: false
-                }),
-            }
-        );
-    }
-
-    #[test]
-    fn test_rangevar_intersection_empty() {
-        use crate::parse::{Bound, range_var};
-        let rv1 = range_var(
-            "X".to_string(),
-            Some(Bound {
-                value: FixedPoint::from_int(0),
-                inclusive: false,
-            }),
-            Some(Bound {
-                value: FixedPoint::from_int(5),
-                inclusive: false,
-            }),
-        );
-        let rv2 = range_var(
-            "Y".to_string(),
-            Some(Bound {
-                value: FixedPoint::from_int(10),
-                inclusive: false,
-            }),
-            Some(Bound {
-                value: FixedPoint::from_int(15),
-                inclusive: false,
-            }),
-        );
-        assert!(unify(scoped(rv1), scoped(rv2), &mut ScopedEnv::new()).is_err());
-    }
-
-    #[test]
-    fn test_rangevar_intersection_inclusive_exclusive() {
-        use crate::parse::{Bound, range_var};
-        let rv1 = range_var(
-            "X".to_string(),
-            Some(Bound {
-                value: FixedPoint::from_int(0),
-                inclusive: true,
-            }),
-            Some(Bound {
-                value: FixedPoint::from_int(5),
-                inclusive: true,
-            }),
-        );
-        let rv2 = range_var(
-            "Y".to_string(),
-            Some(Bound {
-                value: FixedPoint::from_int(5),
-                inclusive: false,
-            }),
-            Some(Bound {
-                value: FixedPoint::from_int(10),
-                inclusive: false,
-            }),
-        );
-        assert!(unify(scoped(rv1), scoped(rv2), &mut ScopedEnv::new()).is_err());
-    }
-
     // ===== arithmetic tests =====
 
     #[test]
@@ -2063,24 +1652,24 @@ mod tests {
 
     #[test]
     fn default_var_matches_annotated_value() {
-        let resolved = run_success("f(25).", "f(X=25).");
-        assert_eq!(resolved, vec!["f(X=25)"]);
+        let resolved = run_success("f(25).", "f(X@25).");
+        assert_eq!(resolved, vec!["f(X@25)"]);
     }
 
     #[test]
     fn default_var_conflict_fails() {
-        run_failure("f(30).", "f(X=25).");
+        run_failure("f(30).", "f(X@25).");
     }
 
     #[test]
     fn default_var_propagates_within_rule_body() {
         let resolved = run_success(
-            "cut(W) :- cube(W, 50, 260). main :- cube(X=25, 50, 300) - (cut(W=5) |> translate(X / 2 - W, 0, 0)).",
+            "cut(W) :- cube(W, 50, 260). main :- cube(X@25, 50, 300) - (cut(W@5) |> translate(X / 2 - W, 0, 0)).",
             "main.",
         );
         assert_eq!(
             resolved,
-            vec!["(cube(X=25, 50, 300) - translate(cube(5, 50, 260), 7.5, 0, 0))"]
+            vec!["(cube(X@25, 50, 300) - translate(cube(5, 50, 260), 7.5, 0, 0))"]
         );
     }
 
@@ -2461,7 +2050,7 @@ mod tests {
     #[test]
     fn builtin_arg_rule_with_control_separation() {
         let resolved = run_success(
-            "blade_cut :- path(p(0, 0), [line_to(p(10, 0)), line_to(p(10, 20))]), control(X=0, Y=20, 0). main :- linear_extrude(blade_cut, 100).",
+            "blade_cut :- path(p(0, 0), [line_to(p(10, 0)), line_to(p(10, 20))]), control(X@0, Y@20, 0). main :- linear_extrude(blade_cut, 100).",
             "main.",
         );
         assert_eq!(resolved.len(), 2);
@@ -2517,12 +2106,20 @@ mod tests {
     }
 
     #[test]
-    fn range_propagation_in_clause() {
-        // head の range が body の Var に伝播し、値が default_value として保持されること
-        let resolved = run_success("foo(0<X<10) :- cube(X, X, X).", "foo(5).");
+    fn body_range_constraint() {
+        let resolved = run_success("foo(X) :- 0<X<10, cube(X, X, X).", "foo(5).");
+        assert_eq!(resolved, vec!["cube(5, 5, 5)"]);
+    }
+
+    #[test]
+    fn body_eq_constraint_with_rule() {
+        let resolved = run_success(
+            "cut(SLIT, W, H) :- X=(W-SLIT)/2, sketchXY([p(X, 0), p(SLIT+W, 0), p(SLIT+W, H-20), p(X, H-20)]).",
+            "cut(18, 40, 120).",
+        );
         assert_eq!(
             resolved,
-            vec!["cube(0 < X=5 < 10, 0 < X=5 < 10, 0 < X=5 < 10)"]
+            vec!["sketchXY([p(11, 0), p(58, 0), p(58, 100), p(11, 100)])"]
         );
     }
 
@@ -2605,9 +2202,9 @@ mod tests {
     }
 
     #[test]
-    fn infer_query_param_ranges_basic() {
+    fn infer_query_param_ranges_from_body() {
         use crate::parse::{Bound, collect_query_params};
-        let db_src = "box(0<X<100) :- cube(X, 10, 10).";
+        let db_src = "box(X) :- 0<X<100, cube(X, 10, 10).";
         let query_src = "box(A).";
         let db = database(db_src).expect("failed to parse db");
         let (_, query_terms) = query(query_src).expect("failed to parse query");
@@ -2631,9 +2228,9 @@ mod tests {
     }
 
     #[test]
-    fn infer_query_param_ranges_infix() {
+    fn infer_query_param_ranges_infix_from_body() {
         use crate::parse::{Bound, collect_query_params};
-        let db_src = "box(0<X<10 + 0<Y<5) :- cube(X, Y, 10).";
+        let db_src = "box(X + Y) :- 0<X<10, 0<Y<5, cube(X, Y, 10).";
         let query_src = "box(A).";
         let db = database(db_src).expect("failed to parse db");
         let (_, query_terms) = query(query_src).expect("failed to parse query");
@@ -2657,52 +2254,16 @@ mod tests {
     }
 
     #[test]
-    fn query_head_range_intersection() {
-        use crate::parse::{Bound, collect_query_params, substitute_query_params};
-        let db_src = "main(0<X<5) :- cube(X, 10, 10).";
-        let query_src = "main(0<X<10).";
-        let mut db = database(db_src).expect("failed to parse db");
-        let (_, query_terms) = query(query_src).expect("failed to parse query");
-        let mut params = collect_query_params(&query_terms);
-        // midpoint of query range 0..10 = 5
-        let values = std::collections::HashMap::from([("X".to_string(), 5.0)]);
-        let substituted = substitute_query_params(&query_terms, &values);
-        let (_resolved, env) = execute(&mut db, substituted).expect("Expected success");
-        env.update_query_param_ranges(&mut params);
-        assert_eq!(params.len(), 1);
-        assert_eq!(params[0].name, "X");
-        // head側0<X<5とquery側0<X<10のintersection → 0<X<5
-        assert_eq!(
-            params[0].max.unwrap(),
-            Bound {
-                value: FixedPoint::from_int(5),
-                inclusive: false,
-            }
-        );
-        assert_eq!(
-            params[0].min.unwrap(),
-            Bound {
-                value: FixedPoint::from_int(0),
-                inclusive: false,
-            }
-        );
-    }
-
-    #[test]
-    fn query_head_range_propagation_from_head_only() {
-        use crate::parse::{Bound, collect_query_params, substitute_query_params};
-        let db_src = "main(0<X<10) :- cube(X, 10, 10).";
-        let query_src = "main(X).";
-        let mut db = database(db_src).expect("failed to parse db");
+    fn query_body_range_propagation() {
+        use crate::parse::{Bound, collect_query_params};
+        let db_src = "main(X) :- 0<X<10, cube(X, 10, 10).";
+        let query_src = "main(A).";
+        let db = database(db_src).expect("failed to parse db");
         let (_, query_terms) = query(query_src).expect("failed to parse query");
         let mut params = collect_query_params(&query_terms);
         assert_eq!(params.len(), 1);
         assert!(params[0].min.is_none());
-        let values = std::collections::HashMap::from([("X".to_string(), 5.0)]);
-        let substituted = substitute_query_params(&query_terms, &values);
-        let (_resolved, env) = execute(&mut db, substituted).expect("Expected success");
-        env.update_query_param_ranges(&mut params);
-        // head側のrangeが伝播
+        infer_query_param_ranges(&query_terms, &db, &mut params).unwrap();
         assert_eq!(
             params[0].min.unwrap(),
             Bound {

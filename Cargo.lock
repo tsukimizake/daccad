@@ -219,6 +219,12 @@ checksum = "76a2e8124351fda1ef8aaaa3bbd7ebbcb486bbcd4225aca0aa0d84bb2db8fecb"
 
 [[package]]
 name = "arrayvec"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23b62fc65de8e4e7f52534fb52b0f3ed04746ae267519eef2a83941e8085068b"
+
+[[package]]
+name = "arrayvec"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
@@ -699,7 +705,7 @@ version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "24637a7c8643cab493f4085cda6bde4895f0e0816699c59006f18819da2ca0b8"
 dependencies = [
- "arrayvec",
+ "arrayvec 0.7.6",
  "bevy_ecs_macros",
  "bevy_platform",
  "bevy_ptr",
@@ -1089,7 +1095,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a815c514b8a6f7b11508cdc8b3a4bf0761e96a14227af40aa93cb1160989ce0"
 dependencies = [
  "approx",
- "arrayvec",
+ "arrayvec 0.7.6",
  "bevy_reflect",
  "derive_more",
  "glam",
@@ -1741,7 +1747,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3888aaa89e4b2a40fca9848e400f6a658a5a3978de7be858e209cafa8be9a4a0"
 dependencies = [
  "arrayref",
- "arrayvec",
+ "arrayvec 0.7.6",
  "cc",
  "cfg-if",
  "constant_time_eq",
@@ -1859,6 +1865,7 @@ dependencies = [
 name = "cadhr-lsp"
 version = "0.1.0"
 dependencies = [
+ "pretty",
  "tokio",
  "tower-lsp",
  "tree-sitter",
@@ -3659,7 +3666,7 @@ version = "27.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "066cf25f0e8b11ee0df221219010f213ad429855f57c494f995590c861a9a7d8"
 dependencies = [
- "arrayvec",
+ "arrayvec 0.7.6",
  "bit-set",
  "bitflags 2.10.0",
  "cfg-if",
@@ -4416,6 +4423,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e8cf8e6a8aa66ce33f63993ffc4ea4271eb5b0530a9002db8455ea6050c77bfa"
 
 [[package]]
+name = "pretty"
+version = "0.12.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d22152487193190344590e4f30e219cf3fe140d9e7a3fdb683d82aa2c5f4156"
+dependencies = [
+ "arrayvec 0.5.2",
+ "typed-arena",
+ "unicode-width",
+]
+
+[[package]]
 name = "proc-macro-crate"
 version = "3.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5070,7 +5088,7 @@ version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "41ba83ebaf2954d31d05d67340fd46cebe99da2b7133b0dd68d70c65473a437b"
 dependencies = [
- "arrayvec",
+ "arrayvec 0.7.6",
  "grid",
  "serde",
  "slotmap",
@@ -5177,7 +5195,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "83d13394d44dae3207b52a326c0c85a8bf87f1541f23b0d143811088497b09ab"
 dependencies = [
  "arrayref",
- "arrayvec",
+ "arrayvec 0.7.6",
  "bytemuck",
  "cfg-if",
  "log",
@@ -5484,6 +5502,12 @@ name = "twox-hash"
 version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b907da542cbced5261bd3256de1b3a1bf340a3d37f93425a07362a1d687de56"
+
+[[package]]
+name = "typed-arena"
+version = "2.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6af6ae20167a9ece4bcb41af5b80f8a1f1df981f6391189ce00fd257af04126a"
 
 [[package]]
 name = "typeid"
@@ -5838,7 +5862,7 @@ version = "27.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bfe68bac7cde125de7a731c3400723cadaaf1703795ad3f4805f187459cd7a77"
 dependencies = [
- "arrayvec",
+ "arrayvec 0.7.6",
  "bitflags 2.10.0",
  "cfg-if",
  "cfg_aliases",
@@ -5865,7 +5889,7 @@ version = "27.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27a75de515543b1897b26119f93731b385a19aea165a1ec5f0e3acecc229cae7"
 dependencies = [
- "arrayvec",
+ "arrayvec 0.7.6",
  "bit-set",
  "bit-vec",
  "bitflags 2.10.0",
@@ -5925,7 +5949,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5b21cb61c57ee198bc4aff71aeadff4cbb80b927beb912506af9c780d64313ce"
 dependencies = [
  "android_system_properties",
- "arrayvec",
+ "arrayvec 0.7.6",
  "ash",
  "bit-set",
  "bitflags 2.10.0",

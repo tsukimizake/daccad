@@ -370,9 +370,6 @@ impl ArithExpr {
             Term::StringLit { .. } => Err(ConversionError {
                 message: "cannot convert string literal to arithmetic expression".to_string(),
             }),
-            Term::Range { .. } => Err(ConversionError {
-                message: "cannot convert range to arithmetic expression".to_string(),
-            }),
         }
     }
 

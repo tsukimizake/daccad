@@ -570,8 +570,7 @@ impl<'a, S> Args<'a, S> {
             | Term::Struct { .. }
             | Term::List { .. }
             | Term::StringLit { .. }
-            | Term::Constraint { .. }
-            | Term::Range { .. } => Err(ConversionError::TypeMismatch {
+            | Term::Constraint { .. } => Err(ConversionError::TypeMismatch {
                 functor: self.functor.to_string(),
                 arg_index: i,
                 expected: "number",
@@ -1949,7 +1948,7 @@ mod tests {
         use crate::term_rewrite::execute;
 
         let mut db = database(
-            "main :- linear_extrude(sketchXY([p(0, 0), p(0, 40), p(30, 0)]), X=10), control(X, 0, 0, \"width\")."
+            "main :- linear_extrude(sketchXY([p(0, 0), p(0, 40), p(30, 0)]), X@10), control(X, 0, 0, \"width\")."
         ).unwrap();
         let (_, q) = parse_query("main.").unwrap();
         let (mut resolved, _) = execute(&mut db, q).unwrap();

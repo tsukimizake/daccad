@@ -233,11 +233,6 @@ pub enum Term<Scope = ()> {
         left: Box<Term<Scope>>,
         right: Box<Term<Scope>>,
     },
-    /// 名前を持たない範囲値。unifyのrange intersection結果としてenvに格納される。
-    Range {
-        min: Option<Bound>,
-        max: Option<Bound>,
-    },
 }
 
 pub type ScopeId = usize;
@@ -354,16 +349,6 @@ impl<Scope: PartialEq> PartialEq for Term<Scope> {
                     right: r2,
                 },
             ) => l1 == l2 && r1 == r2,
-            (
-                Term::Range {
-                    min: min1,
-                    max: max1,
-                },
-                Term::Range {
-                    min: min2,
-                    max: max2,
-                },
-            ) => min1 == min2 && max1 == max2,
             _ => false,
         }
     }
@@ -400,7 +385,7 @@ impl<Scope> fmt::Debug for Term<Scope> {
                 }
                 write!(f, "{}", name)?;
                 if let Some(dv) = default_value {
-                    write!(f, "={}", dv)?;
+                    write!(f, "@{}", dv)?;
                 }
                 if let Some(b) = max {
                     write!(f, " {} {}", if b.inclusive { "<=" } else { "<" }, b.value)?;
@@ -451,29 +436,6 @@ impl<Scope> fmt::Debug for Term<Scope> {
             Term::Constraint { left, right } => {
                 write!(f, "constraint({:?} = {:?})", left, right)
             }
-            Term::Range { min, max } => match (min, max) {
-                (Some(lo), Some(hi)) => write!(
-                    f,
-                    "range({} {} _ {} {})",
-                    lo.value,
-                    if lo.inclusive { "<=" } else { "<" },
-                    if hi.inclusive { "<=" } else { "<" },
-                    hi.value
-                ),
-                (Some(lo), None) => write!(
-                    f,
-                    "range({} {} _)",
-                    lo.value,
-                    if lo.inclusive { "<=" } else { "<" }
-                ),
-                (None, Some(hi)) => write!(
-                    f,
-                    "range(_ {} {})",
-                    if hi.inclusive { "<=" } else { "<" },
-                    hi.value
-                ),
-                (None, None) => write!(f, "range(_)"),
-            },
         }
     }
 }
@@ -800,7 +762,7 @@ fn comp_op(input: &str) -> PResult<'_, CompOp> {
 }
 
 fn default_value_suffix(input: &str) -> PResult<'_, (FixedPoint, SrcSpan)> {
-    let (input, _) = ws(char('=')).parse(input)?;
+    let (input, _) = ws(char('@')).parse(input)?;
     let (input, _) = space_or_comment0(input)?;
     let value_start = input.as_ptr() as usize;
     let (input, value) = fixed_number(input)?;
@@ -818,8 +780,8 @@ fn default_value_suffix(input: &str) -> PResult<'_, (FixedPoint, SrcSpan)> {
     ))
 }
 
-/// annotated_var: `X=25`, `X:=25`, `0<X:=20<50`, `0<X<10`, `X<10`, `0<X` など
-/// left_bound? Variable (=value | :=value)? right_bound?
+/// annotated_var: `X@25`, `0<X@20<50`, `0<X<10`, `X<10`, `0<X` など
+/// left_bound? Variable (@value)? right_bound?
 fn annotated_var_term(input: &str) -> PResult<'_, Term> {
     // 左側: (num op)?
     let (input, left) = opt((ws(fixed_number), comp_op)).parse(input)?;
@@ -1025,8 +987,24 @@ pub(super) fn term(input: &str) -> PResult<'_, Term> {
     pipe_expr(input)
 }
 
+/// goal内の等値制約: `term = term` → Term::Constraint { left, right }
+fn eq_goal(input: &str) -> PResult<'_, Term> {
+    let (input, left) = term(input)?;
+    let (input, rhs) = opt(preceded(ws(char('=')), term)).parse(input)?;
+    match rhs {
+        Some(right) => Ok((
+            input,
+            Term::Constraint {
+                left: Box::new(left),
+                right: Box::new(right),
+            },
+        )),
+        None => Ok((input, left)),
+    }
+}
+
 fn goals(input: &str) -> PResult<'_, Vec<Term>> {
-    separated_list1(ws(char(',')), term).parse(input)
+    separated_list1(ws(char(',')), eq_goal).parse(input)
 }
 
 fn use_expose_list(input: &str) -> PResult<'_, Vec<String>> {
@@ -1078,8 +1056,21 @@ fn use_directive(input: &str) -> PResult<'_, Clause> {
     ))
 }
 
+fn has_range_in_term(term: &Term) -> bool {
+    match term {
+        Term::Var { min, max, .. } => min.is_some() || max.is_some(),
+        Term::Struct { args, .. } => args.iter().any(has_range_in_term),
+        Term::List { items, tail } => {
+            items.iter().any(has_range_in_term)
+                || tail.as_ref().is_some_and(|t| has_range_in_term(t))
+        }
+        Term::InfixExpr { left, right, .. } => has_range_in_term(left) || has_range_in_term(right),
+        _ => false,
+    }
+}
+
 pub(super) fn clause_parser(input: &str) -> PResult<'_, Clause> {
-    alt((
+    let (input, clause) = alt((
         use_directive,
         ws(terminated(
             alt((
@@ -1092,7 +1083,23 @@ pub(super) fn clause_parser(input: &str) -> PResult<'_, Clause> {
             cut(ws(char('.'))),
         )),
     ))
-    .parse(input)
+    .parse(input)?;
+
+    let head = match &clause {
+        Clause::Rule { head, .. } => Some(head),
+        Clause::Fact(head) => Some(head),
+        Clause::Use { .. } => None,
+    };
+    if let Some(head) = head {
+        if has_range_in_term(head) {
+            return Err(nom::Err::Failure(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Verify,
+            )));
+        }
+    }
+
+    Ok((input, clause))
 }
 
 pub fn program(input: &str) -> PResult<'_, Vec<Clause>> {
@@ -1404,132 +1411,8 @@ mod tests {
     }
 
     #[test]
-    fn parse_range_var_both_bounds() {
-        let src = "hoge(0<X<10).";
-        let (_, clause) = clause_parser(src).unwrap();
-
-        match clause {
-            Clause::Fact(term) => match &term {
-                Term::Struct { functor, args, .. } => {
-                    assert_eq!(functor, "hoge");
-                    assert_eq!(args.len(), 1);
-                    match &args[0] {
-                        Term::Var { name, min, max, .. } => {
-                            assert_eq!(name, "X");
-                            assert_eq!(
-                                *min,
-                                Some(Bound {
-                                    value: FixedPoint::from_int(0),
-                                    inclusive: false
-                                })
-                            );
-                            assert_eq!(
-                                *max,
-                                Some(Bound {
-                                    value: FixedPoint::from_int(10),
-                                    inclusive: false
-                                })
-                            );
-                        }
-                        _ => panic!("Expected Var, got {:?}", args[0]),
-                    }
-                }
-                _ => panic!("Expected Struct"),
-            },
-            _ => panic!("Expected Fact"),
-        }
-    }
-
-    #[test]
-    fn parse_range_var_inclusive() {
-        let src = "hoge(0<=X<=10).";
-        let (_, clause) = clause_parser(src).unwrap();
-
-        match clause {
-            Clause::Fact(term) => match &term {
-                Term::Struct { args, .. } => match &args[0] {
-                    Term::Var { name, min, max, .. } => {
-                        assert_eq!(name, "X");
-                        assert_eq!(
-                            *min,
-                            Some(Bound {
-                                value: FixedPoint::from_int(0),
-                                inclusive: true
-                            })
-                        );
-                        assert_eq!(
-                            *max,
-                            Some(Bound {
-                                value: FixedPoint::from_int(10),
-                                inclusive: true
-                            })
-                        );
-                    }
-                    _ => panic!("Expected Var"),
-                },
-                _ => panic!("Expected Struct"),
-            },
-            _ => panic!("Expected Fact"),
-        }
-    }
-
-    #[test]
-    fn parse_range_var_left_only() {
-        let src = "hoge(0<X).";
-        let (_, clause) = clause_parser(src).unwrap();
-
-        match clause {
-            Clause::Fact(term) => match &term {
-                Term::Struct { args, .. } => match &args[0] {
-                    Term::Var { name, min, max, .. } => {
-                        assert_eq!(name, "X");
-                        assert_eq!(
-                            *min,
-                            Some(Bound {
-                                value: FixedPoint::from_int(0),
-                                inclusive: false
-                            })
-                        );
-                        assert_eq!(*max, None);
-                    }
-                    _ => panic!("Expected Var"),
-                },
-                _ => panic!("Expected Struct"),
-            },
-            _ => panic!("Expected Fact"),
-        }
-    }
-
-    #[test]
-    fn parse_range_var_right_only() {
-        let src = "hoge(X<10).";
-        let (_, clause) = clause_parser(src).unwrap();
-
-        match clause {
-            Clause::Fact(term) => match &term {
-                Term::Struct { args, .. } => match &args[0] {
-                    Term::Var { name, min, max, .. } => {
-                        assert_eq!(name, "X");
-                        assert_eq!(*min, None);
-                        assert_eq!(
-                            *max,
-                            Some(Bound {
-                                value: FixedPoint::from_int(10),
-                                inclusive: false
-                            })
-                        );
-                    }
-                    _ => panic!("Expected Var"),
-                },
-                _ => panic!("Expected Struct"),
-            },
-            _ => panic!("Expected Fact"),
-        }
-    }
-
-    #[test]
-    fn parse_range_var_in_rule() {
-        let src = "hoge(0<X<10) :- cube(X, X, X).";
+    fn parse_range_var_in_body() {
+        let src = "hoge(X) :- 0<X<10, cube(X, X, X).";
         let (_, clause) = clause_parser(src).unwrap();
 
         match clause {
@@ -1541,15 +1424,59 @@ mod tests {
                     }
                     _ => panic!("Expected Struct"),
                 }
-                assert_eq!(body.len(), 1);
+                assert_eq!(body.len(), 2);
+                match &body[0] {
+                    Term::Var { name, min, max, .. } => {
+                        assert_eq!(name, "X");
+                        assert_eq!(
+                            *min,
+                            Some(Bound {
+                                value: FixedPoint::from_int(0),
+                                inclusive: false
+                            })
+                        );
+                        assert_eq!(
+                            *max,
+                            Some(Bound {
+                                value: FixedPoint::from_int(10),
+                                inclusive: false
+                            })
+                        );
+                    }
+                    _ => panic!("Expected Var, got {:?}", body[0]),
+                }
             }
             _ => panic!("Expected Rule"),
         }
     }
 
     #[test]
+    fn parse_range_var_inclusive_in_body() {
+        let src = "hoge(X) :- 0<=X<=10, cube(X).";
+        let (_, clause) = clause_parser(src).unwrap();
+
+        match clause {
+            Clause::Rule { body, .. } => match &body[0] {
+                Term::Var { name, min, max, .. } => {
+                    assert_eq!(name, "X");
+                    assert!(min.unwrap().inclusive);
+                    assert!(max.unwrap().inclusive);
+                }
+                _ => panic!("Expected Var"),
+            },
+            _ => panic!("Expected Rule"),
+        }
+    }
+
+    #[test]
+    fn parse_range_var_in_head_is_error() {
+        let src = "hoge(0<X<10).";
+        assert!(clause_parser(src).is_err());
+    }
+
+    #[test]
     fn parse_default_var() {
-        let src = "hoge(X=25).";
+        let src = "hoge(X@25).";
         let (_, clause) = clause_parser(src).unwrap();
 
         match clause {
@@ -1620,7 +1547,7 @@ mod tests {
 
     #[test]
     fn parse_default_var_decimal() {
-        let src = "hoge(X=2.5).";
+        let src = "hoge(X@2.5).";
         let (_, clause) = clause_parser(src).unwrap();
         match clause {
             Clause::Fact(Term::Struct { args, .. }) => match &args[0] {
@@ -1736,76 +1663,73 @@ mod tests {
     }
 
     #[test]
-    fn parse_annotated_var_with_default_and_range() {
-        let src = "hoge(0<X=20<50).";
+    fn parse_annotated_var_with_default_and_range_in_body() {
+        let src = "hoge(X@20) :- 0<X<50, cube(X).";
         let (_, clause) = clause_parser(src).unwrap();
 
         match clause {
-            Clause::Fact(term) => match &term {
-                Term::Struct { functor, args, .. } => {
-                    assert_eq!(functor, "hoge");
-                    assert_eq!(args.len(), 1);
-                    match &args[0] {
+            Clause::Rule { head, body } => {
+                match &head {
+                    Term::Struct { args, .. } => match &args[0] {
                         Term::Var {
                             name,
                             default_value,
-                            min,
-                            max,
-                            span,
                             ..
                         } => {
                             assert_eq!(name, "X");
                             assert_eq!(*default_value, Some(FixedPoint::from_int(20)));
-                            assert_eq!(
-                                *min,
-                                Some(Bound {
-                                    value: FixedPoint::from_int(0),
-                                    inclusive: false
-                                })
-                            );
-                            assert_eq!(
-                                *max,
-                                Some(Bound {
-                                    value: FixedPoint::from_int(50),
-                                    inclusive: false
-                                })
-                            );
-                            assert!(span.is_some());
                         }
-                        _ => panic!("Expected Var, got {:?}", args[0]),
-                    }
+                        _ => panic!("Expected Var"),
+                    },
+                    _ => panic!("Expected Struct"),
                 }
-                _ => panic!("Expected Struct"),
-            },
-            _ => panic!("Expected Fact"),
+                match &body[0] {
+                    Term::Var {
+                        name, min, max, ..
+                    } => {
+                        assert_eq!(name, "X");
+                        assert_eq!(
+                            *min,
+                            Some(Bound {
+                                value: FixedPoint::from_int(0),
+                                inclusive: false
+                            })
+                        );
+                        assert_eq!(
+                            *max,
+                            Some(Bound {
+                                value: FixedPoint::from_int(50),
+                                inclusive: false
+                            })
+                        );
+                    }
+                    _ => panic!("Expected Var"),
+                }
+            }
+            _ => panic!("Expected Rule"),
         }
     }
 
     #[test]
-    fn parse_annotated_var_inclusive_range_with_default() {
-        let src = "hoge(0<=X=20<=50).";
+    fn parse_annotated_var_inclusive_range_in_body() {
+        let src = "hoge(X@20) :- 0<=X<=50, cube(X).";
         let (_, clause) = clause_parser(src).unwrap();
 
         match clause {
-            Clause::Fact(term) => match &term {
-                Term::Struct { args, .. } => match &args[0] {
-                    Term::Var {
-                        name,
-                        default_value,
-                        min,
-                        max,
-                        ..
-                    } => {
-                        assert_eq!(name, "X");
-                        assert_eq!(*default_value, Some(FixedPoint::from_int(20)));
-                        assert!(min.unwrap().inclusive);
-                        assert!(max.unwrap().inclusive);
-                    }
-                    _ => panic!("Expected Var"),
-                },
-                _ => panic!("Expected Struct"),
+            Clause::Rule { body, .. } => match &body[0] {
+                Term::Var {
+                    name,
+                    min,
+                    max,
+                    ..
+                } => {
+                    assert_eq!(name, "X");
+                    assert!(min.unwrap().inclusive);
+                    assert!(max.unwrap().inclusive);
+                }
+                _ => panic!("Expected Var"),
             },
-            _ => panic!("Expected Fact"),
+            _ => panic!("Expected Rule"),
         }
     }
 
@@ -1829,7 +1753,7 @@ mod tests {
         values.insert("X".to_string(), 5.0);
         values.insert("Y".to_string(), 10.0);
         let substituted = substitute_query_params(&terms, &values);
-        assert_eq!(format!("{:?}", substituted), "[main(X=5, Y=10)]");
+        assert_eq!(format!("{:?}", substituted), "[main(X@5, Y@10)]");
     }
 
     #[test]

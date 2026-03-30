@@ -200,7 +200,7 @@ mod tests {
         use crate::parse::{collect_query_params, substitute_query_params};
         use crate::term_rewrite::infer_query_param_ranges;
 
-        let db_src = r#"main(50<L<2000) :- cube(L, L, L), bom("frame", [len(L)])."#;
+        let db_src = r#"main(L) :- 50<L<2000, cube(L, L, L), bom("frame", [len(L)])."#;
         let query_src = "main(60).";
         let (_, query_terms) = query(query_src).unwrap();
         let mut db = database(db_src).unwrap();

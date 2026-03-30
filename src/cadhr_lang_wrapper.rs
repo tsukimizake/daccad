@@ -174,14 +174,13 @@ fn run_mesh_job(req: GeneratePreviewRequest) -> MeshJobResult {
         let substituted = substitute_query_params(&query_terms, &values);
         logs.push(format!("Query terms: {:?}", substituted));
         logs.push(format!("Database clauses: {:#?}", db));
-        let (mut resolved, env) =
+        let (mut resolved, _env) =
             execute(&mut db, substituted).map_err(|e| {
                 format_error("Rewrite error", &e.to_string(), e.span(), &file_registry)
             })?;
         logs.push(format!("Resolved terms: {:?}", resolved));
 
         let control_points = extract_control_points(&mut resolved, &req.control_point_overrides);
-        env.update_query_param_ranges(&mut query_params);
         Ok((resolved, control_points, query_params))
     })();
 
