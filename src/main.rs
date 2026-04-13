@@ -16,6 +16,7 @@ use std::path::PathBuf;
 
 fn main() -> iced::Result {
     iced::application("cadhr", App::update, App::view)
+        .subscription(App::subscription)
         .run_with(App::new)
 }
 
@@ -533,6 +534,15 @@ impl App {
             .collect()
     }
 
+    fn subscription(&self) -> Subscription<Message> {
+        if self.auto_reload {
+            iced::time::every(std::time::Duration::from_secs(1))
+                .map(|_| Message::CheckFileChanged)
+        } else {
+            Subscription::none()
+        }
+    }
+
     fn view(&self) -> Element<'_, Message> {
         let title = self
             .current_file_path
@@ -550,6 +560,10 @@ impl App {
             text(" | "),
             button("Add Preview").on_press(Message::AddPreview),
             button("Update All").on_press(Message::UpdatePreviews),
+            text(" | "),
+            toggler(self.auto_reload)
+                .label("Auto Reload")
+                .on_toggle(|_| Message::ToggleAutoReload),
             text(format!("  {}{}", title, dirty_marker)),
         ]
         .spacing(4)
