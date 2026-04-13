@@ -4,6 +4,7 @@ mod interpreter;
 mod preview;
 mod session;
 
+use cadhr_lang::bom::BomEntry;
 use cadhr_lang::manifold_bridge::ControlPoint;
 use cadhr_lang::parse::{QueryParam, SrcSpan};
 use iced::widget::{button, column, row, scrollable, shader, slider, text, text_editor, text_input, toggler};
@@ -31,6 +32,7 @@ struct Preview {
     /// Keep raw mesh data for export
     last_vertices: Vec<preview::pipeline::Vertex>,
     last_indices: Vec<u32>,
+    bom_entries: Vec<BomEntry>,
 }
 
 struct App {
@@ -120,6 +122,7 @@ impl App {
                         query_param_overrides: sp.query_param_overrides,
                         last_vertices: vec![],
                         last_indices: vec![],
+                        bom_entries: vec![],
                     });
                     tasks.push(app.generate_preview(id));
                 }
@@ -167,6 +170,7 @@ impl App {
                     query_param_overrides: Default::default(),
                     last_vertices: vec![],
                     last_indices: vec![],
+                    bom_entries: vec![],
                 });
                 self.unsaved = true;
                 self.generate_preview(id)
@@ -203,6 +207,7 @@ impl App {
                             p.last_indices = result.indices.clone();
                             p.control_points = result.control_points;
                             p.query_params = result.query_params;
+                            p.bom_entries = result.bom_entries;
                             let selected = self.selected_cp
                                 .and_then(|(pid, ci)| if pid == id { Some(ci) } else { None });
                             p.scene.set_mesh_with_control_points(
@@ -331,6 +336,7 @@ impl App {
                             query_param_overrides: sp.query_param_overrides,
                             last_vertices: vec![],
                             last_indices: vec![],
+                        bom_entries: vec![],
                         });
                         tasks.push(self.generate_preview(id));
                     }
@@ -428,11 +434,34 @@ impl App {
             }
             Message::ExportBOM(id) => {
                 if let Some(p) = self.previews.iter().find(|p| p.id == id) {
-                    // BOM data comes from the last interpreter result
-                    // For now just skip if no data
-                    let _ = id;
+                    if p.bom_entries.is_empty() {
+                        return Task::none();
+                    }
+                    let json = cadhr_lang::bom::bom_entries_to_json(&p.bom_entries);
+                    let base_name = self
+                        .current_file_path
+                        .as_ref()
+                        .and_then(|p| p.file_stem())
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("untitled")
+                        .to_string();
+                    Task::perform(
+                        async move {
+                            let handle = rfd::AsyncFileDialog::new()
+                                .set_title("Export BOM")
+                                .add_filter("JSON", &["json"])
+                                .set_file_name(&format!("{}_bom.json", base_name))
+                                .save_file()
+                                .await;
+                            if let Some(h) = handle {
+                                let _ = std::fs::write(h.path(), json.as_bytes());
+                            }
+                        },
+                        |()| Message::UpdatePreviews,
+                    )
+                } else {
+                    Task::none()
                 }
-                Task::none()
             }
 
             Message::ToggleAutoReload => {
@@ -610,13 +639,16 @@ impl App {
     fn view_preview<'a>(&'a self, p: &'a Preview) -> Element<'a, Message> {
         let id = p.id;
 
-        let header = row![
+        let mut header = row![
             text(format!("Preview {}", id)),
             button("Update").on_press(Message::UpdatePreview(id)),
             button("Export 3MF").on_press(Message::Export3MF(id)),
-            button("Close").on_press(Message::ClosePreview(id)),
         ]
         .spacing(4);
+        if !p.bom_entries.is_empty() {
+            header = header.push(button("Export BOM").on_press(Message::ExportBOM(id)));
+        }
+        let header = header.push(button("Close").on_press(Message::ClosePreview(id)));
 
         let query_row = row![
             text("?- "),
