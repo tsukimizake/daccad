@@ -9,7 +9,7 @@ use cadhr_lang::manifold_bridge::ControlPoint;
 use cadhr_lang::parse::{QueryParam, SrcSpan};
 use iced::widget::{button, column, row, scrollable, shader, slider, text, text_editor, text_input, toggler};
 use iced::{Element, Fill, Subscription, Task};
-use interpreter::{MeshJobParams, MeshJobResult};
+use interpreter::{CollisionJobParams, CollisionJobResult, MeshJobParams, MeshJobResult};
 use preview::Scene;
 use session::SessionPreview;
 use std::collections::HashMap;
@@ -21,8 +21,15 @@ fn main() -> iced::Result {
         .run_with(App::new)
 }
 
+#[derive(Clone, PartialEq)]
+enum PreviewKind {
+    Normal,
+    Collision { part_count: usize, collision_count: usize },
+}
+
 struct Preview {
     id: u64,
+    kind: PreviewKind,
     query: String,
     scene: Scene,
     control_points: Vec<ControlPoint>,
@@ -52,11 +59,15 @@ struct App {
 enum Message {
     EditorAction(text_editor::Action),
     AddPreview,
+    AddCollisionCheck,
     UpdatePreviews,
     UpdatePreview(u64),
     ClosePreview(u64),
+    MovePreviewUp(u64),
+    MovePreviewDown(u64),
     QueryChanged(u64, String),
     PreviewGenerated(u64, Result<MeshJobResult, String>),
+    CollisionGenerated(u64, Result<CollisionJobResult, String>),
     CpOverrideChanged(u64, String, f64),
     QpOverrideChanged(u64, String, f64),
     PreviewClicked {
@@ -114,6 +125,7 @@ impl App {
                     }
                     app.previews.push(Preview {
                         id,
+                        kind: PreviewKind::Normal,
                         query: sp.query,
                         scene: Scene::new(),
                         control_points: vec![],
@@ -162,8 +174,33 @@ impl App {
                 self.next_preview_id += 1;
                 self.previews.push(Preview {
                     id,
+                    kind: PreviewKind::Normal,
                     query: "main.".to_string(),
                     scene: Scene::new(),
+                    control_points: vec![],
+                    control_point_overrides: Default::default(),
+                    query_params: vec![],
+                    query_param_overrides: Default::default(),
+                    last_vertices: vec![],
+                    last_indices: vec![],
+                    bom_entries: vec![],
+                });
+                self.unsaved = true;
+                self.generate_preview(id)
+            }
+            Message::AddCollisionCheck => {
+                let id = self.next_preview_id;
+                self.next_preview_id += 1;
+                self.previews.push(Preview {
+                    id,
+                    kind: PreviewKind::Collision { part_count: 0, collision_count: 0 },
+                    query: "main.".to_string(),
+                    scene: {
+                        let mut s = Scene::new();
+                        // collision preview のパーツ色を青灰に
+                        s.color = [0.4, 0.5, 0.7, 0.7];
+                        s
+                    },
                     control_points: vec![],
                     control_point_overrides: Default::default(),
                     query_params: vec![],
@@ -184,6 +221,24 @@ impl App {
             Message::ClosePreview(id) => {
                 self.previews.retain(|p| p.id != id);
                 self.unsaved = true;
+                Task::none()
+            }
+            Message::MovePreviewUp(id) => {
+                if let Some(i) = self.previews.iter().position(|p| p.id == id) {
+                    if i > 0 {
+                        self.previews.swap(i - 1, i);
+                        self.unsaved = true;
+                    }
+                }
+                Task::none()
+            }
+            Message::MovePreviewDown(id) => {
+                if let Some(i) = self.previews.iter().position(|p| p.id == id) {
+                    if i + 1 < self.previews.len() {
+                        self.previews.swap(i, i + 1);
+                        self.unsaved = true;
+                    }
+                }
                 Task::none()
             }
             Message::QueryChanged(id, query) => {
@@ -216,6 +271,32 @@ impl App {
                                 &p.control_points,
                                 selected,
                             );
+                        }
+                    }
+                    Err(e) => {
+                        self.error_message = e;
+                    }
+                }
+                Task::none()
+            }
+            Message::CollisionGenerated(id, result) => {
+                match result {
+                    Ok(result) => {
+                        if let Some((msg, span)) = &result.error {
+                            self.error_message = msg.clone();
+                            self.error_span = *span;
+                        } else {
+                            self.error_message.clear();
+                            self.error_span = None;
+                        }
+                        if let Some(p) = self.previews.iter_mut().find(|p| p.id == id) {
+                            p.last_vertices = result.vertices.clone();
+                            p.last_indices = result.indices.clone();
+                            p.kind = PreviewKind::Collision {
+                                part_count: result.part_count,
+                                collision_count: result.collision_count,
+                            };
+                            p.scene.set_mesh(result.vertices, result.indices);
                         }
                     }
                     Err(e) => {
@@ -328,6 +409,7 @@ impl App {
                         }
                         self.previews.push(Preview {
                             id,
+                            kind: PreviewKind::Normal,
                             query: sp.query,
                             scene: Scene::new(),
                             control_points: vec![],
@@ -336,7 +418,7 @@ impl App {
                             query_param_overrides: sp.query_param_overrides,
                             last_vertices: vec![],
                             last_indices: vec![],
-                        bom_entries: vec![],
+                            bom_entries: vec![],
                         });
                         tasks.push(self.generate_preview(id));
                     }
@@ -529,21 +611,44 @@ impl App {
         let Some(preview) = self.previews.iter().find(|p| p.id == id) else {
             return Task::none();
         };
-        let params = MeshJobParams {
-            database: self.editor.text(),
-            query: preview.query.clone(),
-            include_paths: self.current_file_path.iter().cloned().collect(),
-            control_point_overrides: preview.control_point_overrides.clone(),
-            query_param_overrides: preview.query_param_overrides.clone(),
-        };
-        Task::perform(
-            async move {
-                std::thread::spawn(move || interpreter::run_mesh_job(params))
-                    .join()
-                    .map_err(|_| "Interpreter thread panicked".to_string())
-            },
-            move |result| Message::PreviewGenerated(id, result),
-        )
+        let db = self.editor.text();
+        let query = preview.query.clone();
+        let include_paths: Vec<_> = self.current_file_path.iter().cloned().collect();
+
+        match &preview.kind {
+            PreviewKind::Normal => {
+                let params = MeshJobParams {
+                    database: db,
+                    query,
+                    include_paths,
+                    control_point_overrides: preview.control_point_overrides.clone(),
+                    query_param_overrides: preview.query_param_overrides.clone(),
+                };
+                Task::perform(
+                    async move {
+                        std::thread::spawn(move || interpreter::run_mesh_job(params))
+                            .join()
+                            .map_err(|_| "Interpreter thread panicked".to_string())
+                    },
+                    move |result| Message::PreviewGenerated(id, result),
+                )
+            }
+            PreviewKind::Collision { .. } => {
+                let params = CollisionJobParams {
+                    database: db,
+                    query,
+                    include_paths,
+                };
+                Task::perform(
+                    async move {
+                        std::thread::spawn(move || interpreter::run_collision_job(params))
+                            .join()
+                            .map_err(|_| "Interpreter thread panicked".to_string())
+                    },
+                    move |result| Message::CollisionGenerated(id, result),
+                )
+            }
+        }
     }
 
     fn collect_session_previews(&self) -> Vec<SessionPreview> {
@@ -588,6 +693,7 @@ impl App {
             button("Save As").on_press(Message::SaveSessionAs),
             text(" | "),
             button("Add Preview").on_press(Message::AddPreview),
+            button("Add Collision").on_press(Message::AddCollisionCheck),
             button("Update All").on_press(Message::UpdatePreviews),
             text(" | "),
             toggler(self.auto_reload)
@@ -613,7 +719,8 @@ impl App {
             let items: Vec<Element<'_, Message>> = self
                 .previews
                 .iter()
-                .map(|p| self.view_preview(p))
+                .enumerate()
+                .map(|(i, p)| self.view_preview(p, i, self.previews.len()))
                 .collect();
             scrollable(column(items).spacing(12)).height(Fill).into()
         };
@@ -636,11 +743,33 @@ impl App {
         .into()
     }
 
-    fn view_preview<'a>(&'a self, p: &'a Preview) -> Element<'a, Message> {
+    fn view_preview<'a>(&'a self, p: &'a Preview, index: usize, total: usize) -> Element<'a, Message> {
         let id = p.id;
 
+        let preview_label = match &p.kind {
+            PreviewKind::Normal => format!("Preview {}", id),
+            PreviewKind::Collision { part_count, collision_count } => {
+                if *collision_count > 0 {
+                    format!("Collision {} — {} parts, {} collision(s) ⚠", id, part_count, collision_count)
+                } else {
+                    format!("Collision {} — {} parts, no collisions ✓", id, part_count)
+                }
+            }
+        };
+        let up_btn = if index > 0 {
+            button("↑").on_press(Message::MovePreviewUp(id))
+        } else {
+            button("↑")
+        };
+        let down_btn = if index + 1 < total {
+            button("↓").on_press(Message::MovePreviewDown(id))
+        } else {
+            button("↓")
+        };
         let mut header = row![
-            text(format!("Preview {}", id)),
+            up_btn,
+            down_btn,
+            text(preview_label),
             button("Update").on_press(Message::UpdatePreview(id)),
             button("Export 3MF").on_press(Message::Export3MF(id)),
         ]
