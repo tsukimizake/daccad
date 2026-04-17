@@ -810,10 +810,7 @@ fn view_preview<'a>(p: &'a Preview, index: usize, total: usize) -> Element<'a, M
             },
         });
 
-    let mut items: Vec<Element<'a, Msg>> =
-        vec![header.into(), query_row.into(), shader_view.into()];
-
-    for qp in &p.query_params {
+    let qp_items = p.query_params.iter().map(|qp| {
         let name = qp.name.clone();
         let (min_val, max_val) = query_param_range(qp);
         let current = p
@@ -825,67 +822,80 @@ fn view_preview<'a>(p: &'a Preview, index: usize, total: usize) -> Element<'a, M
                     .map(|dv| dv.to_f64())
                     .unwrap_or((min_val + max_val) / 2.0)
             });
-
         let qp_id = id;
         let qp_name = name.clone();
-        items.push(
-            row![
-                text(format!("{}:", name)).width(80),
-                slider(min_val..=max_val, current, move |v| {
-                    Msg::QpOverrideChanged(qp_id, qp_name.clone(), v)
-                })
-                .step(0.1)
-                .width(Fill),
-                text(format!("{:.1}", current)).width(60),
-            ]
-            .spacing(4)
-            .into(),
-        );
-    }
+        row![
+            text(format!("{}:", name)).width(80),
+            slider(min_val..=max_val, current, move |v| {
+                Msg::QpOverrideChanged(qp_id, qp_name.clone(), v)
+            })
+            .step(0.1)
+            .width(Fill),
+            text(format!("{:.1}", current)).width(60),
+        ]
+        .spacing(4)
+        .into()
+    });
 
-    for (ci, cp) in p.control_points.iter().enumerate() {
+    let cp_items = p.control_points.iter().enumerate().map(|(ci, cp)| {
         let label = cp
             .name
             .as_deref()
             .map(|n| format!("CP {}", n))
             .unwrap_or_else(|| format!("CP {}", ci));
 
-        let mut axis_items: Vec<Element<'a, Msg>> = vec![text(label).width(80).into()];
-
-        for (axis_idx, (axis_label, tracked)) in [("X", &cp.x), ("Y", &cp.y), ("Z", &cp.z)]
+        let axis_elements: Vec<Element<'a, Msg>> = [("X", &cp.x), ("Y", &cp.y), ("Z", &cp.z)]
             .iter()
             .enumerate()
-        {
-            let val = cp.var_names[axis_idx]
-                .as_ref()
-                .and_then(|vn| p.control_point_overrides.get(vn).copied())
-                .unwrap_or(tracked.value);
+            .flat_map(|(axis_idx, (axis_label, tracked))| {
+                let val = cp.var_names[axis_idx]
+                    .as_ref()
+                    .and_then(|vn| p.control_point_overrides.get(vn).copied())
+                    .unwrap_or(tracked.value);
 
-            axis_items.push(text(*axis_label).into());
+                let slider_el: Option<Element<'a, Msg>> =
+                    cp.var_names[axis_idx].as_ref().map(|var_name| {
+                        let cp_id = id;
+                        let vn = var_name.clone();
+                        let source_span = tracked.source_span;
+                        let range_half = (val.abs() + 50.0).max(50.0);
+                        let mut sl =
+                            slider((val - range_half)..=(val + range_half), val, move |v| {
+                                Msg::CpOverrideChanged(cp_id, vn.clone(), v)
+                            })
+                            .step(0.5)
+                            .width(80);
+                        if let Some(span) = source_span.filter(|s| s.file_id == 0) {
+                            let vn2 = var_name.clone();
+                            sl = sl.on_release(Msg::CpSourceEdit(id, vn2, span));
+                        }
+                        sl.into()
+                    });
 
-            if let Some(ref var_name) = cp.var_names[axis_idx] {
-                let cp_id = id;
-                let vn = var_name.clone();
-                let source_span = tracked.source_span;
-                let range_half = (val.abs() + 50.0).max(50.0);
-                let mut sl = slider((val - range_half)..=(val + range_half), val, move |v| {
-                    Msg::CpOverrideChanged(cp_id, vn.clone(), v)
-                })
-                .step(0.5)
-                .width(80);
-                if let Some(span) = source_span.filter(|s| s.file_id == 0) {
-                    let vn2 = var_name.clone();
-                    sl = sl.on_release(Msg::CpSourceEdit(id, vn2, span));
-                }
-                axis_items.push(sl.into());
-            }
-            axis_items.push(text(format!("{:.1}", val)).width(50).into());
-        }
+                [
+                    Some(text(*axis_label).into()),
+                    slider_el,
+                    Some(text(format!("{:.1}", val)).width(50).into()),
+                ]
+                .into_iter()
+                .flatten()
+            })
+            .collect();
 
-        items.push(row(axis_items).spacing(4).into());
-    }
+        let label_el: Element<'a, Msg> = text(label).width(80).into();
+        row(std::iter::once(label_el).chain(axis_elements))
+            .spacing(4)
+            .into()
+    });
 
-    column(items).spacing(4).into()
+    column(
+        [header.into(), query_row.into(), shader_view.into()]
+            .into_iter()
+            .chain(qp_items)
+            .chain(cp_items),
+    )
+    .spacing(4)
+    .into()
 }
 
 fn compute_aabb_from_vertices(vertices: &[preview::pipeline::Vertex]) -> f32 {
