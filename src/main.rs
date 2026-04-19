@@ -495,7 +495,8 @@ fn update(model: &mut Model, message: Msg) -> Task<Msg> {
                     async move {
                         let data = export::vertices_to_threemf(&vertices, &indices);
                         if let Some(data) = data {
-                            let file_name = format!("{}_{}.3mf", base_name, sanitize(&query));
+                            let file_name =
+                                format!("{}_{}.3mf", base_name, sanitize_filename(&query));
                             let handle = rfd::AsyncFileDialog::new()
                                 .set_title("Export 3MF")
                                 .add_filter("3MF", &["3mf"])
@@ -690,10 +691,8 @@ fn view(model: &Model) -> Element<'_, Msg> {
         ui::parts::dark_button("Save As").on_press(Msg::SaveSessionAs),
         text(" | "),
         ui::parts::dark_button("Add Preview").on_press(Msg::AddPreview),
-        ui::parts::dark_button("Collision Check")
-            .on_press(Msg::AddCollisionCheck),
-        ui::parts::dark_button("Update All")
-            .on_press(Msg::UpdatePreviews),
+        ui::parts::dark_button("Collision Check").on_press(Msg::AddCollisionCheck),
+        ui::parts::dark_button("Update All").on_press(Msg::UpdatePreviews),
         text(" | "),
         toggler(model.auto_reload)
             .label("Auto Reload")
@@ -777,10 +776,8 @@ fn view_preview<'a>(p: &'a Preview, index: usize, total: usize) -> Element<'a, M
         up_btn,
         down_btn,
         text(preview_label),
-        ui::parts::dark_button("Update")
-            .on_press(Msg::UpdatePreview(id)),
-        ui::parts::dark_button("Export 3MF")
-            .on_press(Msg::Export3MF(id)),
+        ui::parts::dark_button("Update").on_press(Msg::UpdatePreview(id)),
+        ui::parts::dark_button("Export 3MF").on_press(Msg::Export3MF(id)),
     ]
     .spacing(4);
     if !p.bom_entries.is_empty() {
@@ -920,7 +917,7 @@ fn query_param_range(qp: &QueryParam) -> (f64, f64) {
     (min, max)
 }
 
-fn sanitize(s: &str) -> String {
+fn sanitize_filename(s: &str) -> String {
     s.chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
         .collect::<String>()
@@ -935,4 +932,3 @@ fn format_cp_value(value: f64) -> String {
     let s = s.trim_end_matches('.');
     s.to_string()
 }
-
