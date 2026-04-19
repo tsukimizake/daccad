@@ -1,4 +1,6 @@
+use iced::keyboard;
 use iced::widget::button::{self, Status};
+use iced::widget::text_editor::{Binding, KeyPress};
 use iced::{Background, Border, Color, Shadow};
 
 pub fn dark_button_style(_theme: &iced::Theme, status: Status) -> button::Style {
@@ -37,4 +39,56 @@ pub fn dark_button_style(_theme: &iced::Theme, status: Status) -> button::Style 
 
 pub fn dark_button<'a, Msg: Clone + 'a>(label: &'a str) -> iced::widget::Button<'a, Msg> {
     iced::widget::button(label).style(dark_button_style)
+}
+
+// TODO undo/redo
+pub fn emacs_key_binding<Msg>(key_press: KeyPress) -> Option<Binding<Msg>> {
+    let KeyPress {
+        key,
+        modifiers,
+        status,
+        ..
+    } = &key_press;
+
+    if *status != iced::widget::text_editor::Status::Focused {
+        return None;
+    }
+
+    if !modifiers.control() || modifiers.shift() || modifiers.alt() || modifiers.command() {
+        return Binding::from_key_press(key_press);
+    }
+
+    match key.as_ref() {
+        keyboard::Key::Character("a") => {
+            Some(Binding::Move(iced::widget::text_editor::Motion::Home))
+        }
+        keyboard::Key::Character("e") => {
+            Some(Binding::Move(iced::widget::text_editor::Motion::End))
+        }
+        keyboard::Key::Character("f") => {
+            Some(Binding::Move(iced::widget::text_editor::Motion::Right))
+        }
+        keyboard::Key::Character("b") => {
+            Some(Binding::Move(iced::widget::text_editor::Motion::Left))
+        }
+        keyboard::Key::Character("n") => {
+            Some(Binding::Move(iced::widget::text_editor::Motion::Down))
+        }
+        keyboard::Key::Character("p") => Some(Binding::Move(iced::widget::text_editor::Motion::Up)),
+        keyboard::Key::Character("d") => Some(Binding::Delete),
+        keyboard::Key::Character("h") => Some(Binding::Backspace),
+        keyboard::Key::Character("k") => Some(Binding::Sequence(vec![
+            Binding::Select(iced::widget::text_editor::Motion::End),
+            Binding::Copy,
+            Binding::Delete,
+        ])),
+        keyboard::Key::Character("y") => Some(Binding::Paste),
+        keyboard::Key::Character("w") => Some(Binding::Copy),
+        keyboard::Key::Character("u") => Some(Binding::Sequence(vec![
+            Binding::Select(iced::widget::text_editor::Motion::Home),
+            Binding::Copy,
+            Binding::Delete,
+        ])),
+        _ => Binding::from_key_press(key_press),
+    }
 }

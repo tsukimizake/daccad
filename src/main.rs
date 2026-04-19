@@ -709,6 +709,7 @@ fn view(model: &Model) -> Element<'_, Msg> {
     };
     let editor = text_editor(&model.editor)
         .on_action(Msg::EditorAction)
+        .key_binding(ui::parts::emacs_key_binding)
         .highlight_with::<highlight::SpanHighlighter>(hl_settings, highlight::format)
         .height(Fill);
 
