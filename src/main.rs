@@ -3,12 +3,13 @@ mod highlight;
 mod interpreter;
 mod preview;
 mod session;
+mod ui;
 
 use cadhr_lang::bom::BomEntry;
 use cadhr_lang::manifold_bridge::ControlPoint;
 use cadhr_lang::parse::{QueryParam, SrcSpan};
 use iced::widget::{
-    button, column, row, scrollable, shader, slider, text, text_editor, text_input, toggler,
+    column, row, scrollable, shader, slider, text, text_editor, text_input, toggler,
 };
 use iced::{Element, Fill, Subscription, Task};
 use interpreter::{CollisionJobParams, CollisionJobResult, MeshJobParams, MeshJobResult};
@@ -683,14 +684,16 @@ fn view(model: &Model) -> Element<'_, Msg> {
     let dirty_marker = if model.unsaved { " *" } else { "" };
 
     let toolbar = row![
-        button("New").on_press(Msg::NewSession),
-        button("Open").on_press(Msg::OpenSession),
-        button("Save").on_press(Msg::SaveSession),
-        button("Save As").on_press(Msg::SaveSessionAs),
+        ui::parts::dark_button("New").on_press(Msg::NewSession),
+        ui::parts::dark_button("Open").on_press(Msg::OpenSession),
+        ui::parts::dark_button("Save").on_press(Msg::SaveSession),
+        ui::parts::dark_button("Save As").on_press(Msg::SaveSessionAs),
         text(" | "),
-        button("Add Preview").on_press(Msg::AddPreview),
-        button("Add Collision").on_press(Msg::AddCollisionCheck),
-        button("Update All").on_press(Msg::UpdatePreviews),
+        ui::parts::dark_button("Add Preview").on_press(Msg::AddPreview),
+        ui::parts::dark_button("Collision Check")
+            .on_press(Msg::AddCollisionCheck),
+        ui::parts::dark_button("Update All")
+            .on_press(Msg::UpdatePreviews),
         text(" | "),
         toggler(model.auto_reload)
             .label("Auto Reload")
@@ -760,27 +763,29 @@ fn view_preview<'a>(p: &'a Preview, index: usize, total: usize) -> Element<'a, M
         }
     };
     let up_btn = if index > 0 {
-        button("↑").on_press(Msg::MovePreviewUp(id))
+        ui::parts::dark_button("↑").on_press(Msg::MovePreviewUp(id))
     } else {
-        button("↑")
+        ui::parts::dark_button("↑")
     };
     let down_btn = if index + 1 < total {
-        button("↓").on_press(Msg::MovePreviewDown(id))
+        ui::parts::dark_button("↓").on_press(Msg::MovePreviewDown(id))
     } else {
-        button("↓")
+        ui::parts::dark_button("↓")
     };
     let mut header = row![
         up_btn,
         down_btn,
         text(preview_label),
-        button("Update").on_press(Msg::UpdatePreview(id)),
-        button("Export 3MF").on_press(Msg::Export3MF(id)),
+        ui::parts::dark_button("Update")
+            .on_press(Msg::UpdatePreview(id)),
+        ui::parts::dark_button("Export 3MF")
+            .on_press(Msg::Export3MF(id)),
     ]
     .spacing(4);
     if !p.bom_entries.is_empty() {
-        header = header.push(button("Export BOM").on_press(Msg::ExportBOM(id)));
+        header = header.push(ui::parts::dark_button("Export BOM").on_press(Msg::ExportBOM(id)));
     }
-    let header = header.push(button("Close").on_press(Msg::ClosePreview(id)));
+    let header = header.push(ui::parts::dark_button("Close").on_press(Msg::ClosePreview(id)));
 
     let query_row = row![
         text("?- "),
@@ -929,3 +934,4 @@ fn format_cp_value(value: f64) -> String {
     let s = s.trim_end_matches('.');
     s.to_string()
 }
+
