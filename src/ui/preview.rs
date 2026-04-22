@@ -448,6 +448,9 @@ pub fn update(model: &mut PreviewModel, msg: Msg, ctx: Context) -> (Task<Msg>, O
             let text = ctx.editor_text.clone();
             let start = span.start.min(text.len());
             let end = span.end.min(text.len());
+            if !text.is_char_boundary(start) || !text.is_char_boundary(end) {
+                return Outcome::none();
+            }
             let new_text = format!(
                 "{}{}{}",
                 &text[..start],
