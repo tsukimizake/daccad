@@ -7,12 +7,6 @@ pub struct SessionPreview {
     pub preview_id: u64,
     pub query: String,
     #[serde(default)]
-    pub zoom: f32,
-    #[serde(default)]
-    pub rotate_x: f64,
-    #[serde(default)]
-    pub rotate_y: f64,
-    #[serde(default)]
     pub order: usize,
     #[serde(default)]
     pub control_point_overrides: HashMap<String, f64>,

@@ -534,9 +534,6 @@ pub fn collect_session_previews(model: &PreviewModel) -> Vec<SessionPreview> {
         .map(|(i, p)| SessionPreview {
             preview_id: p.id,
             query: p.query.clone(),
-            zoom: 10.0,
-            rotate_x: 0.0,
-            rotate_y: 0.0,
             order: i,
             control_point_overrides: p.control_point_overrides.clone(),
             query_param_overrides: p.query_param_overrides.clone(),
