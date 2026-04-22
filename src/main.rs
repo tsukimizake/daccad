@@ -136,6 +136,7 @@ fn update(model: &mut Model, message: Msg) -> Task<Msg> {
             model.current_file_path = None;
             model.error_message.clear();
             model.error_span = None;
+            model.last_modified = None;
             model.unsaved = false;
             Task::none()
         }
@@ -156,6 +157,9 @@ fn update(model: &mut Model, message: Msg) -> Task<Msg> {
                 model.editor = text_editor::Content::with_text(&db_content);
                 model.preview_model = ui::preview::PreviewModel::new();
                 model.current_file_path = Some(path.clone());
+                model.error_message.clear();
+                model.error_span = None;
+                model.last_modified = None;
                 model.unsaved = false;
                 session::save_last_session_path(&path);
 
