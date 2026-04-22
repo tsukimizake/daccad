@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 static NEXT_SCENE_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_MESH_VERSION: AtomicU64 = AtomicU64::new(1);
 
 const DEFAULT_COLOR: [f32; 4] = [0.7, 0.2, 0.2, 0.5];
 const DEFAULT_LIGHT_DIR: [f32; 4] = [-0.5, -1.0, -0.3, 0.0];
@@ -40,6 +41,8 @@ pub struct Scene {
     pub color: [f32; 4],
     pub base_camera_distance: f32,
     pub mesh: Arc<MeshData>,
+    /// 0 = まだメッシュが設定されていない
+    pub mesh_version: u64,
 }
 
 pub struct CameraState {
@@ -78,6 +81,7 @@ impl Scene {
                 vertices: vec![],
                 indices: vec![],
             }),
+            mesh_version: 0,
         }
     }
 
@@ -85,6 +89,7 @@ impl Scene {
         let aabb = compute_aabb(&vertices);
         self.base_camera_distance = (aabb * 2.4 * 3.0).max(5.0);
         self.mesh = Arc::new(MeshData { vertices, indices });
+        self.mesh_version = NEXT_MESH_VERSION.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn set_mesh_with_control_points(
@@ -109,6 +114,7 @@ impl Scene {
         }
 
         self.mesh = Arc::new(MeshData { vertices, indices });
+        self.mesh_version = NEXT_MESH_VERSION.fetch_add(1, Ordering::Relaxed);
     }
 
     fn build_uniforms(&self, cam: &CameraState, bounds: Rectangle) -> Uniforms {
@@ -334,6 +340,7 @@ impl shader::Program<SceneMessage> for Scene {
             id: self.id,
             uniforms: self.build_uniforms(state, bounds),
             mesh: self.mesh.clone(),
+            mesh_version: self.mesh_version,
         }
     }
 
@@ -358,6 +365,7 @@ pub struct Primitive {
     id: u64,
     uniforms: Uniforms,
     mesh: Arc<MeshData>,
+    mesh_version: u64,
 }
 
 impl shader::Primitive for Primitive {
@@ -374,7 +382,15 @@ impl shader::Primitive for Primitive {
             storage.store(Pipeline::new(device, format));
         }
         let pipeline = storage.get_mut::<Pipeline>().unwrap();
-        pipeline.update_instance(device, queue, viewport, self.id, &self.uniforms, &self.mesh);
+        pipeline.update_instance(
+            device,
+            queue,
+            viewport,
+            self.id,
+            &self.uniforms,
+            &self.mesh,
+            self.mesh_version,
+        );
     }
 
     fn render(

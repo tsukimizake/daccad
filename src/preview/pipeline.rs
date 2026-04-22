@@ -35,7 +35,7 @@ struct PerInstance {
     vertex_buffer: Option<wgpu::Buffer>,
     index_buffer: Option<wgpu::Buffer>,
     index_count: u32,
-    uploaded_mesh_ptr: usize,
+    uploaded_version: u64,
 }
 
 pub struct Pipeline {
@@ -127,6 +127,7 @@ impl Pipeline {
         id: u64,
         uniforms: &Uniforms,
         mesh: &Arc<MeshData>,
+        mesh_version: u64,
     ) {
         let size = viewport.physical_size();
         let target_size = (size.width.max(1), size.height.max(1));
@@ -171,14 +172,13 @@ impl Pipeline {
                 vertex_buffer: None,
                 index_buffer: None,
                 index_count: 0,
-                uploaded_mesh_ptr: 0,
+                uploaded_version: 0,
             }
         });
 
         queue.write_buffer(&inst.uniform_buffer, 0, bytemuck::bytes_of(uniforms));
 
-        let ptr = Arc::as_ptr(mesh) as usize;
-        if ptr != inst.uploaded_mesh_ptr {
+        if mesh_version != 0 && mesh_version != inst.uploaded_version {
             inst.vertex_buffer = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("vbuf"),
                 contents: bytemuck::cast_slice(&mesh.vertices),
@@ -190,7 +190,7 @@ impl Pipeline {
                 usage: wgpu::BufferUsages::INDEX,
             }));
             inst.index_count = mesh.indices.len() as u32;
-            inst.uploaded_mesh_ptr = ptr;
+            inst.uploaded_version = mesh_version;
         }
     }
 
