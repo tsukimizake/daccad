@@ -236,7 +236,7 @@ fn update(model: &mut Model, message: Msg) -> Task<Msg> {
             if !model.auto_reload {
                 return Task::none();
             }
-            if let Some(ref path) = model.current_file_path.clone() {
+            if let Some(path) = &model.current_file_path {
                 let db_path = path.join("db.cadhr");
                 if let Ok(meta) = std::fs::metadata(&db_path) {
                     if let Ok(modified) = meta.modified() {
