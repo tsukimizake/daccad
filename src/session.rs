@@ -30,6 +30,7 @@ pub fn save_session(
     editor_text: &str,
     previews: &[SessionPreview],
 ) -> Result<(), String> {
+    // 同名のファイルが残っていた場合に備えて削除してからディレクトリを作る
     let _ = std::fs::remove_file(dir);
     std::fs::create_dir_all(dir).map_err(|e| format!("Failed to create directory: {}", e))?;
 
