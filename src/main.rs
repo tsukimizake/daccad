@@ -122,6 +122,9 @@ fn update(model: &mut Model, message: Msg) -> Task<Msg> {
             if let Some((msg_text, span)) = outcome.error {
                 model.error_message = msg_text;
                 model.error_span = span;
+            } else {
+                model.error_message.clear();
+                model.error_span = None;
             }
             if let Some(new_text) = outcome.source_edit {
                 model.editor = text_editor::Content::with_text(&new_text);
