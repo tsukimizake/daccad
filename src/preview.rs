@@ -10,10 +10,12 @@ use iced::widget::shader::wgpu;
 use iced::{Point, Rectangle};
 use pipeline::{MeshData, Pipeline, Uniforms, Vertex};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 static NEXT_SCENE_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_MESH_VERSION: AtomicU64 = AtomicU64::new(1);
+/// Scene が drop された ID をここに積み、次回 Primitive::prepare で Pipeline から撤去する
+static PENDING_REMOVALS: Mutex<Vec<u64>> = Mutex::new(Vec::new());
 
 const DEFAULT_COLOR: [f32; 4] = [0.7, 0.2, 0.2, 0.5];
 const DEFAULT_LIGHT_DIR: [f32; 4] = [-0.5, -1.0, -0.3, 0.0];
@@ -68,6 +70,14 @@ impl CameraState {
 impl Default for CameraState {
     fn default() -> Self {
         Self::with_values(0.0, 0.0, 10.0)
+    }
+}
+
+impl Drop for Scene {
+    fn drop(&mut self) {
+        if let Ok(mut q) = PENDING_REMOVALS.lock() {
+            q.push(self.id);
+        }
     }
 }
 
@@ -382,6 +392,13 @@ impl shader::Primitive for Primitive {
             storage.store(Pipeline::new(device, format));
         }
         let pipeline = storage.get_mut::<Pipeline>().unwrap();
+        let drained: Vec<u64> = PENDING_REMOVALS
+            .lock()
+            .map(|mut q| std::mem::take(&mut *q))
+            .unwrap_or_default();
+        for id in drained {
+            pipeline.remove_instance(id);
+        }
         pipeline.update_instance(
             device,
             queue,
