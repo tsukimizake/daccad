@@ -129,11 +129,15 @@ impl Scene {
 
     fn build_uniforms(&self, cam: &CameraState, bounds: Rectangle) -> Uniforms {
         let aspect = (bounds.width / bounds.height.max(1.0)).max(0.01);
-        let proj = Mat4::perspective_rh(45.0_f32.to_radians(), aspect, 0.1, 1000.0);
 
         let rx = cam.rotate_x as f32;
         let ry = cam.rotate_y as f32;
         let dist = self.base_camera_distance * (20.0 / cam.zoom);
+
+        // near/far を dist に比例させる: そうしないと大きなモデルで far クリップに全部消える
+        let near = (dist * 0.01).max(0.1);
+        let far = (dist * 10.0).max(1000.0);
+        let proj = Mat4::perspective_rh(45.0_f32.to_radians(), aspect, near, far);
 
         let x = dist * ry.sin() * rx.cos();
         let y = dist * ry.cos() * rx.cos();

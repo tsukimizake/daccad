@@ -1,22 +1,24 @@
 use cadhr_lang::bom::{BomEntry, BomExtractor};
 use cadhr_lang::collision::check_collisions;
 use cadhr_lang::manifold_bridge::{
-    ConversionError, ControlPoint, EvaluatedNode, MeshGenerator, Model3D, extract_control_points,
+    ControlPoint, ConversionError, EvaluatedNode, MeshGenerator, Model3D, extract_control_points,
 };
-use cadhr_lang::term_rewrite::CadhrError;
 use cadhr_lang::module::resolve_modules;
 use cadhr_lang::parse::{
-    FileRegistry, QueryParam, SrcSpan, collect_query_params, database,
-    parse_error_span, query as parse_query, substitute_query_params,
+    FileRegistry, QueryParam, SrcSpan, collect_query_params, database, parse_error_span,
+    query as parse_query, substitute_query_params,
 };
 use cadhr_lang::term_processor::TermProcessor;
+use cadhr_lang::term_rewrite::CadhrError;
 use cadhr_lang::term_rewrite::{execute, infer_query_param_ranges};
 
+use crate::debug_log;
 use crate::preview::pipeline::Vertex;
 use manifold_rs::Mesh as RsMesh;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+#[derive(Debug)]
 pub struct MeshJobParams {
     pub database: String,
     pub query: String,
@@ -26,24 +28,42 @@ pub struct MeshJobParams {
 }
 
 #[derive(Clone)]
-pub struct MeshJobResult {
-    pub vertices: Vec<Vertex>,
-    pub indices: Vec<u32>,
-    pub evaluated_nodes: Vec<EvaluatedNode>,
-    pub control_points: Vec<ControlPoint>,
-    pub bom_entries: Vec<BomEntry>,
-    pub query_params: Vec<QueryParam>,
-    pub logs: Vec<String>,
-    pub error: Option<(String, Option<SrcSpan>)>,
+pub enum MeshJobResult {
+    Success {
+        vertices: Vec<Vertex>,
+        indices: Vec<u32>,
+        evaluated_nodes: Vec<EvaluatedNode>,
+        control_points: Vec<ControlPoint>,
+        bom_entries: Vec<BomEntry>,
+        query_params: Vec<QueryParam>,
+        resolved_terms_debug: String,
+    },
+    Error {
+        message: String,
+        span: Option<SrcSpan>,
+    },
 }
 
 impl std::fmt::Debug for MeshJobResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("MeshJobResult")
-            .field("vertices_count", &self.vertices.len())
-            .field("indices_count", &self.indices.len())
-            .field("error", &self.error)
-            .finish()
+        match self {
+            MeshJobResult::Success {
+                vertices,
+                indices,
+                resolved_terms_debug,
+                ..
+            } => f
+                .debug_struct("MeshJobResult::Success")
+                .field("vertices_count", &vertices.len())
+                .field("indices_count", &indices.len())
+                .field("resolved_terms", &resolved_terms_debug)
+                .finish(),
+            MeshJobResult::Error { message, span } => f
+                .debug_struct("MeshJobResult::Error")
+                .field("message", message)
+                .field("span", span)
+                .finish(),
+        }
     }
 }
 
@@ -125,8 +145,8 @@ fn rs_mesh_to_vertices(rs_mesh: &RsMesh) -> Result<(Vec<Vertex>, Vec<u32>), Stri
 }
 
 pub fn run_mesh_job(params: MeshJobParams) -> MeshJobResult {
-    let mut logs = Vec::new();
-
+    debug_log!("MeshJob query: {}", params.query);
+    debug_log!("MeshJob db:\n{}", params.database);
     let resolve_result = (|| -> Result<
         (Vec<cadhr_lang::parse::ScopedTerm>, Vec<ControlPoint>, Vec<QueryParam>),
         (String, Option<SrcSpan>),
@@ -174,84 +194,66 @@ pub fn run_mesh_job(params: MeshJobParams) -> MeshJobResult {
         }
 
         let substituted = substitute_query_params(&query_terms, &values);
-        logs.push(format!("Query terms: {:?}", substituted));
-        logs.push(format!("Database clauses: {:#?}", db));
         let (mut resolved, _env) = execute(&mut db, substituted).map_err(|e| {
             format_error("Rewrite error", &e.to_string(), e.span(), &file_registry)
         })?;
-        logs.push(format!("Resolved terms: {:?}", resolved));
 
         let control_points =
             extract_control_points(&mut resolved, &params.control_point_overrides);
         Ok((resolved, control_points, query_params))
     })();
 
-    let (vertices, indices, evaluated_nodes, control_points, bom_entries, query_params, error) =
-        match resolve_result {
-            Ok((resolved, control_points, query_params)) => {
-                let bom_entries = BomExtractor.process(&resolved).unwrap_or_else(|e| {
-                    eprintln!("BOM extraction warning: {}", e);
-                    vec![]
-                });
+    match resolve_result {
+        Ok((resolved, control_points, query_params)) => {
+            let resolved_terms_debug = format!("{:#?}", resolved);
 
-                if resolved.is_empty() {
-                    return MeshJobResult {
-                        vertices: vec![],
-                        indices: vec![],
-                        evaluated_nodes: vec![],
+            let bom_entries = BomExtractor.process(&resolved).unwrap_or_else(|e| {
+                debug_log!("BOM extraction warning: {}", e);
+                vec![]
+            });
+
+            if resolved.is_empty() {
+                return MeshJobResult::Success {
+                    vertices: vec![],
+                    indices: vec![],
+                    evaluated_nodes: vec![],
+                    control_points,
+                    bom_entries,
+                    query_params,
+                    resolved_terms_debug,
+                };
+            }
+
+            let mesh_generator = MeshGenerator {
+                include_paths: params.include_paths.clone(),
+            };
+            match mesh_generator.process(&resolved) {
+                Ok((rs_mesh, evaluated_nodes)) => match rs_mesh_to_vertices(&rs_mesh) {
+                    Ok((verts, idxs)) => MeshJobResult::Success {
+                        vertices: verts,
+                        indices: idxs,
+                        evaluated_nodes,
                         control_points,
                         bom_entries,
                         query_params,
-                        logs,
-                        error: None,
-                    };
-                }
-
-                let mesh_generator = MeshGenerator {
-                    include_paths: params.include_paths.clone(),
-                };
-                match mesh_generator.process(&resolved) {
-                    Ok((rs_mesh, evaluated_nodes)) => match rs_mesh_to_vertices(&rs_mesh) {
-                        Ok((verts, idxs)) => (
-                            verts,
-                            idxs,
-                            evaluated_nodes,
-                            control_points,
-                            bom_entries,
-                            query_params,
-                            None,
-                        ),
-                        Err(e) => (vec![], vec![], vec![], control_points, bom_entries, query_params, Some((e, None))),
+                        resolved_terms_debug,
                     },
-                    Err(e) => {
-                        let span = e.span();
-                        (
-                            vec![],
-                            vec![],
-                            vec![],
-                            control_points,
-                            bom_entries,
-                            query_params,
-                            Some((format!("Mesh error: {}", e), span)),
-                        )
-                    }
-                }
+                    Err(e) => MeshJobResult::Error {
+                        message: e,
+                        span: None,
+                    },
+                },
+                Err(e) => MeshJobResult::Error {
+                    message: format!("Mesh error: {}", e),
+                    span: e.span(),
+                },
             }
-            Err(e) => (vec![], vec![], vec![], vec![], vec![], vec![], Some(e)),
-        };
-
-    MeshJobResult {
-        vertices,
-        indices,
-        evaluated_nodes,
-        control_points,
-        bom_entries,
-        query_params,
-        logs,
-        error,
+        }
+        Err((message, span)) => MeshJobResult::Error { message, span },
     }
 }
 
+#[derive(Debug)]
 pub struct CollisionJobParams {
     pub database: String,
     pub query: String,
@@ -259,57 +261,59 @@ pub struct CollisionJobParams {
 }
 
 #[derive(Debug, Clone)]
-pub struct CollisionJobResult {
-    pub vertices: Vec<Vertex>,
-    pub indices: Vec<u32>,
-    pub part_count: usize,
-    pub collision_count: usize,
-    pub error: Option<(String, Option<SrcSpan>)>,
+pub enum CollisionJobResult {
+    Success {
+        vertices: Vec<Vertex>,
+        indices: Vec<u32>,
+        part_count: usize,
+        collision_count: usize,
+    },
+    Error {
+        message: String,
+        span: Option<SrcSpan>,
+    },
 }
 
 pub fn run_collision_job(params: CollisionJobParams) -> CollisionJobResult {
-    let error_result = |e| CollisionJobResult {
-        vertices: vec![],
-        indices: vec![],
-        part_count: 0,
-        collision_count: 0,
-        error: Some(e),
-    };
+    debug_log!("CollisionJob query: {}", params.query);
+    debug_log!("CollisionJob db:\n{}", params.database);
+    let resolve_result =
+        (|| -> Result<Vec<cadhr_lang::parse::ScopedTerm>, (String, Option<SrcSpan>)> {
+            let mut file_registry = FileRegistry::new();
+            file_registry.register_main("db".to_string(), params.database.clone());
+            let query_file_id = file_registry.register("query".to_string(), params.query.clone());
 
-    let resolve_result = (|| -> Result<Vec<cadhr_lang::parse::ScopedTerm>, (String, Option<SrcSpan>)> {
-        let mut file_registry = FileRegistry::new();
-        file_registry.register_main("db".to_string(), params.database.clone());
-        let query_file_id = file_registry.register("query".to_string(), params.query.clone());
+            let (_, query_terms) = parse_query(&params.query).map_err(|e| {
+                let span = parse_error_span(&params.query, &e).map(|mut s| {
+                    s.file_id = query_file_id;
+                    s
+                });
+                format_error("Parse error", &format!("{:?}", e), span, &file_registry)
+            })?;
+            let db = database(&params.database).map_err(|e| {
+                let span = parse_error_span(&params.database, &e);
+                format_error("Parse error", &format!("{:?}", e), span, &file_registry)
+            })?;
+            let mut db = resolve_modules(
+                db,
+                &params.include_paths,
+                &mut std::collections::HashSet::new(),
+                &mut file_registry,
+            )
+            .map_err(|e| (format!("Module error: {}", e), None))?;
 
-        let (_, query_terms) = parse_query(&params.query).map_err(|e| {
-            let span = parse_error_span(&params.query, &e).map(|mut s| {
-                s.file_id = query_file_id;
-                s
-            });
-            format_error("Parse error", &format!("{:?}", e), span, &file_registry)
-        })?;
-        let db = database(&params.database).map_err(|e| {
-            let span = parse_error_span(&params.database, &e);
-            format_error("Parse error", &format!("{:?}", e), span, &file_registry)
-        })?;
-        let mut db = resolve_modules(
-            db,
-            &params.include_paths,
-            &mut std::collections::HashSet::new(),
-            &mut file_registry,
-        )
-        .map_err(|e| (format!("Module error: {}", e), None))?;
-
-        let (resolved, _env) = execute(&mut db, query_terms).map_err(|e| {
-            format_error("Rewrite error", &e.to_string(), e.span(), &file_registry)
-        })?;
-        Ok(resolved)
-    })();
+            let (resolved, _env) = execute(&mut db, query_terms).map_err(|e| {
+                format_error("Rewrite error", &e.to_string(), e.span(), &file_registry)
+            })?;
+            Ok(resolved)
+        })();
 
     let resolved = match resolve_result {
         Ok(r) => r,
-        Err(e) => return error_result(e),
+        Err((message, span)) => return CollisionJobResult::Error { message, span },
     };
+
+    debug_log!("CollisionJob resolved: {:#?}", resolved);
 
     let exprs: Result<Vec<Model3D>, _> = resolved
         .iter()
@@ -322,11 +326,19 @@ pub fn run_collision_job(params: CollisionJobParams) -> CollisionJobResult {
 
     let exprs = match exprs {
         Ok(e) => e,
-        Err(e) => return error_result((format!("Conversion error: {}", e), None)),
+        Err(e) => {
+            return CollisionJobResult::Error {
+                message: format!("Conversion error: {}", e),
+                span: None,
+            };
+        }
     };
 
     if exprs.is_empty() {
-        return error_result(("No mesh terms found in query result".to_string(), None));
+        return CollisionJobResult::Error {
+            message: "No mesh terms found in query result".to_string(),
+            span: None,
+        };
     }
 
     match check_collisions(&exprs, &params.include_paths) {
@@ -334,29 +346,40 @@ pub fn run_collision_job(params: CollisionJobParams) -> CollisionJobResult {
             let mut all_verts = Vec::new();
             let mut all_idx = Vec::new();
 
-            // 各パーツを alpha=0 (uniform color) で描画
             match rs_mesh_to_vertices_colored(&result.combined_mesh, [0.0, 0.0, 0.0, 0.0]) {
                 Ok((v, i)) => append_mesh(&mut all_verts, &mut all_idx, v, i),
-                Err(e) => return error_result((e, None)),
+                Err(e) => {
+                    return CollisionJobResult::Error {
+                        message: e,
+                        span: None,
+                    };
+                }
             }
 
-            // 衝突領域を赤 (alpha=1) で描画
             let collision_count = result.collision_meshes.len();
             for mesh in &result.collision_meshes {
                 match rs_mesh_to_vertices_colored(mesh, [1.0, 0.15, 0.0, 1.0]) {
                     Ok((v, i)) => append_mesh(&mut all_verts, &mut all_idx, v, i),
-                    Err(e) => return error_result((e, None)),
+                    Err(e) => {
+                        return CollisionJobResult::Error {
+                            message: e,
+                            span: None,
+                        };
+                    }
                 }
             }
 
-            CollisionJobResult {
+            CollisionJobResult::Success {
                 vertices: all_verts,
                 indices: all_idx,
                 part_count: result.part_count,
                 collision_count,
-                error: None,
             }
         }
-        Err(e) => error_result((format!("Collision error: {}", e), None)),
+        Err(e) => CollisionJobResult::Error {
+            message: format!("Collision error: {}", e),
+            span: None,
+        },
     }
 }
+

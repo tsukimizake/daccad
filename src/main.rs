@@ -1,3 +1,4 @@
+mod debug;
 mod export;
 mod highlight;
 mod interpreter;

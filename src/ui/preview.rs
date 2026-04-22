@@ -1,3 +1,4 @@
+use crate::debug_log;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -109,8 +110,8 @@ pub enum Msg {
     MovePreviewUp(u64),
     MovePreviewDown(u64),
     QueryChanged(u64, String),
-    PreviewGenerated(u64, Result<MeshJobResult, String>),
-    CollisionGenerated(u64, Result<CollisionJobResult, String>),
+    PreviewGenerated(u64, MeshJobResult),
+    CollisionGenerated(u64, CollisionJobResult),
     CpOverrideChanged(u64, String, f64),
     QpOverrideChanged(u64, String, f64),
     PreviewClicked {
@@ -235,62 +236,59 @@ pub fn update(model: &mut PreviewModel, msg: Msg, ctx: Context) -> (Task<Msg>, O
             Outcome::none()
         }
         Msg::PreviewGenerated(id, result) => {
+            debug_log!("MeshJob completed (id={}): {:?}", id, result);
             let mut outcome = Outcome {
                 mark_unsaved: false,
                 error: None,
                 source_edit: None,
             };
             match result {
-                Ok(r) => {
-                    if let Some((msg, span)) = &r.error {
-                        outcome.error = Some((msg.clone(), *span));
-                    }
+                MeshJobResult::Success { vertices, indices, control_points, query_params, bom_entries, resolved_terms_debug, .. } => {
+                    debug_log!("MeshJob resolved terms:\n{}", resolved_terms_debug);
                     if let Some(p) = model.previews.iter_mut().find(|p| p.id == id) {
-                        p.last_vertices = r.vertices.clone();
-                        p.last_indices = r.indices.clone();
-                        p.control_points = r.control_points;
-                        p.query_params = r.query_params;
-                        p.bom_entries = r.bom_entries;
+                        p.last_vertices = vertices.clone();
+                        p.last_indices = indices.clone();
+                        p.control_points = control_points;
+                        p.query_params = query_params;
+                        p.bom_entries = bom_entries;
                         let selected = model
                             .selected_cp
                             .and_then(|(pid, ci)| if pid == id { Some(ci) } else { None });
                         p.scene.set_mesh_with_control_points(
-                            r.vertices,
-                            r.indices,
+                            vertices,
+                            indices,
                             &p.control_points,
                             selected,
                         );
                     }
                 }
-                Err(e) => {
-                    outcome.error = Some((e, None));
+                MeshJobResult::Error { message, span } => {
+                    outcome.error = Some((message, span));
                 }
             }
             (Task::none(), outcome)
         }
         Msg::CollisionGenerated(id, result) => {
+            debug_log!("CollisionJob completed (id={}): {:?}", id, result);
             let mut outcome = Outcome {
                 mark_unsaved: false,
                 error: None,
                 source_edit: None,
             };
             match result {
-                Ok(r) => {
-                    if let Some((msg, span)) = &r.error {
-                        outcome.error = Some((msg.clone(), *span));
-                    }
+                CollisionJobResult::Success { vertices, indices, part_count, collision_count } => {
                     if let Some(p) = model.previews.iter_mut().find(|p| p.id == id) {
-                        p.last_vertices = r.vertices.clone();
-                        p.last_indices = r.indices.clone();
+                        p.last_vertices = vertices.clone();
+                        p.last_indices = indices.clone();
                         p.kind = PreviewKind::Collision {
-                            part_count: r.part_count,
-                            collision_count: r.collision_count,
+                            part_count,
+                            collision_count,
                         };
-                        p.scene.set_mesh(r.vertices, r.indices);
+                        p.scene.set_mesh(vertices, indices);
                     }
                 }
-                Err(e) => {
-                    outcome.error = Some((e, None));
+                CollisionJobResult::Error { message, span } => {
+                    outcome.error = Some((message, span));
                 }
             }
             (Task::none(), outcome)
@@ -501,9 +499,13 @@ pub fn generate(model: &PreviewModel, id: u64, ctx: Context) -> Task<Msg> {
             };
             Task::perform(
                 async move {
-                    std::thread::spawn(move || interpreter::run_mesh_job(params))
-                        .join()
-                        .map_err(|_| "Interpreter thread panicked".to_string())
+                    match std::thread::spawn(move || interpreter::run_mesh_job(params)).join() {
+                        Ok(result) => result,
+                        Err(_) => MeshJobResult::Error {
+                            message: "Interpreter thread panicked".to_string(),
+                            span: None,
+                        },
+                    }
                 },
                 move |result| Msg::PreviewGenerated(id, result),
             )
@@ -516,9 +518,13 @@ pub fn generate(model: &PreviewModel, id: u64, ctx: Context) -> Task<Msg> {
             };
             Task::perform(
                 async move {
-                    std::thread::spawn(move || interpreter::run_collision_job(params))
-                        .join()
-                        .map_err(|_| "Interpreter thread panicked".to_string())
+                    match std::thread::spawn(move || interpreter::run_collision_job(params)).join() {
+                        Ok(result) => result,
+                        Err(_) => CollisionJobResult::Error {
+                            message: "Interpreter thread panicked".to_string(),
+                            span: None,
+                        },
+                    }
                 },
                 move |result| Msg::CollisionGenerated(id, result),
             )
