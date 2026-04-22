@@ -124,6 +124,7 @@ pub enum Msg {
     },
     Export3MF(u64),
     ExportBOM(u64),
+    ExportFinished(Result<(), String>),
     CpSourceEdit(u64, String, SrcSpan),
 }
 
@@ -377,22 +378,24 @@ pub fn update(model: &mut PreviewModel, msg: Msg, ctx: Context) -> (Task<Msg>, O
                 let base_name = ctx.base_name.to_string();
                 let task = Task::perform(
                     async move {
-                        let data = export::vertices_to_threemf(&vertices, &indices);
-                        if let Some(data) = data {
-                            let file_name =
-                                format!("{}_{}.3mf", base_name, sanitize_filename(&query));
-                            let handle = rfd::AsyncFileDialog::new()
-                                .set_title("Export 3MF")
-                                .add_filter("3MF", &["3mf"])
-                                .set_file_name(&file_name)
-                                .save_file()
-                                .await;
-                            if let Some(h) = handle {
-                                let _ = std::fs::write(h.path(), data);
-                            }
+                        let Some(data) = export::vertices_to_threemf(&vertices, &indices) else {
+                            return Err("Nothing to export".to_string());
+                        };
+                        let file_name =
+                            format!("{}_{}.3mf", base_name, sanitize_filename(&query));
+                        let handle = rfd::AsyncFileDialog::new()
+                            .set_title("Export 3MF")
+                            .add_filter("3MF", &["3mf"])
+                            .set_file_name(&file_name)
+                            .save_file()
+                            .await;
+                        match handle {
+                            Some(h) => std::fs::write(h.path(), data)
+                                .map_err(|e| format!("Failed to write 3MF: {}", e)),
+                            None => Ok(()),
                         }
                     },
-                    |()| Msg::UpdatePreviews,
+                    Msg::ExportFinished,
                 );
                 (task, Outcome {
                     mark_unsaved: false,
@@ -418,11 +421,13 @@ pub fn update(model: &mut PreviewModel, msg: Msg, ctx: Context) -> (Task<Msg>, O
                             .set_file_name(&format!("{}_bom.json", base_name))
                             .save_file()
                             .await;
-                        if let Some(h) = handle {
-                            let _ = std::fs::write(h.path(), json.as_bytes());
+                        match handle {
+                            Some(h) => std::fs::write(h.path(), json.as_bytes())
+                                .map_err(|e| format!("Failed to write BOM: {}", e)),
+                            None => Ok(()),
                         }
                     },
-                    |()| Msg::UpdatePreviews,
+                    Msg::ExportFinished,
                 );
                 (task, Outcome {
                     mark_unsaved: false,
@@ -432,6 +437,14 @@ pub fn update(model: &mut PreviewModel, msg: Msg, ctx: Context) -> (Task<Msg>, O
             } else {
                 Outcome::none()
             }
+        }
+        Msg::ExportFinished(result) => {
+            let outcome = Outcome {
+                mark_unsaved: false,
+                error: result.err().map(|e| (e, None)),
+                source_edit: None,
+            };
+            (Task::none(), outcome)
         }
         Msg::CpSourceEdit(preview_id, var_name, span) => {
             if span.file_id != 0 {
