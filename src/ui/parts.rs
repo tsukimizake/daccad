@@ -15,24 +15,28 @@ pub fn dark_button_style(_theme: &iced::Theme, status: Status) -> button::Style 
             text_color: text,
             border: Border::default().rounded(4),
             shadow: Shadow::default(),
+            snap: false,
         },
         Status::Hovered => button::Style {
             background: Some(Background::Color(bg_hover)),
             text_color: text,
             border: Border::default().rounded(4),
             shadow: Shadow::default(),
+            snap: false,
         },
         Status::Pressed => button::Style {
             background: Some(Background::Color(bg_pressed)),
             text_color: text,
             border: Border::default().rounded(4),
             shadow: Shadow::default(),
+            snap: false,
         },
         Status::Disabled => button::Style {
             background: Some(Background::Color(Color::from_rgb(0.18, 0.18, 0.20))),
             text_color: Color::from_rgb(0.45, 0.45, 0.47),
             border: Border::default().rounded(4),
             shadow: Shadow::default(),
+            snap: false,
         },
     }
 }
@@ -50,7 +54,7 @@ pub fn emacs_key_binding<Msg>(key_press: KeyPress) -> Option<Binding<Msg>> {
         ..
     } = &key_press;
 
-    if *status != iced::widget::text_editor::Status::Focused {
+    if !matches!(status, iced::widget::text_editor::Status::Focused { .. }) {
         return None;
     }
 

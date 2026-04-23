@@ -2,12 +2,10 @@ pub mod pipeline;
 
 use glam::{Mat4, Vec3};
 use iced::advanced::graphics::Viewport;
-use iced::advanced::Shell;
-use iced::event;
 use iced::mouse;
+use iced::wgpu;
 use iced::widget::shader;
-use iced::widget::shader::wgpu;
-use iced::{Point, Rectangle};
+use iced::{Event, Point, Rectangle};
 use pipeline::{MeshData, Pipeline, Uniforms, Vertex};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -282,20 +280,19 @@ impl shader::Program<SceneMessage> for Scene {
     fn update(
         &self,
         state: &mut Self::State,
-        event: shader::Event,
+        event: &Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,
-        _shell: &mut Shell<'_, SceneMessage>,
-    ) -> (event::Status, Option<SceneMessage>) {
+    ) -> Option<shader::Action<SceneMessage>> {
         let in_bounds = cursor.is_over(bounds);
 
         match event {
-            shader::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) if in_bounds => {
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) if in_bounds => {
                 state.dragging = true;
                 state.last_cursor = cursor.position();
-                (event::Status::Captured, None)
+                Some(shader::Action::capture())
             }
-            shader::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
                 let was_dragging = state.dragging;
                 state.dragging = false;
 
@@ -305,23 +302,23 @@ impl shader::Program<SceneMessage> for Scene {
                         let v = (pos.y - bounds.y) / bounds.height;
                         let aspect = bounds.width / bounds.height.max(1.0);
                         state.last_cursor = None;
-                        return (
-                            event::Status::Captured,
-                            Some(SceneMessage::Clicked {
+                        return Some(
+                            shader::Action::publish(SceneMessage::Clicked {
                                 u,
                                 v,
                                 rotate_x: state.rotate_x,
                                 rotate_y: state.rotate_y,
                                 zoom: state.zoom,
                                 aspect,
-                            }),
+                            })
+                            .and_capture(),
                         );
                     }
                 }
                 state.last_cursor = None;
-                (event::Status::Captured, None)
+                Some(shader::Action::capture())
             }
-            shader::Event::Mouse(mouse::Event::CursorMoved { position }) if state.dragging => {
+            Event::Mouse(mouse::Event::CursorMoved { position }) if state.dragging => {
                 if let Some(last) = state.last_cursor {
                     let dx = (position.x - last.x) as f64;
                     let dy = (position.y - last.y) as f64;
@@ -329,18 +326,18 @@ impl shader::Program<SceneMessage> for Scene {
                     state.rotate_x =
                         (state.rotate_x + dy * ROTATE_SENSITIVITY).clamp(-MAX_PITCH, MAX_PITCH);
                 }
-                state.last_cursor = Some(position);
-                (event::Status::Captured, None)
+                state.last_cursor = Some(*position);
+                Some(shader::Action::capture())
             }
-            shader::Event::Mouse(mouse::Event::WheelScrolled { delta }) if in_bounds => {
+            Event::Mouse(mouse::Event::WheelScrolled { delta }) if in_bounds => {
                 let scroll = match delta {
-                    mouse::ScrollDelta::Lines { y, .. } => y,
+                    mouse::ScrollDelta::Lines { y, .. } => *y,
                     mouse::ScrollDelta::Pixels { y, .. } => y / 50.0,
                 };
                 state.zoom = (state.zoom + scroll * ZOOM_SENSITIVITY).clamp(MIN_ZOOM, MAX_ZOOM);
-                (event::Status::Captured, None)
+                Some(shader::Action::capture())
             }
-            _ => (event::Status::Ignored, None),
+            _ => None,
         }
     }
 
@@ -383,19 +380,16 @@ pub struct Primitive {
 }
 
 impl shader::Primitive for Primitive {
+    type Pipeline = Pipeline;
+
     fn prepare(
         &self,
+        pipeline: &mut Self::Pipeline,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        format: wgpu::TextureFormat,
-        storage: &mut shader::Storage,
         _bounds: &Rectangle,
         viewport: &Viewport,
     ) {
-        if !storage.has::<Pipeline>() {
-            storage.store(Pipeline::new(device, format));
-        }
-        let pipeline = storage.get_mut::<Pipeline>().unwrap();
         let drained: Vec<u64> = PENDING_REMOVALS
             .lock()
             .map(|mut q| std::mem::take(&mut *q))
@@ -416,12 +410,11 @@ impl shader::Primitive for Primitive {
 
     fn render(
         &self,
+        pipeline: &Self::Pipeline,
         encoder: &mut wgpu::CommandEncoder,
-        storage: &shader::Storage,
         target: &wgpu::TextureView,
         clip_bounds: &Rectangle<u32>,
     ) {
-        let pipeline = storage.get::<Pipeline>().unwrap();
         pipeline.render_instance(encoder, target, clip_bounds, self.id);
     }
 }

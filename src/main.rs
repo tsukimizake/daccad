@@ -12,9 +12,10 @@ use iced::{Element, Fill, Subscription, Task};
 use std::path::PathBuf;
 
 fn main() -> iced::Result {
-    iced::application("cadhr", update, view)
+    iced::application(init, update, view)
+        .title("cadhr")
         .subscription(subscription)
-        .run_with(init)
+        .run()
 }
 
 struct Model {

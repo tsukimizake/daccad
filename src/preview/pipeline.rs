@@ -1,7 +1,8 @@
 use bytemuck::{Pod, Zeroable};
 use iced::advanced::graphics::Viewport;
-use iced::widget::shader::wgpu;
-use iced::widget::shader::wgpu::util::DeviceExt;
+use iced::wgpu;
+use iced::wgpu::util::DeviceExt;
+use iced::widget::shader;
 use iced::Rectangle;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -46,8 +47,14 @@ pub struct Pipeline {
     depth_size: (u32, u32),
 }
 
+impl shader::Pipeline for Pipeline {
+    fn new(device: &wgpu::Device, _queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
+        Self::build(device, format)
+    }
+}
+
 impl Pipeline {
-    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+    fn build(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("cadhr_shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
@@ -78,21 +85,23 @@ impl Pipeline {
             layout: Some(&layout),
             vertex: wgpu::VertexState {
                 module: &shader_module,
-                entry_point: "vs_main",
+                entry_point: Some("vs_main"),
                 buffers: &[wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<Vertex>() as u64,
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x4],
                 }],
+                compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader_module,
-                entry_point: "fs_main",
+                entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
+                compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState {
                 cull_mode: Some(wgpu::Face::Back),
@@ -108,6 +117,7 @@ impl Pipeline {
             }),
             multisample: Default::default(),
             multiview: None,
+            cache: None,
         });
 
         Self {
@@ -219,6 +229,7 @@ impl Pipeline {
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: target,
                 resolve_target: None,
+                depth_slice: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Load,
                     store: wgpu::StoreOp::Store,
