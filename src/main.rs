@@ -11,6 +11,56 @@ use iced::widget::{column, row, scrollable, text, text_editor, toggler};
 use iced::{Element, Fill, Subscription, Task};
 use std::path::PathBuf;
 
+// rfd ダイアログ呼び出しはiced管理下ではないのでSimulateできない。
+// テストでは固定パスを返す実装に差し替える。
+trait DialogHandler {
+    fn open_session(&self) -> Task<Msg>;
+    fn save_session_as(
+        &self,
+        editor_text: String,
+        previews: Vec<session::SessionPreview>,
+    ) -> Task<Msg>;
+}
+
+struct RfdDialogs;
+
+impl DialogHandler for RfdDialogs {
+    fn open_session(&self) -> Task<Msg> {
+        Task::perform(
+            async {
+                let handle = rfd::AsyncFileDialog::new()
+                    .set_title("Open Session Directory")
+                    .pick_folder()
+                    .await?;
+                let path = handle.path().to_path_buf();
+                let (db, previews) = session::load_session(&path)?;
+                Some((path, db, previews))
+            },
+            Msg::SessionOpened,
+        )
+    }
+
+    fn save_session_as(&self, text: String, previews: Vec<session::SessionPreview>) -> Task<Msg> {
+        Task::perform(
+            async move {
+                let handle = rfd::AsyncFileDialog::new()
+                    .set_title("Save Session Directory")
+                    .set_file_name("untitled")
+                    .save_file()
+                    .await;
+                match handle {
+                    Some(h) => {
+                        let path = h.path().to_path_buf();
+                        session::save_session(&path, &text, &previews).map(|()| path)
+                    }
+                    None => Err("Cancelled".to_string()),
+                }
+            },
+            Msg::SessionSaved,
+        )
+    }
+}
+
 fn main() -> iced::Result {
     iced::application(init, update, view)
         .title("cadhr")
@@ -27,6 +77,7 @@ struct Model {
     unsaved: bool,
     auto_reload: bool,
     last_modified: Option<std::time::SystemTime>,
+    dialogs: Box<dyn DialogHandler>,
 }
 
 #[derive(Debug, Clone)]
@@ -61,6 +112,7 @@ fn init() -> (Model, Task<Msg>) {
                 unsaved: false,
                 auto_reload: false,
                 last_modified: None,
+                dialogs: Box::new(RfdDialogs),
             };
             let mut tasks = vec![];
             for sp in &previews.previews {
@@ -85,6 +137,7 @@ fn init() -> (Model, Task<Msg>) {
             unsaved: false,
             auto_reload: false,
             last_modified: None,
+            dialogs: Box::new(RfdDialogs),
         },
         Task::none(),
     )
@@ -145,18 +198,7 @@ fn update(model: &mut Model, message: Msg) -> Task<Msg> {
             model.unsaved = false;
             Task::none()
         }
-        Msg::OpenSession => Task::perform(
-            async {
-                let handle = rfd::AsyncFileDialog::new()
-                    .set_title("Open Session Directory")
-                    .pick_folder()
-                    .await?;
-                let path = handle.path().to_path_buf();
-                let (db, previews) = session::load_session(&path)?;
-                Some((path, db, previews))
-            },
-            Msg::SessionOpened,
-        ),
+        Msg::OpenSession => model.dialogs.open_session(),
         Msg::SessionOpened(result) => {
             if let Some((path, db_content, previews)) = result {
                 model.editor = text_editor::Content::with_text(&db_content);
@@ -197,23 +239,7 @@ fn update(model: &mut Model, message: Msg) -> Task<Msg> {
         Msg::SaveSessionAs => {
             let text = model.editor.text();
             let previews = ui::preview::collect_session_previews(&model.preview_model);
-            Task::perform(
-                async move {
-                    let handle = rfd::AsyncFileDialog::new()
-                        .set_title("Save Session Directory")
-                        .set_file_name("untitled")
-                        .save_file()
-                        .await;
-                    match handle {
-                        Some(h) => {
-                            let path = h.path().to_path_buf();
-                            session::save_session(&path, &text, &previews).map(|()| path)
-                        }
-                        None => Err("Cancelled".to_string()),
-                    }
-                },
-                Msg::SessionSaved,
-            )
+            model.dialogs.save_session_as(text, previews)
         }
         Msg::SessionSaved(result) => {
             match result {
@@ -346,3 +372,126 @@ fn view(model: &Model) -> Element<'_, Msg> {
     .into()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iced_test::runtime::{Action, task};
+    use iced_test::simulator;
+
+    /// テスト用の DialogHandler。rfd を開かず、事前に与えたパスを直接返す。
+    struct TestDialogs {
+        open_path: std::sync::Mutex<Option<PathBuf>>,
+    }
+
+    impl TestDialogs {
+        fn new(open_path: PathBuf) -> Self {
+            Self {
+                open_path: std::sync::Mutex::new(Some(open_path)),
+            }
+        }
+    }
+
+    impl DialogHandler for TestDialogs {
+        fn open_session(&self) -> Task<Msg> {
+            let path = self
+                .open_path
+                .lock()
+                .unwrap()
+                .take()
+                .expect("TestDialogs::open_session called twice without re-arming");
+            let (db, previews) = session::load_session(&path).expect("test session should load");
+            Task::done(Msg::SessionOpened(Some((path, db, previews))))
+        }
+        fn save_session_as(
+            &self,
+            _text: String,
+            _previews: Vec<session::SessionPreview>,
+        ) -> Task<Msg> {
+            panic!("TestDialogs::save_session_as not expected in this test")
+        }
+    }
+
+    fn fresh_model() -> Model {
+        Model {
+            editor: text_editor::Content::with_text("main :- cube(10, 20, 30)."),
+            preview_model: ui::preview::PreviewModel::new(),
+            current_file_path: None,
+            error_message: String::new(),
+            error_span: None,
+            unsaved: false,
+            auto_reload: false,
+            last_modified: None,
+            dialogs: Box::new(RfdDialogs),
+        }
+    }
+
+    /// `Task` を同期的に消費し、含まれる `Msg` だけを取り出す。
+    /// フォント読み込みやウィンドウ操作などの副作用 Action は捨てる。
+    fn drain_task(task: Task<Msg>) -> Vec<Msg> {
+        use iced::futures::StreamExt;
+        let Some(stream) = task::into_stream(task) else {
+            return vec![];
+        };
+        iced::futures::executor::block_on(async move {
+            stream
+                .filter_map(|action| async move {
+                    match action {
+                        Action::Output(msg) => Some(msg),
+                        _ => None,
+                    }
+                })
+                .collect::<Vec<_>>()
+                .await
+        })
+    }
+
+    /// 任意の query 群を持つセッションを tempdir に作成する。
+    fn make_test_session(dir: &std::path::Path, db: &str, queries: &[&str]) {
+        let previews: Vec<session::SessionPreview> = queries
+            .iter()
+            .enumerate()
+            .map(|(i, q)| session::SessionPreview {
+                preview_id: i as u64,
+                query: q.to_string(),
+                order: i,
+                control_point_overrides: Default::default(),
+                query_param_overrides: Default::default(),
+            })
+            .collect();
+        session::save_session(dir, db, &previews).unwrap();
+    }
+
+    fn simulate_open(model: &mut Model, dir: &std::path::Path) {
+        model.dialogs = Box::new(TestDialogs::new(dir.to_path_buf()));
+        let mut ui = simulator(view(model));
+        ui.click("Open").expect("Open button should be clickable");
+        for msg in ui.into_messages() {
+            let task = update(model, msg);
+            for follow_up in drain_task(task) {
+                let _ = update(model, follow_up);
+            }
+        }
+    }
+
+    #[test]
+    fn opening_second_session_replaces_previews_from_first() {
+        let tmp_a = tempfile::tempdir().unwrap();
+        let tmp_b = tempfile::tempdir().unwrap();
+        make_test_session(tmp_a.path(), "main :- cube(1, 1, 1).", &["main", "extra"]);
+        make_test_session(tmp_b.path(), "main :- sphere(5).", &["main"]);
+
+        let mut model = fresh_model();
+        simulate_open(&mut model, tmp_a.path());
+        assert_eq!(model.preview_model.previews.len(), 2);
+
+        simulate_open(&mut model, tmp_b.path());
+
+        assert_eq!(model.current_file_path.as_deref(), Some(tmp_b.path()));
+        assert_eq!(
+            model.preview_model.previews.len(),
+            1,
+            "session A のプレビューが残っている"
+        );
+        assert_eq!(model.preview_model.previews[0].query, "main");
+    }
+}

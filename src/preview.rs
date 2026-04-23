@@ -327,7 +327,9 @@ impl shader::Program<SceneMessage> for Scene {
                         (state.rotate_x + dy * ROTATE_SENSITIVITY).clamp(-MAX_PITCH, MAX_PITCH);
                 }
                 state.last_cursor = Some(*position);
-                Some(shader::Action::capture())
+                // iced 0.14 の Action::capture() は redraw_request=Wait のまま。
+                // カメラを動かした直後は明示的に再描画要求しないとフレームが出ない。
+                Some(shader::Action::request_redraw().and_capture())
             }
             Event::Mouse(mouse::Event::WheelScrolled { delta }) if in_bounds => {
                 let scroll = match delta {
@@ -335,7 +337,7 @@ impl shader::Program<SceneMessage> for Scene {
                     mouse::ScrollDelta::Pixels { y, .. } => y / 50.0,
                 };
                 state.zoom = (state.zoom + scroll * ZOOM_SENSITIVITY).clamp(MIN_ZOOM, MAX_ZOOM);
-                Some(shader::Action::capture())
+                Some(shader::Action::request_redraw().and_capture())
             }
             _ => None,
         }
