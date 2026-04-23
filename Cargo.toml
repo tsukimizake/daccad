@@ -19,7 +19,7 @@ members = [
 ]
 
 [dependencies]
-iced = { version = "0.13", features = ["advanced", "tokio"] }
+iced = { version = "0.14", features = ["advanced", "tokio"] }
 bytemuck = { version = "1", features = ["derive"] }
 glam = "0.29"
 manifold-rs = "0.6.4"
