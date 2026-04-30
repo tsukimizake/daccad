@@ -2,6 +2,7 @@ struct Uniforms {
     view_proj: mat4x4<f32>,
     color: vec4<f32>,
     light_dir: vec4<f32>,
+    edge_color: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -44,4 +45,14 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     }
 
     return vec4<f32>(base_color.rgb * intensity, base_color.a);
+}
+
+@vertex
+fn vs_edge(in: VsIn) -> @builtin(position) vec4<f32> {
+    return u.view_proj * vec4<f32>(in.position, 1.0);
+}
+
+@fragment
+fn fs_edge() -> @location(0) vec4<f32> {
+    return u.edge_color;
 }

@@ -17,11 +17,15 @@ static PENDING_REMOVALS: Mutex<Vec<u64>> = Mutex::new(Vec::new());
 
 const DEFAULT_COLOR: [f32; 4] = [0.7, 0.2, 0.2, 0.5];
 const DEFAULT_LIGHT_DIR: [f32; 4] = [-0.5, -1.0, -0.3, 0.0];
+/// Sharp edge を描く線の色 (RGBA)
+const DEFAULT_EDGE_COLOR: [f32; 4] = [0.7, 0.5, 0.5, 1.0];
 const MIN_ZOOM: f32 = 1.0;
 const MAX_ZOOM: f32 = 100.0;
 const ROTATE_SENSITIVITY: f64 = 0.01;
 const ZOOM_SENSITIVITY: f32 = 0.5;
 const MAX_PITCH: f64 = std::f64::consts::FRAC_PI_2 - 0.001;
+/// 隣接2三角形の法線がこの角度以上開いているエッジを sharp edge として線描画する
+const EDGE_ANGLE_THRESHOLD_DEG: f32 = 25.0;
 
 #[derive(Debug, Clone)]
 pub enum SceneMessage {
@@ -88,6 +92,7 @@ impl Scene {
             mesh: Arc::new(MeshData {
                 vertices: vec![],
                 indices: vec![],
+                edge_indices: vec![],
             }),
             mesh_version: 0,
         }
@@ -96,7 +101,12 @@ impl Scene {
     pub fn set_mesh(&mut self, vertices: Vec<Vertex>, indices: Vec<u32>) {
         let aabb = compute_aabb(&vertices);
         self.base_camera_distance = (aabb * 2.4 * 3.0).max(5.0);
-        self.mesh = Arc::new(MeshData { vertices, indices });
+        let edge_indices = extract_sharp_edges(&vertices, &indices, EDGE_ANGLE_THRESHOLD_DEG);
+        self.mesh = Arc::new(MeshData {
+            vertices,
+            indices,
+            edge_indices,
+        });
         self.mesh_version = NEXT_MESH_VERSION.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -110,6 +120,9 @@ impl Scene {
         let aabb = compute_aabb(&vertices);
         self.base_camera_distance = (aabb * 2.4 * 3.0).max(5.0);
 
+        // CP 球体を追加する前のメインメッシュからエッジ抽出
+        let edge_indices = extract_sharp_edges(&vertices, &indices, EDGE_ANGLE_THRESHOLD_DEG);
+
         let cp_radius = (aabb * 0.03).max(0.5);
         for (ci, cp) in control_points.iter().enumerate() {
             let color = if selected_cp == Some(ci) {
@@ -121,7 +134,11 @@ impl Scene {
             append_sphere(&mut vertices, &mut indices, center, cp_radius, color, 8);
         }
 
-        self.mesh = Arc::new(MeshData { vertices, indices });
+        self.mesh = Arc::new(MeshData {
+            vertices,
+            indices,
+            edge_indices,
+        });
         self.mesh_version = NEXT_MESH_VERSION.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -147,6 +164,7 @@ impl Scene {
             view_proj: (proj * view).to_cols_array_2d(),
             color: self.color,
             light_dir: DEFAULT_LIGHT_DIR,
+            edge_color: DEFAULT_EDGE_COLOR,
         }
     }
 }
@@ -258,6 +276,78 @@ fn append_sphere(
             indices.extend_from_slice(&[a, b, c, a, c, d]);
         }
     }
+}
+
+/// 同位置にある別 vertex (sharp edge で分離された頂点) をマージしてエッジ隣接情報を取り、
+/// 隣接2三角形の法線角度差が閾値超のエッジだけ LineList 用 index として返す。
+/// 境界エッジ (open mesh) も sharp 扱い。
+fn extract_sharp_edges(vertices: &[Vertex], indices: &[u32], threshold_deg: f32) -> Vec<u32> {
+    use std::collections::HashMap;
+
+    if indices.len() < 3 {
+        return Vec::new();
+    }
+
+    let mut pos_map: HashMap<(u32, u32, u32), u32> = HashMap::new();
+    let mut canonical: Vec<u32> = Vec::with_capacity(vertices.len());
+    let mut canonical_to_original: HashMap<u32, u32> = HashMap::new();
+    for (orig_idx, v) in vertices.iter().enumerate() {
+        let key = (
+            v.position[0].to_bits(),
+            v.position[1].to_bits(),
+            v.position[2].to_bits(),
+        );
+        let next_id = pos_map.len() as u32;
+        let canon = *pos_map.entry(key).or_insert(next_id);
+        canonical.push(canon);
+        canonical_to_original
+            .entry(canon)
+            .or_insert(orig_idx as u32);
+    }
+
+    let tri_count = indices.len() / 3;
+    let mut tri_normals: Vec<Vec3> = Vec::with_capacity(tri_count);
+    for tri in indices.chunks_exact(3) {
+        let p0 = Vec3::from_array(vertices[tri[0] as usize].position);
+        let p1 = Vec3::from_array(vertices[tri[1] as usize].position);
+        let p2 = Vec3::from_array(vertices[tri[2] as usize].position);
+        tri_normals.push((p1 - p0).cross(p2 - p0).normalize_or_zero());
+    }
+
+    let mut edge_tris: std::collections::HashMap<(u32, u32), Vec<usize>> =
+        std::collections::HashMap::new();
+    for (ti, tri) in indices.chunks_exact(3).enumerate() {
+        let a = canonical[tri[0] as usize];
+        let b = canonical[tri[1] as usize];
+        let c = canonical[tri[2] as usize];
+        for (e0, e1) in [(a, b), (b, c), (c, a)] {
+            let key = if e0 < e1 { (e0, e1) } else { (e1, e0) };
+            edge_tris.entry(key).or_default().push(ti);
+        }
+    }
+
+    let cos_thresh = threshold_deg.to_radians().cos();
+    let mut line_indices: Vec<u32> = Vec::new();
+    for (edge, tris) in edge_tris {
+        let is_sharp = match tris.len() {
+            1 => true,
+            2 => tri_normals[tris[0]].dot(tri_normals[tris[1]]) < cos_thresh,
+            _ => true,
+        };
+        if !is_sharp {
+            continue;
+        }
+        let (Some(&a), Some(&b)) = (
+            canonical_to_original.get(&edge.0),
+            canonical_to_original.get(&edge.1),
+        ) else {
+            continue;
+        };
+        line_indices.push(a);
+        line_indices.push(b);
+    }
+
+    line_indices
 }
 
 fn compute_aabb(vertices: &[Vertex]) -> f32 {

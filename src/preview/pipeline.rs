@@ -22,12 +22,15 @@ pub struct Uniforms {
     pub view_proj: [[f32; 4]; 4],
     pub color: [f32; 4],
     pub light_dir: [f32; 4],
+    pub edge_color: [f32; 4],
 }
 
 #[derive(Debug)]
 pub struct MeshData {
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u32>,
+    /// Sharp edge を強調表示するためのライン用インデックス (LineList)
+    pub edge_indices: Vec<u32>,
 }
 
 struct PerInstance {
@@ -36,11 +39,14 @@ struct PerInstance {
     vertex_buffer: Option<wgpu::Buffer>,
     index_buffer: Option<wgpu::Buffer>,
     index_count: u32,
+    edge_index_buffer: Option<wgpu::Buffer>,
+    edge_index_count: u32,
     uploaded_version: u64,
 }
 
 pub struct Pipeline {
     pipeline: wgpu::RenderPipeline,
+    edge_pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     instances: HashMap<u64, PerInstance>,
     depth_view: Option<wgpu::TextureView>,
@@ -113,6 +119,51 @@ impl Pipeline {
                 depth_write_enabled: true,
                 depth_compare: wgpu::CompareFunction::Less,
                 stencil: Default::default(),
+                // エッジを surface 表面に重ねるため、面側を僅かに奥へオフセット
+                bias: wgpu::DepthBiasState {
+                    constant: 1,
+                    slope_scale: 1.0,
+                    clamp: 0.0,
+                },
+            }),
+            multisample: Default::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        let edge_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("cadhr_edge_pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader_module,
+                entry_point: Some("vs_edge"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<Vertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x4],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader_module,
+                entry_point: Some("fs_edge"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::LineList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: Default::default(),
                 bias: Default::default(),
             }),
             multisample: Default::default(),
@@ -122,6 +173,7 @@ impl Pipeline {
 
         Self {
             pipeline,
+            edge_pipeline,
             bind_group_layout: bgl,
             instances: HashMap::new(),
             depth_view: None,
@@ -182,6 +234,8 @@ impl Pipeline {
                 vertex_buffer: None,
                 index_buffer: None,
                 index_count: 0,
+                edge_index_buffer: None,
+                edge_index_count: 0,
                 uploaded_version: 0,
             }
         });
@@ -200,6 +254,18 @@ impl Pipeline {
                 usage: wgpu::BufferUsages::INDEX,
             }));
             inst.index_count = mesh.indices.len() as u32;
+            if mesh.edge_indices.is_empty() {
+                inst.edge_index_buffer = None;
+                inst.edge_index_count = 0;
+            } else {
+                inst.edge_index_buffer =
+                    Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("ebuf"),
+                        contents: bytemuck::cast_slice(&mesh.edge_indices),
+                        usage: wgpu::BufferUsages::INDEX,
+                    }));
+                inst.edge_index_count = mesh.edge_indices.len() as u32;
+            }
             inst.uploaded_version = mesh_version;
         }
     }
@@ -266,6 +332,14 @@ impl Pipeline {
         pass.set_vertex_buffer(0, vbuf.slice(..));
         pass.set_index_buffer(ibuf.slice(..), wgpu::IndexFormat::Uint32);
         pass.draw_indexed(0..inst.index_count, 0, 0..1);
+
+        if let Some(ebuf) = inst.edge_index_buffer.as_ref() {
+            if inst.edge_index_count > 0 {
+                pass.set_pipeline(&self.edge_pipeline);
+                pass.set_index_buffer(ebuf.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..inst.edge_index_count, 0, 0..1);
+            }
+        }
     }
 
     pub fn remove_instance(&mut self, id: u64) {
