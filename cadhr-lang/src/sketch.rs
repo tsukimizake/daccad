@@ -11,6 +11,9 @@
 //!     - `let` 束縛への参照 → RHS を辿って var へ押し込む (導出値。
 //!       `let t = b + 150.0` の t をドラッグすると b が書き換わる)。
 //!       RHS に var が無い (`let y = 3.0` 等) 場合は書き込み不可
+//!     - トップレベルのプレーン束縛 ([`top_scalar_consts`]) への参照 → 読み取り専用の
+//!       スカラー定数。逆評価では現在値で定数化され、書き込み対象にならない
+//!       (複数 sketch で共有しつつドラッグで動かしたくない値用)
 //!     - 二項演算 → 書き込み可能な側がちょうど 1 つならそちらへ押し込む
 //!       (もう一方は現在値で定数化)。両方可 / 両方不可なら拒否。
 //!   共有頂点 (junction) は構成する全ての座標式へ書き込む。軸ごとに独立で、
@@ -203,6 +206,95 @@ fn top_var_map(module: &Module) -> HashMap<&str, &Expr> {
         .collect()
 }
 
+/// 同一モジュールのトップレベル・プレーン束縛のうち、スカラー式 (Float リテラル /
+/// 四則演算 / 単項マイナス / 他のスカラー定数・トップレベル var への参照) として
+/// 静的に評価できるものの値。sketch ブロックから読み取り専用スカラーとして参照でき、
+/// 逆評価では常に定数扱いになる (var と違い書き戻し対象にならない)。
+/// 循環参照や有限値にならないものは含めない。
+pub fn top_scalar_consts(module: &Module) -> HashMap<&str, f64> {
+    let vars: HashMap<&str, f64> = module
+        .decls
+        .iter()
+        .filter_map(|d| match d {
+            Decl::Var(v) => signed_lit_leaf(&v.body).map(|(val, _)| (v.name.as_str(), val)),
+            _ => None,
+        })
+        .collect();
+    let cands: HashMap<&str, &Expr> = module
+        .decls
+        .iter()
+        .filter_map(|d| match d {
+            Decl::Value(v) if v.params.is_empty() => Some((v.name.as_str(), &v.body)),
+            _ => None,
+        })
+        .collect();
+
+    fn eval_name<'a>(
+        name: &'a str,
+        vars: &HashMap<&'a str, f64>,
+        cands: &HashMap<&'a str, &'a Expr>,
+        memo: &mut HashMap<&'a str, Option<f64>>,
+        visiting: &mut HashSet<&'a str>,
+    ) -> Option<f64> {
+        if let Some(v) = vars.get(name) {
+            return Some(*v);
+        }
+        if let Some(r) = memo.get(name) {
+            return *r;
+        }
+        if !visiting.insert(name) {
+            return None;
+        }
+        let r = cands
+            .get(name)
+            .copied()
+            .and_then(|e| eval_expr(e, vars, cands, memo, visiting));
+        visiting.remove(name);
+        memo.insert(name, r);
+        r
+    }
+
+    fn eval_expr<'a>(
+        e: &'a Expr,
+        vars: &HashMap<&'a str, f64>,
+        cands: &HashMap<&'a str, &'a Expr>,
+        memo: &mut HashMap<&'a str, Option<f64>>,
+        visiting: &mut HashSet<&'a str>,
+    ) -> Option<f64> {
+        match e {
+            Expr::Lit(Lit::Float(v), _) => Some(*v),
+            Expr::Negate(inner, _) => Some(-eval_expr(inner, vars, cands, memo, visiting)?),
+            Expr::BinOp {
+                op, left, right, ..
+            } => {
+                let l = eval_expr(left, vars, cands, memo, visiting)?;
+                let r = eval_expr(right, vars, cands, memo, visiting)?;
+                match op {
+                    BinOp::Add => Some(l + r),
+                    BinOp::Sub => Some(l - r),
+                    BinOp::Mul => Some(l * r),
+                    BinOp::Div => Some(l / r),
+                    _ => None,
+                }
+            }
+            Expr::Var {
+                module: None, name, ..
+            } => eval_name(name, vars, cands, memo, visiting),
+            _ => None,
+        }
+    }
+
+    let mut memo: HashMap<&str, Option<f64>> = HashMap::new();
+    let mut visiting: HashSet<&str> = HashSet::new();
+    let names: Vec<&str> = cands.keys().copied().collect();
+    for name in names {
+        eval_name(name, &vars, &cands, &mut memo, &mut visiting);
+    }
+    memo.into_iter()
+        .filter_map(|(name, r)| r.filter(|v| v.is_finite()).map(|v| (name, v)))
+        .collect()
+}
+
 pub fn model(module: &Module, binding: &str) -> Result<SketchModel, String> {
     let (bindings, _body, span) = find_block(module, binding)?;
     let block = Block::build(module, bindings)?;
@@ -349,6 +441,9 @@ struct Block<'a> {
     scalar_values: HashMap<&'a str, f64>,
     /// トップレベル `var` (名前 → RHS 式)。ブロック内 binding が優先される。
     top_vars: HashMap<&'a str, &'a Expr>,
+    /// トップレベルのプレーン束縛由来の読み取り専用スカラー定数。
+    /// ブロック内 binding が優先される (シャドウ可)。
+    top_consts: HashMap<&'a str, f64>,
 }
 
 impl<'a> Block<'a> {
@@ -357,6 +452,7 @@ impl<'a> Block<'a> {
             by_name: HashMap::new(),
             scalar_values: HashMap::new(),
             top_vars: top_var_map(module),
+            top_consts: top_scalar_consts(module),
         };
         // RHS がリテラルでない top var は sema が拒否するのでここでは単に無視する
         // (参照時に「スカラーではありません」エラーになる)。
@@ -380,11 +476,18 @@ impl<'a> Block<'a> {
             Expr::Lit(Lit::Float(v), _) => Ok(*v),
             Expr::Var {
                 module: None, name, ..
-            } => self
-                .scalar_values
-                .get(name.as_str())
-                .copied()
-                .ok_or_else(|| format!("`{name}` はスカラーではありません")),
+            } => {
+                if let Some(v) = self.scalar_values.get(name.as_str()) {
+                    return Ok(*v);
+                }
+                // ブロック内 binding がトップレベル定数をシャドウする
+                if !self.by_name.contains_key(name.as_str()) {
+                    if let Some(v) = self.top_consts.get(name.as_str()) {
+                        return Ok(*v);
+                    }
+                }
+                Err(format!("`{name}` はスカラーではありません"))
+            }
             Expr::Negate(inner, _) => Ok(-self.eval_scalar(inner)?),
             Expr::BinOp {
                 op, left, right, ..
@@ -1703,6 +1806,80 @@ mod tests {
         )
         .expect("drag");
         assert!(out.source.contains("var zb = 9.0"), "{}", out.source);
+    }
+
+    #[test]
+    fn model_resolves_top_level_const() {
+        // プレーン束縛のスカラー定数 (計算式・宣言順不問) を座標に使える。
+        let src = "sk =\n    sketch\n        p = p2 w w2\n    in\n    { p = p }\n    end\nw = 10.0\nw2 = w + 5.0\n";
+        let m = model_from_source(src, "sk").expect("model");
+        let SketchGeom::Point { pos, .. } = &m.geoms[0] else {
+            panic!()
+        };
+        assert_eq!(*pos, [10.0, 15.0]);
+    }
+
+    #[test]
+    fn drag_const_axis_is_readonly() {
+        // 定数のみの座標軸は書き込めず pinned になる。リテラル軸だけ動く。
+        let src = "w = 10.0\nsk =\n    sketch\n        p = p2 w 0.0\n    in\n    { p = p }\n    end\n";
+        let out = drag(
+            src,
+            "sk",
+            DragTarget::Point { geom: 0 },
+            DragValue::Pos([99.0, 5.0]),
+        )
+        .expect("drag");
+        assert!(out.source.contains("w = 10.0"), "{}", out.source);
+        assert!(out.source.contains("p2 w 5.0"), "{}", out.source);
+        assert_eq!(out.pinned.len(), 1, "{:?}", out.pinned);
+        assert!(out.pinned[0].contains("x"), "{:?}", out.pinned);
+    }
+
+    #[test]
+    fn drag_const_resolves_ambiguity_to_var() {
+        // cool_wear2 パターン: `let l = c - (v - c)` は c が定数なので
+        // 両辺 writable にならず、v への一意な書き込みに解決される。
+        let src = "c = 60.0\nsk =\n    sketch\n        var v = 102.0\n        let l = c - (v - c)\n        p = p2 l 0.0\n    in\n    { p = p }\n    end\n";
+        let out = drag(
+            src,
+            "sk",
+            DragTarget::Point { geom: 0 },
+            DragValue::Pos([30.0, 0.0]),
+        )
+        .expect("drag");
+        // l = 2c - v なので l = 30 → v = 90
+        assert!(out.source.contains("var v = 90.0"), "{}", out.source);
+        assert!(out.source.contains("c = 60.0"), "{}", out.source);
+    }
+
+    #[test]
+    fn drag_const_referencing_var_does_not_propagate() {
+        // 定数の RHS がトップレベル var を参照していても、定数経由では var へ伝播しない。
+        let src = "var z = 5.0\nw = z + 1.0\nsk =\n    sketch\n        p = p2 w w\n    in\n    { p = p }\n    end\n";
+        let err = drag(
+            src,
+            "sk",
+            DragTarget::Point { geom: 0 },
+            DragValue::Pos([9.0, 8.0]),
+        )
+        .expect_err("should be readonly");
+        assert!(matches!(err, DragReject::ReadOnly(_)), "{err:?}");
+    }
+
+    #[test]
+    fn block_binding_shadows_top_level_const() {
+        // 同名のブロック内 var が定数をシャドウし、ドラッグはブロック内へ書く。
+        let src = "w = 10.0\nsk =\n    sketch\n        var w = 1.0\n        p = p2 w 0.0\n    in\n    { p = p }\n    end\n";
+        let out = drag(
+            src,
+            "sk",
+            DragTarget::Point { geom: 0 },
+            DragValue::Pos([3.0, 0.0]),
+        )
+        .expect("drag");
+        assert!(out.source.contains("var w = 3.0"), "{}", out.source);
+        assert!(out.source.starts_with("w = 10.0"), "{}", out.source);
     }
 
     #[test]

@@ -664,6 +664,37 @@ main = extrude_xy z1 skxz.poly1
     }
 
     #[test]
+    fn top_level_const_shared_between_sketches() {
+        // プレーン束縛のスカラー定数 (計算式込み) を複数 sketch から参照できる。
+        let src = "\
+var z1 = 3.0
+
+zc = z1 + 1.0
+
+skxz =
+    sketch
+        poly1 = polygon (segments [p2 0.0 0.0, p2 4.0 0.0, p2 4.0 zc, p2 0.0 zc])
+    in
+    { poly1 = poly1 }
+    end
+
+skyz =
+    sketch
+        circ1 = circle 2.0 |> translate2d (p2 0.0 0.0) (p2 5.0 zc)
+    in
+    { circ1 = circ1 }
+    end
+
+main = extrude_xy zc skxz.poly1
+";
+        let prog = compile(src).expect("compile");
+        let out = run_binding(&prog, "main", &Inputs::default()).expect("run_binding");
+        assert_eq!(out.models.len(), 1);
+        let contours = run_binding_2d(&prog, "skyz", &Inputs::default()).expect("run_binding_2d");
+        assert_eq!(contours.len(), 1);
+    }
+
+    #[test]
     fn top_level_var_bad_rhs_is_fatal() {
         let src = "var z1 = 1.0 + 2.0\nmain = cube z1 z1 z1\n";
         let err = compile(src).expect_err("expected var validation error");
