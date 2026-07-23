@@ -1478,6 +1478,11 @@ fn collect_lit_leaves(
 /// 対象は座標式全体がリテラルであるもののみ。既に var / 式になっている座標、
 /// circle の半径と translate2d の src は対象外。まとめた座標は以後ドラッグで連動する。
 /// x と y は値が同じでも別の var にする (共有すると斜めドラッグが衝突拒否されるため)。
+///
+/// 値が既存のトップレベル var / スカラー定数 ([`top_scalar_consts`]) と一致する
+/// リテラルは、新しい var を作らずその名前への参照に置き換える (出現 1 回でも対象。
+/// 同値の候補が複数あるときは var 優先・宣言順)。ブロック内 binding にシャドウ
+/// されている定数名は参照先が変わるので対象外。
 pub fn factor_vars(src: &str, binding: &str) -> Result<String, String> {
     let module = parse_or_msg(src)?;
     let (bindings, _body, _span) = find_block(&module, binding)?;
@@ -1499,9 +1504,35 @@ pub fn factor_vars(src: &str, binding: &str) -> Result<String, String> {
         }
     }
 
-    // トップレベル var は shadow できないので、生成名から除外する。
+    // 値が一致する既存のトップレベルスカラー名 (var 優先、宣言順で最初のもの)。
+    // ブロック内 binding にシャドウされている名前は対象外。
+    let mut by_value: HashMap<u64, &str> = HashMap::new();
+    for d in &module.decls {
+        if let Decl::Var(v) = d {
+            if block.by_name.contains_key(v.name.as_str()) {
+                continue;
+            }
+            if let Some((val, _)) = signed_lit_leaf(&v.body) {
+                by_value.entry(val.to_bits()).or_insert(v.name.as_str());
+            }
+        }
+    }
+    for d in &module.decls {
+        if let Decl::Value(v) = d {
+            if block.by_name.contains_key(v.name.as_str()) {
+                continue;
+            }
+            if let Some(val) = block.top_consts.get(v.name.as_str()) {
+                by_value.entry(val.to_bits()).or_insert(v.name.as_str());
+            }
+        }
+    }
+
+    // トップレベル var は shadow できないので、生成名から除外する。定数も
+    // シャドウすると紛らわしいので除外する。
     let mut taken: HashSet<String> = bindings.iter().map(|b| b.name.clone()).collect();
     taken.extend(block.top_vars.keys().map(|n| n.to_string()));
+    taken.extend(block.top_consts.keys().map(|n| n.to_string()));
     let mut decls: Vec<(String, f64)> = Vec::new();
     let mut edits: Vec<TextEdit> = Vec::new();
     for (axis, prefix) in [(0, "x"), (1, "y")] {
@@ -1509,6 +1540,14 @@ pub fn factor_vars(src: &str, binding: &str) -> Result<String, String> {
         let mut groups: Vec<(u64, Vec<Span>)> = Vec::new();
         for (span, v) in &leaves[axis] {
             let bits = v.to_bits();
+            // トップレベル名と同値なら出現回数に関わらずそこへの参照に置き換える
+            if let Some(name) = by_value.get(&bits) {
+                edits.push(TextEdit {
+                    span: *span,
+                    replacement: (*name).to_string(),
+                });
+                continue;
+            }
             match groups.iter_mut().find(|(b, _)| *b == bits) {
                 Some((_, spans)) => spans.push(*span),
                 None => groups.push((bits, vec![*span])),
@@ -1529,23 +1568,25 @@ pub fn factor_vars(src: &str, binding: &str) -> Result<String, String> {
             }
         }
     }
-    if decls.is_empty() {
+    if edits.is_empty() {
         return Err("まとめられる重複座標がありません".to_string());
     }
 
-    // var 宣言は前方参照禁止のため先頭の binding の直前に挿入する
-    let first = bindings
-        .first()
-        .ok_or_else(|| "sketch ブロックに束縛がありません".to_string())?;
-    let indent = line_indent(src, first.span.start);
-    let mut header = String::new();
-    for (name, v) in &decls {
-        header.push_str(&format!("var {name} = {}\n{indent}", fmt_float(*v)));
+    if !decls.is_empty() {
+        // var 宣言は前方参照禁止のため先頭の binding の直前に挿入する
+        let first = bindings
+            .first()
+            .ok_or_else(|| "sketch ブロックに束縛がありません".to_string())?;
+        let indent = line_indent(src, first.span.start);
+        let mut header = String::new();
+        for (name, v) in &decls {
+            header.push_str(&format!("var {name} = {}\n{indent}", fmt_float(*v)));
+        }
+        edits.push(TextEdit {
+            span: Span::new(first.span.start, first.span.start),
+            replacement: header,
+        });
     }
-    edits.push(TextEdit {
-        span: Span::new(first.span.start, first.span.start),
-        replacement: header,
-    });
     Ok(apply_edits(src, &edits))
 }
 
@@ -2257,6 +2298,50 @@ mod tests {
         let s = factor_vars(src, "sk").expect("factor");
         // トップレベル x1 と衝突しない名前が生成される
         assert!(s.contains("var x2 = 5.0"), "{s}");
+        model_from_source(&s, "sk").expect("parses");
+    }
+
+    #[test]
+    fn factor_vars_avoids_top_level_const_names() {
+        let src = "x1 = 99.0\nsk =\n    sketch\n        pt1 = p2 5.0 0.0\n        pt2 = p2 5.0 1.0\n    in\n    { pt1 = pt1, pt2 = pt2 }\n    end\n";
+        let s = factor_vars(src, "sk").expect("factor");
+        assert!(s.contains("var x2 = 5.0"), "{s}");
+        model_from_source(&s, "sk").expect("parses");
+    }
+
+    #[test]
+    fn factor_vars_references_matching_top_level_names() {
+        // 50.0 は var z1、60.0 は定数 c と同値 → 出現 1 回でも参照に置き換え、
+        // 新しい var は作らない。
+        let src = "var z1 = 50.0\nc = 60.0\nsk =\n    sketch\n        pt1 = p2 50.0 60.0\n    in\n    { pt1 = pt1 }\n    end\n";
+        let s = factor_vars(src, "sk").expect("factor");
+        assert!(s.contains("pt1 = p2 z1 c"), "{s}");
+        assert!(!s.contains("var x1"), "{s}");
+        let m = model_from_source(&s, "sk").expect("parses");
+        let SketchGeom::Point { pos, .. } = &m.geoms[0] else {
+            panic!()
+        };
+        assert_eq!(*pos, [50.0, 60.0]);
+    }
+
+    #[test]
+    fn factor_vars_mixes_top_level_refs_and_new_vars() {
+        // 50.0 (2 回) は var z1 への参照、7.0 (2 回) は新しい var x1 になる。
+        let src = "var z1 = 50.0\nsk =\n    sketch\n        pt1 = p2 7.0 50.0\n        pt2 = p2 7.0 50.0\n    in\n    { pt1 = pt1, pt2 = pt2 }\n    end\n";
+        let s = factor_vars(src, "sk").expect("factor");
+        assert!(s.contains("var x1 = 7.0"), "{s}");
+        assert!(s.contains("pt1 = p2 x1 z1"), "{s}");
+        assert!(s.contains("pt2 = p2 x1 z1"), "{s}");
+        model_from_source(&s, "sk").expect("parses");
+    }
+
+    #[test]
+    fn factor_vars_skips_shadowed_const() {
+        // 定数 w はブロック内 binding にシャドウされているので参照しない。
+        let src = "w = 4.0\nsk =\n    sketch\n        w = p2 0.0 9.0\n        pt1 = p2 4.0 1.0\n        pt2 = p2 4.0 2.0\n    in\n    { w = w, pt1 = pt1, pt2 = pt2 }\n    end\n";
+        let s = factor_vars(src, "sk").expect("factor");
+        assert!(s.contains("var x1 = 4.0"), "{s}");
+        assert!(s.contains("pt1 = p2 x1 1.0"), "{s}");
         model_from_source(&s, "sk").expect("parses");
     }
 
