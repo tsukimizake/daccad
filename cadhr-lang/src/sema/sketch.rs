@@ -9,21 +9,20 @@
 //! - `name = <幾何式>` — `p2` / `line` / `polygon` / `circle` の束縛
 //! - `/` の右辺は 0 でない Float リテラルのみ (逆評価が常に定義されるように)
 //! - ブロック外の変数参照・Int リテラル・if / case / lambda 等は禁止。
-//!   例外として同一モジュールのトップレベル `var` はスカラーとして参照できる
-//!   (複数 sketch ブロック間での座標共有用。書き込み対象になる)。
-//!   同様にトップレベルのプレーン束縛のうちスカラー式として静的に評価できるもの
-//!   ([`crate::sketch::top_scalar_consts`]) も参照できるが、こちらは読み取り専用
-//!   (逆評価の書き込み対象にならない。ブロック内 binding でシャドウ可)
+//!   例外として同一モジュールのトップレベル `var` / `let` はスカラーとして参照できる
+//!   (複数 sketch ブロック間での座標共有用)。`var` は書き込み対象、`let` は読み取り
+//!   専用 (逆評価では現在値で定数化)。どちらもブロック内 binding でシャドウ不可
 //! - body は `{ f = 幾何名, ... }` の record か単一の幾何名のみ
 //! - polygon の線分列は静的に連結 + 閉路であること
 //!
-//! トップレベル `var` 宣言自体もここで検査する (RHS は符号付き Float リテラルのみ)。
+//! トップレベル `var` / `let` 宣言自体もここで検査する (var の RHS は符号付き Float
+//! リテラルのみ。let の RHS はスカラー式で、宣言順自由・循環参照はエラー)。
 //!
 //! 検査は構文的 (型推論より前に実行できる)。座標値はブロック内で静的に決まるので
 //! 連結性検査のためにここで評価する。
 
 use crate::diagnostic::{Diagnostic, Span};
-use crate::sketch::top_scalar_consts;
+use crate::sketch::top_let_values;
 use crate::syntax::ast::*;
 use std::collections::{HashMap, HashSet};
 
@@ -37,8 +36,8 @@ const RESERVED_HEADS: [&str; 6] = ["p2", "line", "polygon", "segments", "circle"
 struct TopScope<'a> {
     /// `var` 宣言 (書き込み対象)。静的値は RHS 検査エラー時 `None`。
     vars: HashMap<&'a str, Option<f64>>,
-    /// プレーン束縛由来の読み取り専用スカラー定数。
-    consts: HashMap<&'a str, f64>,
+    /// `let` 宣言 (読み取り専用)。静的値は RHS 検査エラー時 `None`。
+    lets: HashMap<&'a str, Option<f64>>,
 }
 
 pub fn check_module(m: &Module) -> Vec<Diagnostic> {
@@ -57,16 +56,50 @@ pub fn check_module(m: &Module) -> Vec<Diagnostic> {
             if val.is_none() {
                 diag.push(Diagnostic::SketchDsl {
                     span: v.body.span(),
-                    message: "トップレベル var の右辺は Float リテラルのみ書けます (例: `var z = 3.0`)。計算式はプレーン束縛 (`z = 1.0 + 2.0`, 読み取り専用) か sketch 内の let (ドラッグは参照先の var に伝播します) で書けます"
+                    message: "トップレベル var の右辺は Float リテラルのみ書けます (例: `var z = 3.0`)。計算式はトップレベル let (読み取り専用) か sketch 内の let (ドラッグは参照先の var に伝播します) で書けます"
                         .to_string(),
                 });
             }
             top_vars.insert(v.name.as_str(), val);
         }
     }
+    // トップレベル `let` の収集 + RHS 検査。値は宣言順自由の相互参照込みで
+    // `top_let_values` が評価する (循環や非有限値は含まれない)。
+    let let_values = top_let_values(m);
+    let scalar_names: HashSet<&str> = m
+        .decls
+        .iter()
+        .filter_map(|d| match d {
+            Decl::Var(v) | Decl::Let(v) => Some(v.name.as_str()),
+            _ => None,
+        })
+        .collect();
+    let mut top_lets: HashMap<&str, Option<f64>> = HashMap::new();
+    for d in &m.decls {
+        if let Decl::Let(v) = d {
+            if RESERVED_HEADS.contains(&v.name.as_str()) {
+                diag.push(Diagnostic::SketchDsl {
+                    span: v.span,
+                    message: format!("`{}` は sketch 内で予約された名前です", v.name),
+                });
+            }
+            let val = let_values.get(v.name.as_str()).copied();
+            if check_top_let_rhs(&v.body, &scalar_names, &mut diag) && val.is_none() {
+                // 形は正しいのに値が出ない = 循環参照か非有限値 (0 除算など)
+                diag.push(Diagnostic::SketchDsl {
+                    span: v.body.span(),
+                    message: format!(
+                        "トップレベル let `{}` が静的に評価できません (循環参照か、値が有限になりません)",
+                        v.name
+                    ),
+                });
+            }
+            top_lets.insert(v.name.as_str(), val);
+        }
+    }
     let top = TopScope {
         vars: top_vars,
-        consts: top_scalar_consts(m),
+        lets: top_lets,
     };
     for d in &m.decls {
         match d {
@@ -76,6 +109,59 @@ pub fn check_module(m: &Module) -> Vec<Diagnostic> {
         }
     }
     diag
+}
+
+/// トップレベル `let` の右辺検査: スカラー式 (リテラル / 四則演算 / 単項マイナス /
+/// トップレベル var・let への参照) のみ。逆評価対象にならないので sketch 内 let と
+/// 違い `/` の右辺制約は無い。形が正しければ true。
+fn check_top_let_rhs(e: &Expr, scalar_names: &HashSet<&str>, diag: &mut Vec<Diagnostic>) -> bool {
+    let mut err = |span: Span, message: String| {
+        diag.push(Diagnostic::SketchDsl { span, message });
+        false
+    };
+    match e {
+        Expr::Lit(Lit::Float(_), _) => true,
+        Expr::Lit(Lit::Int(_), span) => err(
+            *span,
+            "Int リテラルは使えません。Float で書いてください (例: `3.0`)".to_string(),
+        ),
+        Expr::Var {
+            module: None,
+            name,
+            span,
+        } => {
+            if scalar_names.contains(name.as_str()) {
+                true
+            } else {
+                err(
+                    *span,
+                    format!("未定義の名前 `{name}` (トップレベル let から参照できるのはトップレベルの var / let のみです)"),
+                )
+            }
+        }
+        Expr::Negate(inner, _) => check_top_let_rhs(inner, scalar_names, diag),
+        Expr::BinOp {
+            op,
+            left,
+            right,
+            span,
+        } => match op {
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => {
+                let l = check_top_let_rhs(left, scalar_names, diag);
+                let r = check_top_let_rhs(right, scalar_names, diag);
+                l && r
+            }
+            _ => err(
+                *span,
+                "スカラー式で使える演算子は + - * / のみです".to_string(),
+            ),
+        },
+        _ => err(
+            span_of(e),
+            "トップレベル let の右辺はスカラー式のみ書けます (リテラル / 四則演算 / トップレベル var・let の参照)"
+                .to_string(),
+        ),
+    }
 }
 
 /// 式ツリーから sketch ブロックを探して検査する。sketch の内部には再帰しない
@@ -174,16 +260,14 @@ fn check_sketch(
     top: &TopScope,
     diag: &mut Vec<Diagnostic>,
 ) {
-    // トップレベルのスカラー定数と var を env に前置きする (var 優先)。
-    // 定数はブロック内 binding でシャドウできるので insert で上書きされる。
+    // トップレベル var / let をスカラーとして参照できるよう env に前置きする。
     let mut env: HashMap<&str, Entry> = top
-        .consts
+        .lets
         .iter()
-        .map(|(name, v)| (*name, Entry::Scalar(Some(*v))))
+        .map(|(name, v)| (*name, Entry::Scalar(*v)))
         .collect();
     env.extend(top.vars.iter().map(|(name, v)| (*name, Entry::Scalar(*v))));
     let mut cx = Ctx { env, diag };
-    let mut block_names: HashSet<&str> = HashSet::new();
     for b in bindings {
         if RESERVED_HEADS.contains(&b.name.as_str()) {
             cx.err(
@@ -195,7 +279,12 @@ fn check_sketch(
                 b.name_span,
                 format!("`{}` はトップレベル var と同名です (shadow できません)", b.name),
             );
-        } else if !block_names.insert(b.name.as_str()) {
+        } else if top.lets.contains_key(b.name.as_str()) {
+            cx.err(
+                b.name_span,
+                format!("`{}` はトップレベル let と同名です (shadow できません)", b.name),
+            );
+        } else if cx.env.contains_key(b.name.as_str()) {
             cx.err(
                 b.name_span,
                 format!("`{}` は既に定義されています", b.name),
@@ -261,7 +350,7 @@ fn check_scalar(cx: &mut Ctx, e: &Expr) -> Option<f64> {
             None => {
                 cx.err(
                     *span,
-                    format!("未定義の名前 `{name}` (sketch ブロック外で参照できるのはトップレベルの var とスカラー定数のみです)"),
+                    format!("未定義の名前 `{name}` (sketch ブロック外で参照できるのはトップレベルの var / let のみです)"),
                 );
                 None
             }
@@ -385,7 +474,7 @@ fn check_point_ref(cx: &mut Ctx, e: &Expr) -> Option<(f64, f64)> {
             None => {
                 cx.err(
                     *span,
-                    format!("未定義の名前 `{name}` (sketch ブロック外で参照できるのはトップレベルの var とスカラー定数のみです)"),
+                    format!("未定義の名前 `{name}` (sketch ブロック外で参照できるのはトップレベルの var / let のみです)"),
                 );
                 None
             }
@@ -423,7 +512,7 @@ fn check_segment_item(cx: &mut Ctx, e: &Expr) -> Option<((f64, f64), (f64, f64))
             None => {
                 cx.err(
                     *span,
-                    format!("未定義の名前 `{name}` (sketch ブロック外で参照できるのはトップレベルの var とスカラー定数のみです)"),
+                    format!("未定義の名前 `{name}` (sketch ブロック外で参照できるのはトップレベルの var / let のみです)"),
                 );
                 None
             }
@@ -615,42 +704,59 @@ mod tests {
     }
 
     #[test]
-    fn non_scalar_external_reference_rejected() {
+    fn external_reference_rejected() {
+        // 通常のトップレベル宣言は (スカラーでも) sketch から参照できない。
         assert_err_contains(
-            "w = cube 1.0 1.0 1.0\nsk = sketch\n    p = p2 w 0.0\n    in p\nend\n",
+            "w = 10.0\nsk = sketch\n    p = p2 w 0.0\n    in p\nend\n",
             "未定義の名前 `w`",
         );
     }
 
     #[test]
-    fn top_level_const_reference_ok() {
-        // プレーン束縛のスカラー定数は宣言順に関係なく参照できる。let のオペランドにも使える。
+    fn top_level_let_reference_ok() {
+        // トップレベル let は宣言順に関係なく参照できる。sketch 内 let のオペランドにも使える。
         assert_ok(
-            "sk = sketch\n    let y = w + 1.0\n    p = p2 w y\n    in p\nend\nw = 10.0\n",
+            "sk = sketch\n    let y = w + 1.0\n    p = p2 w y\n    in p\nend\nlet w = 10.0\n",
         );
     }
 
     #[test]
-    fn top_level_const_computed_ok() {
-        // 計算式・定数同士の参照・トップレベル var への参照も定数として解決できる。
+    fn top_level_let_computed_ok() {
+        // 計算式・let 同士の参照・トップレベル var への参照も書ける。
         assert_ok(
-            "var z = 5.0\nw = 1.0 + 2.0\nw2 = w * 2.0 - z\nsk = sketch\n    p = p2 w w2\n    in p\nend\n",
+            "var z = 5.0\nlet w = 1.0 + 2.0\nlet w2 = w * 2.0 - z\nsk = sketch\n    p = p2 w w2\n    in p\nend\n",
         );
     }
 
     #[test]
-    fn top_level_const_shadowing_ok() {
-        // var と違い、プレーン束縛の定数は sketch 内 binding でシャドウできる。
-        assert_ok(
-            "w = 10.0\nsk = sketch\n    var w = 1.0\n    p = p2 w 0.0\n    in p\nend\n",
-        );
-    }
-
-    #[test]
-    fn cyclic_top_level_consts_rejected() {
+    fn top_level_let_shadowing_rejected() {
         assert_err_contains(
-            "a = b + 1.0\nb = a + 1.0\nsk = sketch\n    p = p2 a 0.0\n    in p\nend\n",
-            "未定義の名前 `a`",
+            "let w = 10.0\nsk = sketch\n    var w = 1.0\n    p = p2 w 0.0\n    in p\nend\n",
+            "トップレベル let と同名です",
+        );
+    }
+
+    #[test]
+    fn top_level_let_non_scalar_rhs_rejected() {
+        assert_err_contains(
+            "let w = cube 1.0 1.0 1.0\nsk = sketch\n    p = p2 w 0.0\n    in p\nend\n",
+            "トップレベル let の右辺はスカラー式のみ",
+        );
+    }
+
+    #[test]
+    fn top_level_let_reserved_name_rejected() {
+        assert_err_contains(
+            "let p2 = 1.0\nsk = sketch\n    q = p2 1.0 1.0\n    in q\nend\n",
+            "予約された名前",
+        );
+    }
+
+    #[test]
+    fn cyclic_top_level_lets_rejected() {
+        assert_err_contains(
+            "let a = b + 1.0\nlet b = a + 1.0\nsk = sketch\n    p = p2 a 0.0\n    in p\nend\n",
+            "静的に評価できません",
         );
     }
 

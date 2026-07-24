@@ -77,9 +77,12 @@ pub enum Decl {
     /// 逆評価 (GUI ドラッグ) の書き込み対象になる。型推論・評価上は通常の
     /// 定数定義と同じなので payload は `ValueDecl` を共有する (params は常に空)。
     /// RHS の制約は `sema::sketch` が検査する。
-    /// 書き込み対象にしたくない共有スカラーはプレーンな束縛で書く
-    /// (`sketch::top_scalar_consts` が読み取り専用定数として拾う)。
     Var(ValueDecl),
+    /// `let x = <スカラー式>`。sketch ブロック間で共有する読み取り専用スカラー。
+    /// var と違い逆評価の書き込み対象にならない (ドラッグでは現在値で定数化される)。
+    /// RHS はスカラー式 (リテラル / 四則演算 / 他のトップレベル var・let への参照) のみで、
+    /// 制約は `sema::sketch` が検査する。型推論・評価上は通常の定数定義と同じ。
+    Let(ValueDecl),
     /// `type T a b = C1 a | C2 b`
     Type(TypeDecl),
     /// `type alias R = { f : T }`

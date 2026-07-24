@@ -171,7 +171,7 @@ impl<'r> Evaluator<'r> {
             .iter()
             .filter_map(|d| match d {
                 Decl::Value(v) if v.params.is_empty() => Some(v),
-                Decl::Var(v) => Some(v),
+                Decl::Var(v) | Decl::Let(v) => Some(v),
                 _ => None,
             })
             .collect();
@@ -270,7 +270,7 @@ impl<'r> Evaluator<'r> {
             .iter()
             .filter_map(|d| match d {
                 Decl::Value(v) if v.params.is_empty() => Some(v),
-                Decl::Var(v) => Some(v),
+                Decl::Var(v) | Decl::Let(v) => Some(v),
                 _ => None,
             })
             .collect();

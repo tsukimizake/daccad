@@ -114,6 +114,12 @@ fn pretty_decl(d: &Decl, buf: &mut String) {
             buf.push_str(" = ");
             pretty_expr(&v.body, 0, buf);
         }
+        Decl::Let(v) => {
+            buf.push_str("let ");
+            buf.push_str(&v.name);
+            buf.push_str(" = ");
+            pretty_expr(&v.body, 0, buf);
+        }
         Decl::Value(v) => {
             buf.push_str(&v.name);
             for p in &v.params {

@@ -664,12 +664,12 @@ main = extrude_xy z1 skxz.poly1
     }
 
     #[test]
-    fn top_level_const_shared_between_sketches() {
-        // プレーン束縛のスカラー定数 (計算式込み) を複数 sketch から参照できる。
+    fn top_level_let_shared_between_sketches() {
+        // トップレベル let (計算式込み) を複数 sketch から参照できる。
         let src = "\
 var z1 = 3.0
 
-zc = z1 + 1.0
+let zc = z1 + 1.0
 
 skxz =
     sketch

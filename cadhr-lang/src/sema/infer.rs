@@ -951,7 +951,7 @@ fn infer_module_into(
         .decls
         .iter()
         .filter_map(|d| match d {
-            Decl::Value(v) | Decl::Var(v) => Some(v),
+            Decl::Value(v) | Decl::Var(v) | Decl::Let(v) => Some(v),
             _ => None,
         })
         .collect();

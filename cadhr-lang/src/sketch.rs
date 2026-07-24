@@ -11,7 +11,7 @@
 //!     - `let` 束縛への参照 → RHS を辿って var へ押し込む (導出値。
 //!       `let t = b + 150.0` の t をドラッグすると b が書き換わる)。
 //!       RHS に var が無い (`let y = 3.0` 等) 場合は書き込み不可
-//!     - トップレベルのプレーン束縛 ([`top_scalar_consts`]) への参照 → 読み取り専用の
+//!     - トップレベル `let` ([`top_let_values`]) への参照 → 読み取り専用の
 //!       スカラー定数。逆評価では現在値で定数化され、書き込み対象にならない
 //!       (複数 sketch で共有しつつドラッグで動かしたくない値用)
 //!     - 二項演算 → 書き込み可能な側がちょうど 1 つならそちらへ押し込む
@@ -206,12 +206,12 @@ fn top_var_map(module: &Module) -> HashMap<&str, &Expr> {
         .collect()
 }
 
-/// 同一モジュールのトップレベル・プレーン束縛のうち、スカラー式 (Float リテラル /
-/// 四則演算 / 単項マイナス / 他のスカラー定数・トップレベル var への参照) として
-/// 静的に評価できるものの値。sketch ブロックから読み取り専用スカラーとして参照でき、
+/// 同一モジュールのトップレベル `let` 宣言の静的値。RHS はスカラー式 (Float リテラル /
+/// 四則演算 / 単項マイナス / 他のトップレベル var・let への参照) で、宣言順に関係なく
+/// 参照できる。sketch ブロックから読み取り専用スカラーとして参照でき、
 /// 逆評価では常に定数扱いになる (var と違い書き戻し対象にならない)。
-/// 循環参照や有限値にならないものは含めない。
-pub fn top_scalar_consts(module: &Module) -> HashMap<&str, f64> {
+/// 循環参照や有限値にならないもの (sema がエラーにする) は含めない。
+pub fn top_let_values(module: &Module) -> HashMap<&str, f64> {
     let vars: HashMap<&str, f64> = module
         .decls
         .iter()
@@ -224,7 +224,7 @@ pub fn top_scalar_consts(module: &Module) -> HashMap<&str, f64> {
         .decls
         .iter()
         .filter_map(|d| match d {
-            Decl::Value(v) if v.params.is_empty() => Some((v.name.as_str(), &v.body)),
+            Decl::Let(v) => Some((v.name.as_str(), &v.body)),
             _ => None,
         })
         .collect();
@@ -441,9 +441,8 @@ struct Block<'a> {
     scalar_values: HashMap<&'a str, f64>,
     /// トップレベル `var` (名前 → RHS 式)。ブロック内 binding が優先される。
     top_vars: HashMap<&'a str, &'a Expr>,
-    /// トップレベルのプレーン束縛由来の読み取り専用スカラー定数。
-    /// ブロック内 binding が優先される (シャドウ可)。
-    top_consts: HashMap<&'a str, f64>,
+    /// トップレベル `let` の読み取り専用スカラー定数 (シャドウ不可、sema が検査)。
+    top_lets: HashMap<&'a str, f64>,
 }
 
 impl<'a> Block<'a> {
@@ -452,8 +451,11 @@ impl<'a> Block<'a> {
             by_name: HashMap::new(),
             scalar_values: HashMap::new(),
             top_vars: top_var_map(module),
-            top_consts: top_scalar_consts(module),
+            top_lets: top_let_values(module),
         };
+        for (name, v) in &block.top_lets {
+            block.scalar_values.insert(*name, *v);
+        }
         // RHS がリテラルでない top var は sema が拒否するのでここでは単に無視する
         // (参照時に「スカラーではありません」エラーになる)。
         for (name, e) in &block.top_vars {
@@ -476,18 +478,11 @@ impl<'a> Block<'a> {
             Expr::Lit(Lit::Float(v), _) => Ok(*v),
             Expr::Var {
                 module: None, name, ..
-            } => {
-                if let Some(v) = self.scalar_values.get(name.as_str()) {
-                    return Ok(*v);
-                }
-                // ブロック内 binding がトップレベル定数をシャドウする
-                if !self.by_name.contains_key(name.as_str()) {
-                    if let Some(v) = self.top_consts.get(name.as_str()) {
-                        return Ok(*v);
-                    }
-                }
-                Err(format!("`{name}` はスカラーではありません"))
-            }
+            } => self
+                .scalar_values
+                .get(name.as_str())
+                .copied()
+                .ok_or_else(|| format!("`{name}` はスカラーではありません")),
             Expr::Negate(inner, _) => Ok(-self.eval_scalar(inner)?),
             Expr::BinOp {
                 op, left, right, ..
@@ -1479,10 +1474,9 @@ fn collect_lit_leaves(
 /// circle の半径と translate2d の src は対象外。まとめた座標は以後ドラッグで連動する。
 /// x と y は値が同じでも別の var にする (共有すると斜めドラッグが衝突拒否されるため)。
 ///
-/// 値が既存のトップレベル var / スカラー定数 ([`top_scalar_consts`]) と一致する
-/// リテラルは、新しい var を作らずその名前への参照に置き換える (出現 1 回でも対象。
-/// 同値の候補が複数あるときは var 優先・宣言順)。ブロック内 binding にシャドウ
-/// されている定数名は参照先が変わるので対象外。
+/// 値が既存のトップレベル var / let と一致するリテラルは、新しい var を作らず
+/// その名前への参照に置き換える (出現 1 回でも対象。同値の候補が複数あるときは
+/// var 優先・宣言順)。
 pub fn factor_vars(src: &str, binding: &str) -> Result<String, String> {
     let module = parse_or_msg(src)?;
     let (bindings, _body, _span) = find_block(&module, binding)?;
@@ -1505,34 +1499,26 @@ pub fn factor_vars(src: &str, binding: &str) -> Result<String, String> {
     }
 
     // 値が一致する既存のトップレベルスカラー名 (var 優先、宣言順で最初のもの)。
-    // ブロック内 binding にシャドウされている名前は対象外。
     let mut by_value: HashMap<u64, &str> = HashMap::new();
     for d in &module.decls {
         if let Decl::Var(v) = d {
-            if block.by_name.contains_key(v.name.as_str()) {
-                continue;
-            }
             if let Some((val, _)) = signed_lit_leaf(&v.body) {
                 by_value.entry(val.to_bits()).or_insert(v.name.as_str());
             }
         }
     }
     for d in &module.decls {
-        if let Decl::Value(v) = d {
-            if block.by_name.contains_key(v.name.as_str()) {
-                continue;
-            }
-            if let Some(val) = block.top_consts.get(v.name.as_str()) {
+        if let Decl::Let(v) = d {
+            if let Some(val) = block.top_lets.get(v.name.as_str()) {
                 by_value.entry(val.to_bits()).or_insert(v.name.as_str());
             }
         }
     }
 
-    // トップレベル var は shadow できないので、生成名から除外する。定数も
-    // シャドウすると紛らわしいので除外する。
+    // トップレベル var / let は shadow できないので、生成名から除外する。
     let mut taken: HashSet<String> = bindings.iter().map(|b| b.name.clone()).collect();
     taken.extend(block.top_vars.keys().map(|n| n.to_string()));
-    taken.extend(block.top_consts.keys().map(|n| n.to_string()));
+    taken.extend(block.top_lets.keys().map(|n| n.to_string()));
     let mut decls: Vec<(String, f64)> = Vec::new();
     let mut edits: Vec<TextEdit> = Vec::new();
     for (axis, prefix) in [(0, "x"), (1, "y")] {
@@ -1850,9 +1836,9 @@ mod tests {
     }
 
     #[test]
-    fn model_resolves_top_level_const() {
-        // プレーン束縛のスカラー定数 (計算式・宣言順不問) を座標に使える。
-        let src = "sk =\n    sketch\n        p = p2 w w2\n    in\n    { p = p }\n    end\nw = 10.0\nw2 = w + 5.0\n";
+    fn model_resolves_top_level_let() {
+        // トップレベル let (計算式・宣言順不問) を座標に使える。
+        let src = "sk =\n    sketch\n        p = p2 w w2\n    in\n    { p = p }\n    end\nlet w = 10.0\nlet w2 = w + 5.0\n";
         let m = model_from_source(src, "sk").expect("model");
         let SketchGeom::Point { pos, .. } = &m.geoms[0] else {
             panic!()
@@ -1861,9 +1847,9 @@ mod tests {
     }
 
     #[test]
-    fn drag_const_axis_is_readonly() {
-        // 定数のみの座標軸は書き込めず pinned になる。リテラル軸だけ動く。
-        let src = "w = 10.0\nsk =\n    sketch\n        p = p2 w 0.0\n    in\n    { p = p }\n    end\n";
+    fn drag_top_let_axis_is_readonly() {
+        // トップレベル let のみの座標軸は書き込めず pinned になる。リテラル軸だけ動く。
+        let src = "let w = 10.0\nsk =\n    sketch\n        p = p2 w 0.0\n    in\n    { p = p }\n    end\n";
         let out = drag(
             src,
             "sk",
@@ -1871,17 +1857,17 @@ mod tests {
             DragValue::Pos([99.0, 5.0]),
         )
         .expect("drag");
-        assert!(out.source.contains("w = 10.0"), "{}", out.source);
+        assert!(out.source.contains("let w = 10.0"), "{}", out.source);
         assert!(out.source.contains("p2 w 5.0"), "{}", out.source);
         assert_eq!(out.pinned.len(), 1, "{:?}", out.pinned);
         assert!(out.pinned[0].contains("x"), "{:?}", out.pinned);
     }
 
     #[test]
-    fn drag_const_resolves_ambiguity_to_var() {
-        // cool_wear2 パターン: `let l = c - (v - c)` は c が定数なので
+    fn drag_top_let_resolves_ambiguity_to_var() {
+        // cool_wear2 パターン: `let l = c - (v - c)` は c がトップレベル let なので
         // 両辺 writable にならず、v への一意な書き込みに解決される。
-        let src = "c = 60.0\nsk =\n    sketch\n        var v = 102.0\n        let l = c - (v - c)\n        p = p2 l 0.0\n    in\n    { p = p }\n    end\n";
+        let src = "let c = 60.0\nsk =\n    sketch\n        var v = 102.0\n        let l = c - (v - c)\n        p = p2 l 0.0\n    in\n    { p = p }\n    end\n";
         let out = drag(
             src,
             "sk",
@@ -1891,13 +1877,13 @@ mod tests {
         .expect("drag");
         // l = 2c - v なので l = 30 → v = 90
         assert!(out.source.contains("var v = 90.0"), "{}", out.source);
-        assert!(out.source.contains("c = 60.0"), "{}", out.source);
+        assert!(out.source.contains("let c = 60.0"), "{}", out.source);
     }
 
     #[test]
-    fn drag_const_referencing_var_does_not_propagate() {
-        // 定数の RHS がトップレベル var を参照していても、定数経由では var へ伝播しない。
-        let src = "var z = 5.0\nw = z + 1.0\nsk =\n    sketch\n        p = p2 w w\n    in\n    { p = p }\n    end\n";
+    fn drag_top_let_referencing_var_does_not_propagate() {
+        // トップレベル let の RHS が var を参照していても、let 経由では var へ伝播しない。
+        let src = "var z = 5.0\nlet w = z + 1.0\nsk =\n    sketch\n        p = p2 w w\n    in\n    { p = p }\n    end\n";
         let err = drag(
             src,
             "sk",
@@ -1906,21 +1892,6 @@ mod tests {
         )
         .expect_err("should be readonly");
         assert!(matches!(err, DragReject::ReadOnly(_)), "{err:?}");
-    }
-
-    #[test]
-    fn block_binding_shadows_top_level_const() {
-        // 同名のブロック内 var が定数をシャドウし、ドラッグはブロック内へ書く。
-        let src = "w = 10.0\nsk =\n    sketch\n        var w = 1.0\n        p = p2 w 0.0\n    in\n    { p = p }\n    end\n";
-        let out = drag(
-            src,
-            "sk",
-            DragTarget::Point { geom: 0 },
-            DragValue::Pos([3.0, 0.0]),
-        )
-        .expect("drag");
-        assert!(out.source.contains("var w = 3.0"), "{}", out.source);
-        assert!(out.source.starts_with("w = 10.0"), "{}", out.source);
     }
 
     #[test]
@@ -2302,8 +2273,8 @@ mod tests {
     }
 
     #[test]
-    fn factor_vars_avoids_top_level_const_names() {
-        let src = "x1 = 99.0\nsk =\n    sketch\n        pt1 = p2 5.0 0.0\n        pt2 = p2 5.0 1.0\n    in\n    { pt1 = pt1, pt2 = pt2 }\n    end\n";
+    fn factor_vars_avoids_top_level_let_names() {
+        let src = "let x1 = 99.0\nsk =\n    sketch\n        pt1 = p2 5.0 0.0\n        pt2 = p2 5.0 1.0\n    in\n    { pt1 = pt1, pt2 = pt2 }\n    end\n";
         let s = factor_vars(src, "sk").expect("factor");
         assert!(s.contains("var x2 = 5.0"), "{s}");
         model_from_source(&s, "sk").expect("parses");
@@ -2311,9 +2282,9 @@ mod tests {
 
     #[test]
     fn factor_vars_references_matching_top_level_names() {
-        // 50.0 は var z1、60.0 は定数 c と同値 → 出現 1 回でも参照に置き換え、
-        // 新しい var は作らない。
-        let src = "var z1 = 50.0\nc = 60.0\nsk =\n    sketch\n        pt1 = p2 50.0 60.0\n    in\n    { pt1 = pt1 }\n    end\n";
+        // 50.0 は var z1、60.0 はトップレベル let c と同値 → 出現 1 回でも参照に
+        // 置き換え、新しい var は作らない。
+        let src = "var z1 = 50.0\nlet c = 60.0\nsk =\n    sketch\n        pt1 = p2 50.0 60.0\n    in\n    { pt1 = pt1 }\n    end\n";
         let s = factor_vars(src, "sk").expect("factor");
         assert!(s.contains("pt1 = p2 z1 c"), "{s}");
         assert!(!s.contains("var x1"), "{s}");
@@ -2336,9 +2307,9 @@ mod tests {
     }
 
     #[test]
-    fn factor_vars_skips_shadowed_const() {
-        // 定数 w はブロック内 binding にシャドウされているので参照しない。
-        let src = "w = 4.0\nsk =\n    sketch\n        w = p2 0.0 9.0\n        pt1 = p2 4.0 1.0\n        pt2 = p2 4.0 2.0\n    in\n    { w = w, pt1 = pt1, pt2 = pt2 }\n    end\n";
+    fn factor_vars_ignores_plain_top_level_bindings() {
+        // 通常のトップレベル宣言は sketch から不可視なので、同値でも参照しない。
+        let src = "w = 4.0\nsk =\n    sketch\n        pt1 = p2 4.0 1.0\n        pt2 = p2 4.0 2.0\n    in\n    { pt1 = pt1, pt2 = pt2 }\n    end\n";
         let s = factor_vars(src, "sk").expect("factor");
         assert!(s.contains("var x1 = 4.0"), "{s}");
         assert!(s.contains("pt1 = p2 x1 1.0"), "{s}");
