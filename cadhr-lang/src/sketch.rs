@@ -10,10 +10,9 @@
 //!       参照している全ブロックが連動する)
 //!     - `let` 束縛への参照 → RHS を辿って var へ押し込む (導出値。
 //!       `let t = b + 150.0` の t をドラッグすると b が書き換わる)。
-//!       RHS に var が無い (`let y = 3.0` 等) 場合は書き込み不可
-//!     - トップレベル `let` ([`top_let_values`]) への参照 → 読み取り専用の
-//!       スカラー定数。逆評価では現在値で定数化され、書き込み対象にならない
-//!       (複数 sketch で共有しつつドラッグで動かしたくない値用)
+//!       RHS に var が無い (`let y = 3.0` 等) 場合は書き込み不可。
+//!       トップレベル `let` ([`top_let_values`]) も同じ導出値の規則で、リテラルのみの
+//!       `let x = 60.0` は複数 sketch で共有する凍結値になる
 //!     - 二項演算 → 書き込み可能な側がちょうど 1 つならそちらへ押し込む
 //!       (もう一方は現在値で定数化)。両方可 / 両方不可なら拒否。
 //!   共有頂点 (junction) は構成する全ての座標式へ書き込む。軸ごとに独立で、
@@ -208,8 +207,8 @@ fn top_var_map(module: &Module) -> HashMap<&str, &Expr> {
 
 /// 同一モジュールのトップレベル `let` 宣言の静的値。RHS はスカラー式 (Float リテラル /
 /// 四則演算 / 単項マイナス / 他のトップレベル var・let への参照) で、宣言順に関係なく
-/// 参照できる。sketch ブロックから読み取り専用スカラーとして参照でき、
-/// 逆評価では常に定数扱いになる (var と違い書き戻し対象にならない)。
+/// 参照できる。sketch ブロックからスカラーとして参照でき、逆評価は sketch 内 let と
+/// 同じく RHS を辿って var へ押し込む (RHS に var が無ければ読み取り専用)。
 /// 循環参照や有限値にならないもの (sema がエラーにする) は含めない。
 pub fn top_let_values(module: &Module) -> HashMap<&str, f64> {
     let vars: HashMap<&str, f64> = module
@@ -248,40 +247,10 @@ pub fn top_let_values(module: &Module) -> HashMap<&str, f64> {
         let r = cands
             .get(name)
             .copied()
-            .and_then(|e| eval_expr(e, vars, cands, memo, visiting));
+            .and_then(|e| fold_scalar(e, &mut |n| eval_name(n, vars, cands, memo, visiting)));
         visiting.remove(name);
         memo.insert(name, r);
         r
-    }
-
-    fn eval_expr<'a>(
-        e: &'a Expr,
-        vars: &HashMap<&'a str, f64>,
-        cands: &HashMap<&'a str, &'a Expr>,
-        memo: &mut HashMap<&'a str, Option<f64>>,
-        visiting: &mut HashSet<&'a str>,
-    ) -> Option<f64> {
-        match e {
-            Expr::Lit(Lit::Float(v), _) => Some(*v),
-            Expr::Negate(inner, _) => Some(-eval_expr(inner, vars, cands, memo, visiting)?),
-            Expr::BinOp {
-                op, left, right, ..
-            } => {
-                let l = eval_expr(left, vars, cands, memo, visiting)?;
-                let r = eval_expr(right, vars, cands, memo, visiting)?;
-                match op {
-                    BinOp::Add => Some(l + r),
-                    BinOp::Sub => Some(l - r),
-                    BinOp::Mul => Some(l * r),
-                    BinOp::Div => Some(l / r),
-                    _ => None,
-                }
-            }
-            Expr::Var {
-                module: None, name, ..
-            } => eval_name(name, vars, cands, memo, visiting),
-            _ => None,
-        }
     }
 
     let mut memo: HashMap<&str, Option<f64>> = HashMap::new();
@@ -293,6 +262,31 @@ pub fn top_let_values(module: &Module) -> HashMap<&str, f64> {
     memo.into_iter()
         .filter_map(|(name, r)| r.filter(|v| v.is_finite()).map(|v| (name, v)))
         .collect()
+}
+
+/// スカラー式の静的畳み込み。名前解決は `lookup` に委譲する (解決できなければ None)。
+fn fold_scalar<'a>(e: &'a Expr, lookup: &mut dyn FnMut(&'a str) -> Option<f64>) -> Option<f64> {
+    match e {
+        Expr::Lit(Lit::Float(v), _) => Some(*v),
+        Expr::Negate(inner, _) => Some(-fold_scalar(inner, lookup)?),
+        Expr::BinOp {
+            op, left, right, ..
+        } => {
+            let l = fold_scalar(left, lookup)?;
+            let r = fold_scalar(right, lookup)?;
+            match op {
+                BinOp::Add => Some(l + r),
+                BinOp::Sub => Some(l - r),
+                BinOp::Mul => Some(l * r),
+                BinOp::Div => Some(l / r),
+                _ => None,
+            }
+        }
+        Expr::Var {
+            module: None, name, ..
+        } => lookup(name),
+        _ => None,
+    }
 }
 
 pub fn model(module: &Module, binding: &str) -> Result<SketchModel, String> {
@@ -436,26 +430,45 @@ enum GeomShape<'a> {
     Circle(CircleShape<'a>),
 }
 
+/// スカラー名の解決結果 ([`Block::scalar_binding`])。
+enum ScalarBinding<'a> {
+    /// 書き込み対象の `var` (RHS は符号付きリテラル)。ブロック内 / トップレベルとも。
+    Var { name: &'a str, body: &'a Expr },
+    /// 導出値の `let`。逆評価は RHS を辿って var へ押し込む。ブロック内 / トップレベルとも。
+    Let(&'a Expr),
+    /// スカラーとして辿れない (幾何 binding / 未定義)。
+    Opaque,
+}
+
 struct Block<'a> {
     by_name: HashMap<&'a str, &'a SketchBinding>,
     scalar_values: HashMap<&'a str, f64>,
     /// トップレベル `var` (名前 → RHS 式)。ブロック内 binding が優先される。
     top_vars: HashMap<&'a str, &'a Expr>,
-    /// トップレベル `let` の読み取り専用スカラー定数 (シャドウ不可、sema が検査)。
-    top_lets: HashMap<&'a str, f64>,
+    /// トップレベル `let` (名前 → RHS 式)。静的に評価できたもののみ持つ
+    /// (循環参照などは除外されるので、RHS を辿る再帰は必ず停止する)。
+    top_lets: HashMap<&'a str, &'a Expr>,
 }
 
 impl<'a> Block<'a> {
     fn build(module: &'a Module, bindings: &'a [SketchBinding]) -> Result<Self, String> {
+        let let_values = top_let_values(module);
         let mut block = Block {
             by_name: HashMap::new(),
             scalar_values: HashMap::new(),
             top_vars: top_var_map(module),
-            top_lets: top_let_values(module),
+            top_lets: module
+                .decls
+                .iter()
+                .filter_map(|d| match d {
+                    Decl::Let(v) if let_values.contains_key(v.name.as_str()) => {
+                        Some((v.name.as_str(), &v.body))
+                    }
+                    _ => None,
+                })
+                .collect(),
         };
-        for (name, v) in &block.top_lets {
-            block.scalar_values.insert(*name, *v);
-        }
+        block.scalar_values.extend(let_values);
         // RHS がリテラルでない top var は sema が拒否するのでここでは単に無視する
         // (参照時に「スカラーではありません」エラーになる)。
         for (name, e) in &block.top_vars {
@@ -473,32 +486,38 @@ impl<'a> Block<'a> {
         Ok(block)
     }
 
-    fn eval_scalar(&self, e: &Expr) -> Result<f64, String> {
-        match e {
-            Expr::Lit(Lit::Float(v), _) => Ok(*v),
-            Expr::Var {
-                module: None, name, ..
-            } => self
-                .scalar_values
-                .get(name.as_str())
-                .copied()
-                .ok_or_else(|| format!("`{name}` はスカラーではありません")),
-            Expr::Negate(inner, _) => Ok(-self.eval_scalar(inner)?),
-            Expr::BinOp {
-                op, left, right, ..
-            } => {
-                let l = self.eval_scalar(left)?;
-                let r = self.eval_scalar(right)?;
-                match op {
-                    BinOp::Add => Ok(l + r),
-                    BinOp::Sub => Ok(l - r),
-                    BinOp::Mul => Ok(l * r),
-                    BinOp::Div => Ok(l / r),
-                    _ => Err("スカラー式に使えない演算子".to_string()),
+    /// スカラー名を var / let / 不透明に解決する。ブロック内 binding が優先され、
+    /// 次にトップレベルの var / let を見る。
+    fn scalar_binding(&self, name: &str) -> ScalarBinding<'a> {
+        match self.by_name.get(name) {
+            Some(b) if b.kind == SketchBindKind::Var => ScalarBinding::Var {
+                name: b.name.as_str(),
+                body: &b.body,
+            },
+            Some(b) if b.kind == SketchBindKind::Let => ScalarBinding::Let(&b.body),
+            Some(_) => ScalarBinding::Opaque,
+            None => {
+                if let Some((tname, body)) = self.top_vars.get_key_value(name) {
+                    ScalarBinding::Var { name: tname, body }
+                } else if let Some(body) = self.top_lets.get(name) {
+                    ScalarBinding::Let(body)
+                } else {
+                    ScalarBinding::Opaque
                 }
             }
-            _ => Err("スカラー式として評価できません".to_string()),
         }
+    }
+
+    fn eval_scalar(&self, e: &Expr) -> Result<f64, String> {
+        let mut missing: Option<String> = None;
+        fold_scalar(e, &mut |name| {
+            let v = self.scalar_values.get(name).copied();
+            if v.is_none() && missing.is_none() {
+                missing = Some(format!("`{name}` はスカラーではありません"));
+            }
+            v
+        })
+        .ok_or_else(|| missing.unwrap_or_else(|| "スカラー式として評価できません".to_string()))
     }
 
     /// 点参照 (点 binding 名か `p2 x y`) をスロットに解決する。
@@ -648,16 +667,16 @@ impl<'a> Block<'a> {
     }
 
     /// 部分木に `var` 束縛 (ブロック内 / トップレベル) への参照が含まれるか。
-    /// `let` 参照は導出値として RHS に再帰する (循環は `build` の逐次評価が先に弾く)。
+    /// `let` 参照は導出値として RHS に再帰する (ブロック内 let の循環は `build` の
+    /// 逐次評価が、トップレベル let の循環は `top_lets` の除外が先に弾く)。
     fn contains_writable(&self, e: &Expr) -> bool {
         match e {
             Expr::Var {
                 module: None, name, ..
-            } => match self.by_name.get(name.as_str()) {
-                Some(b) if b.kind == SketchBindKind::Var => true,
-                Some(b) if b.kind == SketchBindKind::Let => self.contains_writable(&b.body),
-                Some(_) => false,
-                None => self.top_vars.contains_key(name.as_str()),
+            } => match self.scalar_binding(name) {
+                ScalarBinding::Var { .. } => true,
+                ScalarBinding::Let(body) => self.contains_writable(body),
+                ScalarBinding::Opaque => false,
             },
             Expr::Negate(inner, _) => self.contains_writable(inner),
             Expr::BinOp { left, right, .. } => {
@@ -685,32 +704,20 @@ impl<'a> Block<'a> {
         match e {
             Expr::Var {
                 module: None, name, ..
-            } => match self.by_name.get(name.as_str()) {
-                Some(b) if b.kind == SketchBindKind::Var => {
+            } => match self.scalar_binding(name) {
+                ScalarBinding::Var { name, body } => {
                     // var の RHS は符号付きリテラル (validation 保証)
-                    let (cur, leaf) = signed_lit_leaf(&b.body).ok_or(SolveErr::ReadOnly)?;
+                    let (cur, leaf) = signed_lit_leaf(body).ok_or(SolveErr::ReadOnly)?;
                     Ok(Write {
                         leaf,
                         value: target,
-                        var: Some(b.name.as_str()),
+                        var: Some(name),
                         current: cur,
                     })
                 }
                 // let は導出値: RHS を辿って依存先の var へ押し込む。
-                Some(b) if b.kind == SketchBindKind::Let => self.invert_inner(&b.body, target),
-                Some(_) => Err(SolveErr::ReadOnly),
-                None => match self.top_vars.get_key_value(name.as_str()) {
-                    Some((tname, body)) => {
-                        let (cur, leaf) = signed_lit_leaf(body).ok_or(SolveErr::ReadOnly)?;
-                        Ok(Write {
-                            leaf,
-                            value: target,
-                            var: Some(tname),
-                            current: cur,
-                        })
-                    }
-                    None => Err(SolveErr::ReadOnly),
-                },
+                ScalarBinding::Let(body) => self.invert_inner(body, target),
+                ScalarBinding::Opaque => Err(SolveErr::ReadOnly),
             },
             Expr::Negate(inner, _) => self.invert_inner(inner, -target),
             Expr::BinOp {
@@ -1507,9 +1514,10 @@ pub fn factor_vars(src: &str, binding: &str) -> Result<String, String> {
             }
         }
     }
+    let let_values = top_let_values(&module);
     for d in &module.decls {
         if let Decl::Let(v) = d {
-            if let Some(val) = block.top_lets.get(v.name.as_str()) {
+            if let Some(val) = let_values.get(v.name.as_str()) {
                 by_value.entry(val.to_bits()).or_insert(v.name.as_str());
             }
         }
@@ -1848,7 +1856,7 @@ mod tests {
 
     #[test]
     fn drag_top_let_axis_is_readonly() {
-        // トップレベル let のみの座標軸は書き込めず pinned になる。リテラル軸だけ動く。
+        // リテラルのみのトップレベル let は凍結値: 書き込めず pinned になる。
         let src = "let w = 10.0\nsk =\n    sketch\n        p = p2 w 0.0\n    in\n    { p = p }\n    end\n";
         let out = drag(
             src,
@@ -1881,17 +1889,37 @@ mod tests {
     }
 
     #[test]
-    fn drag_top_let_referencing_var_does_not_propagate() {
-        // トップレベル let の RHS が var を参照していても、let 経由では var へ伝播しない。
-        let src = "var z = 5.0\nlet w = z + 1.0\nsk =\n    sketch\n        p = p2 w w\n    in\n    { p = p }\n    end\n";
-        let err = drag(
+    fn drag_through_top_level_let_pushes_into_var() {
+        // トップレベル let は sketch 内 let と同じ導出値: RHS の var へ伝播する。
+        let src = "var z = 5.0\nlet w = z + 1.0\nsk =\n    sketch\n        p = p2 w 0.0\n    in\n    { p = p }\n    end\n";
+        let out = drag(
             src,
             "sk",
             DragTarget::Point { geom: 0 },
-            DragValue::Pos([9.0, 8.0]),
+            DragValue::Pos([9.0, 0.0]),
         )
-        .expect_err("should be readonly");
-        assert!(matches!(err, DragReject::ReadOnly(_)), "{err:?}");
+        .expect("drag");
+        assert!(out.source.contains("var z = 8.0"), "{}", out.source);
+        assert!(out.source.contains("let w = z + 1.0"), "{}", out.source);
+        let SketchGeom::Point { pos, .. } = &out.model.geoms[0] else {
+            panic!()
+        };
+        assert_eq!(*pos, [9.0, 0.0]);
+    }
+
+    #[test]
+    fn drag_through_top_level_let_chain() {
+        // トップレベル let の多段 + sketch 内 let 経由でも var まで押し込む。
+        let src = "var z = 5.0\nlet a = z * 2.0\nlet b = a + 1.0\nsk =\n    sketch\n        let c = b + 1.0\n        p = p2 c 0.0\n    in\n    { p = p }\n    end\n";
+        let out = drag(
+            src,
+            "sk",
+            DragTarget::Point { geom: 0 },
+            DragValue::Pos([20.0, 0.0]),
+        )
+        .expect("drag");
+        // c = ((z * 2) + 1) + 1 なので c = 20 → z = 9
+        assert!(out.source.contains("var z = 9.0"), "{}", out.source);
     }
 
     #[test]
