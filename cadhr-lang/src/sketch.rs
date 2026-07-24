@@ -991,6 +991,95 @@ fn handle_axes<'a>(
 }
 
 // ---------------------------------------------------------------------------
+// 書き戻し検査 (CLI warning 用)
+// ---------------------------------------------------------------------------
+
+/// [`writeback_ambiguities`] の報告 1 件。`span` は曖昧な座標式の位置。
+#[derive(Clone, Debug, PartialEq)]
+pub struct WritebackWarning {
+    pub span: Span,
+    pub message: String,
+}
+
+/// 全 sketch ブロックのハンドルを走査し、書き戻し先が曖昧 (二項演算の両辺に var) で
+/// ドラッグが拒否される軸を報告する。読み取り専用の軸は意図的な凍結 (リテラル let 等)
+/// がありうるので報告しない。junction で同じ座標式を共有するハンドルは 1 回だけ数える。
+pub fn writeback_ambiguities(module: &Module) -> Vec<WritebackWarning> {
+    let mut out = Vec::new();
+    let mut seen: HashSet<(usize, usize)> = HashSet::new();
+    for binding in sketch_binding_names(module) {
+        let Ok((bindings, _body, _span)) = find_block(module, &binding) else {
+            continue;
+        };
+        let Ok(block) = Block::build(module, bindings) else {
+            continue;
+        };
+        let bare: Vec<&SketchBinding> = bindings
+            .iter()
+            .filter(|b| b.kind == SketchBindKind::Bare)
+            .collect();
+        for (gi, b) in bare.iter().enumerate() {
+            let Ok(shape) = block.geom_shape(b) else {
+                continue;
+            };
+            let targets: Vec<(DragTarget, String)> = match shape {
+                GeomShape::Point(_) => vec![(DragTarget::Point { geom: gi }, b.name.clone())],
+                GeomShape::Segment(..) => vec![
+                    (
+                        DragTarget::SegmentEnd { geom: gi, end: 0 },
+                        format!("{} 始点", b.name),
+                    ),
+                    (
+                        DragTarget::SegmentEnd { geom: gi, end: 1 },
+                        format!("{} 終点", b.name),
+                    ),
+                ],
+                GeomShape::Polygon(slots) => (0..slots.len())
+                    .map(|vi| {
+                        (
+                            DragTarget::PolyVertex { geom: gi, vert: vi },
+                            format!("{} 頂点{}", b.name, vi),
+                        )
+                    })
+                    .collect(),
+                GeomShape::Circle(_) => vec![
+                    (
+                        DragTarget::CircleCenter { geom: gi },
+                        format!("{} 中心", b.name),
+                    ),
+                    (DragTarget::CircleRadius { geom: gi }, b.name.clone()),
+                ],
+            };
+            for (target, desc) in targets {
+                let Ok(axes) = handle_axes(&block, &bare, target) else {
+                    continue;
+                };
+                for axis in axes {
+                    if axis.readonly.is_some() || axis.exprs.is_empty() {
+                        continue;
+                    }
+                    if let Err(SolveErr::Ambiguous) = axis_writes(&block, &axis) {
+                        let span = axis.exprs[0].span();
+                        if !seen.insert((span.start, span.end)) {
+                            continue;
+                        }
+                        out.push(WritebackWarning {
+                            span,
+                            message: format!(
+                                "{binding}: {desc} の {} は{}",
+                                axis.label,
+                                SolveErr::Ambiguous.reason()
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
 // drag (逆評価)
 // ---------------------------------------------------------------------------
 
@@ -2342,6 +2431,30 @@ mod tests {
         assert!(s.contains("var x1 = 4.0"), "{s}");
         assert!(s.contains("pt1 = p2 x1 1.0"), "{s}");
         model_from_source(&s, "sk").expect("parses");
+    }
+
+    #[test]
+    fn writeback_ambiguities_reports_two_var_binop() {
+        // (a + b) は両辺に var → 曖昧。y 軸のリテラルと var x1 は報告されない。
+        // 読み取り専用 (let のみ) の軸も報告されない。
+        let src = "sk =\n    sketch\n        var a = 1.0\n        var b = 2.0\n        var x1 = 3.0\n        let frozen = 4.0\n        p = p2 (a + b) 0.0\n        q = p2 x1 frozen\n    in\n    { p = p, q = q }\n    end\n";
+        let module = parse::parse(src).unwrap();
+        let warns = writeback_ambiguities(&module);
+        assert_eq!(warns.len(), 1, "{warns:?}");
+        assert!(warns[0].message.contains("sk"), "{warns:?}");
+        assert!(warns[0].message.contains("p の x"), "{warns:?}");
+        assert!(warns[0].message.contains("曖昧"), "{warns:?}");
+        // span は `(a + b)` の中身を指す
+        assert_eq!(&src[warns[0].span.range()], "a + b");
+    }
+
+    #[test]
+    fn writeback_ambiguities_dedupes_junction() {
+        // 名前付き点が line と polygon から共有されても報告は 1 回。
+        let src = "sk =\n    sketch\n        var a = 1.0\n        var b = 2.0\n        v1 = p2 (a + b) 0.0\n        v2 = p2 4.0 0.0\n        v3 = p2 4.0 3.0\n        poly1 = polygon [line v1 v2, line v2 v3, line v3 v1]\n    in\n    { poly1 = poly1 }\n    end\n";
+        let module = parse::parse(src).unwrap();
+        let warns = writeback_ambiguities(&module);
+        assert_eq!(warns.len(), 1, "{warns:?}");
     }
 
     #[test]
