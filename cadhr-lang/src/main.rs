@@ -15,6 +15,21 @@ use std::path::{Path, PathBuf};
 
 use cadhr_lang::syntax::ast::Decl;
 use cadhr_lang::{Inputs, Severity, compile_with_paths, run_binding, sketch};
+use clap::Parser;
+
+#[derive(Parser)]
+#[command(name = "cadhr-lang")]
+enum Cli {
+    /// compile + 実行検査。sketch の書き戻し先が曖昧な軸は warning 表示する
+    Check {
+        /// db.cadhr / プロジェクトディレクトリ / プロジェクト群ルート
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+        /// 実行する binding (複数可)。未指定なら main (無ければ compile 検査のみ)
+        #[arg(long, short)]
+        binding: Vec<String>,
+    },
+}
 
 enum CheckOutcome {
     Run {
@@ -35,51 +50,18 @@ struct BindingResult {
 }
 
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    match args.split_first() {
-        Some((cmd, rest)) if cmd == "check" && !rest.is_empty() => {
-            let code = run_check(rest);
-            std::process::exit(code);
-        }
-        _ => {
-            usage();
-            std::process::exit(2);
-        }
-    }
+    let Cli::Check { paths, binding } = Cli::parse();
+    std::process::exit(run_check(&paths, &binding));
 }
 
-fn usage() {
-    eprintln!("usage: cadhr-lang check <path>... [--binding <name>]...");
-    eprintln!("  <path>: db.cadhr / プロジェクトディレクトリ / プロジェクト群ルート");
-    eprintln!("  --binding <name>: 実行する binding (複数可)。未指定なら main");
-}
-
-fn run_check(args: &[String]) -> i32 {
-    let mut paths: Vec<String> = Vec::new();
-    let mut bindings: Vec<String> = Vec::new();
-    let mut it = args.iter();
-    while let Some(a) = it.next() {
-        if a == "--binding" || a == "-b" {
-            match it.next() {
-                Some(name) => bindings.push(name.clone()),
-                None => {
-                    usage();
-                    return 2;
-                }
-            }
-        } else {
-            paths.push(a.clone());
-        }
-    }
-
+fn run_check(paths: &[PathBuf], bindings: &[String]) -> i32 {
     let mut targets: Vec<PathBuf> = Vec::new();
-    for p in &paths {
-        let path = PathBuf::from(p);
+    for path in paths {
         if !path.exists() {
             eprintln!("not found: {}", path.display());
             return 2;
         }
-        targets.extend(collect_db_files(&path));
+        targets.extend(collect_db_files(path));
     }
     if targets.is_empty() {
         eprintln!("db.cadhr が見つかりませんでした");
