@@ -18,7 +18,7 @@ use crate::ui::parts;
 use crate::ui::workspace::WorkspaceEvent;
 
 pub struct Preview {
-    pub id: u64,
+    pub id: usize,
     /// 評価する top-level binding の名前。`"main"` がデフォルト。
     pub target: String,
     /// combo_box widget の内部状態。candidate 一覧が変わった時に作り直す。
@@ -47,7 +47,7 @@ pub struct Preview {
 }
 
 impl Preview {
-    pub fn new(id: u64) -> Self {
+    pub fn new(id: usize) -> Self {
         Self {
             id,
             target: "main".to_string(),
@@ -69,14 +69,14 @@ impl Preview {
         }
     }
 
-    pub fn new_collision(id: u64) -> Self {
+    pub fn new_collision(id: usize) -> Self {
         let mut p = Self::new(id);
         p.is_collision = true;
         p.scene.color = [0.4, 0.5, 0.7, 0.7];
         p
     }
 
-    pub fn from_session(id: u64, sp: &SessionPreview) -> Self {
+    pub fn from_session(id: usize, sp: &SessionPreview) -> Self {
         let mut p = if sp.is_collision {
             Self::new_collision(id)
         } else {

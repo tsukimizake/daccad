@@ -1,6 +1,6 @@
 //! Workspace = 3D プレビュー / 2D スケッチ の混在リスト。
 //!
-//! 各 workspace は共通の u64 id を持ち、順序は `Vec<Workspace>` 上の位置で表す。
+//! 各 workspace は共通の usize id を持ち、順序は `Vec<Workspace>` 上の位置で表す。
 
 use cadhr_lang::BindingSignature;
 use iced::widget::{column, scrollable, text};
@@ -15,7 +15,7 @@ pub enum Workspace {
 }
 
 impl Workspace {
-    pub fn id(&self) -> u64 {
+    pub fn id(&self) -> usize {
         match self {
             Workspace::Preview(p) => p.id,
             Workspace::Sketch(s) => s.id,
@@ -72,12 +72,12 @@ impl Workspace {
 pub fn list_view<'a>(
     workspaces: &'a [Workspace],
     candidate_signatures: &'a [BindingSignature],
-) -> Element<'a, (u64, WorkspaceMsg)> {
+) -> Element<'a, (usize, WorkspaceMsg)> {
     if workspaces.is_empty() {
         return text("No workspaces. Press \"+ Add Workspace\" to create one.").into();
     }
     let total = workspaces.len();
-    let items: Vec<Element<'a, (u64, WorkspaceMsg)>> = workspaces
+    let items: Vec<Element<'a, (usize, WorkspaceMsg)>> = workspaces
         .iter()
         .enumerate()
         .map(|(i, w)| {

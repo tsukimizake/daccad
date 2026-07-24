@@ -99,7 +99,7 @@ pub struct Selection {
 }
 
 pub struct Sketch {
-    pub id: u64,
+    pub id: usize,
     pub minimized: bool,
     /// 1 grid 単位あたりのピクセル数。
     pub zoom: f32,
@@ -121,7 +121,7 @@ pub struct Sketch {
 }
 
 impl Sketch {
-    pub fn new(id: u64) -> Self {
+    pub fn new(id: usize) -> Self {
         Self {
             id,
             minimized: false,
@@ -138,7 +138,7 @@ impl Sketch {
         }
     }
 
-    pub fn from_session(id: u64, ss: &SessionSketch) -> Self {
+    pub fn from_session(id: usize, ss: &SessionSketch) -> Self {
         let mut s = Self::new(id);
         s.minimized = ss.minimized;
         s.zoom = ss.zoom;

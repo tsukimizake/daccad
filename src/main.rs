@@ -127,7 +127,7 @@ struct Model {
     /// エディタ本文の undo / redo 履歴 (キー入力・Sketch ドラッグ・構造編集)。
     history: history::History,
     workspaces: Vec<Workspace>,
-    next_workspace_id: u64,
+    next_workspace_id: usize,
     program: Option<CompiledProgram>,
     /// `previewable_bindings()` のキャッシュ。compile 完了時に更新。
     candidates: Vec<BindingSignature>,
@@ -157,8 +157,8 @@ enum Msg {
     Redo,
     UpdatePreviews,
     CompileDone(CompileJobResult),
-    EvalDone(u64, EvalJobResult),
-    Workspace(u64, WorkspaceMsg),
+    EvalDone(usize, EvalJobResult),
+    Workspace(usize, WorkspaceMsg),
 
     AddPreview,
     AddCollisionCheck,
@@ -216,7 +216,7 @@ fn init() -> (Model, Task<Msg>) {
             model.current_file_path = Some(path);
             let workspaces = workspaces_from_session(&previews);
             if !workspaces.is_empty() {
-                model.next_workspace_id = workspaces.len() as u64;
+                model.next_workspace_id = workspaces.len();
                 model.workspaces = workspaces;
             }
         }
@@ -243,13 +243,13 @@ fn workspaces_from_session(sp: &session::SessionPreviews) -> Vec<Workspace> {
         .into_iter()
         .enumerate()
         .map(|(i, (_, seed))| match seed {
-            Seed::Preview(p) => Workspace::Preview(Preview::from_session(i as u64, p)),
-            Seed::Sketch(s) => Workspace::Sketch(Sketch::from_session(i as u64, s)),
+            Seed::Preview(p) => Workspace::Preview(Preview::from_session(i, p)),
+            Seed::Sketch(s) => Workspace::Sketch(Sketch::from_session(i, s)),
         })
         .collect()
 }
 
-fn preview_mut(model: &mut Model, id: u64) -> Option<&mut Preview> {
+fn preview_mut(model: &mut Model, id: usize) -> Option<&mut Preview> {
     model
         .workspaces
         .iter_mut()
@@ -257,14 +257,14 @@ fn preview_mut(model: &mut Model, id: u64) -> Option<&mut Preview> {
         .as_preview_mut()
 }
 
-fn sketch_mut(model: &mut Model, id: u64) -> Option<&mut Sketch> {
+fn sketch_mut(model: &mut Model, id: usize) -> Option<&mut Sketch> {
     match model.workspaces.iter_mut().find(|w| w.id() == id)? {
         Workspace::Sketch(s) => Some(s),
         _ => None,
     }
 }
 
-fn move_workspace(model: &mut Model, id: u64, up: bool) {
+fn move_workspace(model: &mut Model, id: usize, up: bool) {
     let Some(i) = model.workspaces.iter().position(|w| w.id() == id) else {
         return;
     };
@@ -327,7 +327,7 @@ fn request_compile(model: &mut Model) -> Task<Msg> {
     spawn_compile_job(model)
 }
 
-fn spawn_eval_for(model: &Model, workspace_id: u64) -> Task<Msg> {
+fn spawn_eval_for(model: &Model, workspace_id: usize) -> Task<Msg> {
     let Some(prog) = model.program.clone() else {
         return Task::none();
     };
@@ -420,7 +420,7 @@ fn refresh_workspace_candidates(model: &mut Model) {
 }
 
 /// Sketch workspace の model を現在のエディタ本文から再計算する。
-fn refresh_sketch_model(model: &mut Model, id: u64) {
+fn refresh_sketch_model(model: &mut Model, id: usize) {
     let src = model.editor.text();
     let Some(s2) = sketch_mut(model, id) else {
         return;
@@ -473,7 +473,7 @@ fn apply_snapshot(model: &mut Model, snap: history::Snapshot) -> Task<Msg> {
     request_compile(model)
 }
 
-fn sketch_ids(model: &Model) -> Vec<u64> {
+fn sketch_ids(model: &Model) -> Vec<usize> {
     model
         .workspaces
         .iter()
@@ -485,7 +485,7 @@ fn sketch_ids(model: &Model) -> Vec<u64> {
 /// Sketch のテキスト編集結果をエディタへ反映して recompile を要求する。
 fn apply_sketch_text_edit(
     model: &mut Model,
-    id: u64,
+    id: usize,
     result: Result<String, String>,
 ) -> Task<Msg> {
     match result {
@@ -543,7 +543,7 @@ fn scaffold_sketch_binding(src: &str, binding: &str) -> Result<String, String> {
 }
 
 /// Sketch workspace からのコード書き換え要求を適用する。
-fn handle_sketch_edit(model: &mut Model, id: u64, edit: SketchEdit) -> Task<Msg> {
+fn handle_sketch_edit(model: &mut Model, id: usize, edit: SketchEdit) -> Task<Msg> {
     use cadhr_lang::sketch as sk;
     let Some(binding) = sketch_mut(model, id).map(|s| s.binding.clone()) else {
         return Task::none();
@@ -860,7 +860,7 @@ fn update(model: &mut Model, message: Msg) -> Task<Msg> {
                     model.workspaces = vec![Workspace::Preview(Preview::new(0))];
                     model.next_workspace_id = 1;
                 } else {
-                    model.next_workspace_id = workspaces.len() as u64;
+                    model.next_workspace_id = workspaces.len();
                     model.workspaces = workspaces;
                 }
                 session::save_last_session_path(&path);
@@ -1131,7 +1131,7 @@ mod tests {
         }
     }
 
-    fn sketch_ref(model: &Model, id: u64) -> &Sketch {
+    fn sketch_ref(model: &Model, id: usize) -> &Sketch {
         model
             .workspaces
             .iter()
@@ -1142,7 +1142,7 @@ mod tests {
             .expect("sketch workspace")
     }
 
-    fn send_sketch(model: &mut Model, id: u64, msg: SketchMsg) {
+    fn send_sketch(model: &mut Model, id: usize, msg: SketchMsg) {
         let _ = update(model, Msg::Workspace(id, WorkspaceMsg::Sketch(msg)));
     }
 
@@ -1229,7 +1229,7 @@ mod tests {
             }],
         };
         let workspaces = workspaces_from_session(&sp);
-        let ids: Vec<u64> = workspaces.iter().map(Workspace::id).collect();
+        let ids: Vec<usize> = workspaces.iter().map(Workspace::id).collect();
         assert_eq!(ids, vec![0, 1]);
         assert!(matches!(workspaces[0], Workspace::Sketch(_)));
         assert!(matches!(workspaces[1], Workspace::Preview(_)));
