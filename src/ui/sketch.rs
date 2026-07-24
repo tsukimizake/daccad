@@ -138,8 +138,8 @@ impl Sketch {
         }
     }
 
-    pub fn from_session(ss: &SessionSketch) -> Self {
-        let mut s = Self::new(ss.sketch_id);
+    pub fn from_session(id: u64, ss: &SessionSketch) -> Self {
+        let mut s = Self::new(id);
         s.minimized = ss.minimized;
         s.zoom = ss.zoom;
         s.center = ss.center;
@@ -149,7 +149,6 @@ impl Sketch {
 
     pub fn to_session(&self, order: usize) -> SessionSketch {
         SessionSketch {
-            sketch_id: self.id,
             order,
             minimized: self.minimized,
             zoom: self.zoom,

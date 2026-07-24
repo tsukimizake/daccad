@@ -216,8 +216,7 @@ fn init() -> (Model, Task<Msg>) {
             model.current_file_path = Some(path);
             let workspaces = workspaces_from_session(&previews);
             if !workspaces.is_empty() {
-                model.next_workspace_id =
-                    workspaces.iter().map(Workspace::id).max().unwrap_or(0) + 1;
+                model.next_workspace_id = workspaces.len() as u64;
                 model.workspaces = workspaces;
             }
         }
@@ -227,19 +226,27 @@ fn init() -> (Model, Task<Msg>) {
 }
 
 /// session の previews / sketches を `order` でマージして workspace リストに戻す。
+/// workspace id はセッションに保存せず、読み込み時に表示順で採番する。
 fn workspaces_from_session(sp: &session::SessionPreviews) -> Vec<Workspace> {
-    let mut workspaces: Vec<(usize, Workspace)> = sp
+    enum Seed<'a> {
+        Preview(&'a session::SessionPreview),
+        Sketch(&'a session::SessionSketch),
+    }
+    let mut seeds: Vec<(usize, Seed)> = sp
         .previews
         .iter()
-        .map(|p| (p.order, Workspace::Preview(Preview::from_session(p))))
-        .chain(
-            sp.sketches
-                .iter()
-                .map(|s| (s.order, Workspace::Sketch(Sketch::from_session(s)))),
-        )
+        .map(|p| (p.order, Seed::Preview(p)))
+        .chain(sp.sketches.iter().map(|s| (s.order, Seed::Sketch(s))))
         .collect();
-    workspaces.sort_by_key(|(order, _)| *order);
-    workspaces.into_iter().map(|(_, w)| w).collect()
+    seeds.sort_by_key(|(order, _)| *order);
+    seeds
+        .into_iter()
+        .enumerate()
+        .map(|(i, (_, seed))| match seed {
+            Seed::Preview(p) => Workspace::Preview(Preview::from_session(i as u64, p)),
+            Seed::Sketch(s) => Workspace::Sketch(Sketch::from_session(i as u64, s)),
+        })
+        .collect()
 }
 
 fn preview_mut(model: &mut Model, id: u64) -> Option<&mut Preview> {
@@ -853,8 +860,7 @@ fn update(model: &mut Model, message: Msg) -> Task<Msg> {
                     model.workspaces = vec![Workspace::Preview(Preview::new(0))];
                     model.next_workspace_id = 1;
                 } else {
-                    model.next_workspace_id =
-                        workspaces.iter().map(Workspace::id).max().unwrap_or(0) + 1;
+                    model.next_workspace_id = workspaces.len() as u64;
                     model.workspaces = workspaces;
                 }
                 session::save_last_session_path(&path);
@@ -1199,5 +1205,33 @@ mod tests {
             s.status
         );
         assert!(!model.editor.text().contains("main =\n    sketch"));
+    }
+
+    /// workspace id はセッションに保存されず、読み込み時に表示順で一意に採番される。
+    #[test]
+    fn session_load_assigns_unique_workspace_ids() {
+        let sp = session::SessionPreviews {
+            previews: vec![session::SessionPreview {
+                order: 1,
+                target_name: "maind".to_string(),
+                slider_values: Default::default(),
+                control_point_overrides: Default::default(),
+                view_at_object_center: false,
+                minimized: false,
+                is_collision: false,
+            }],
+            sketches: vec![session::SessionSketch {
+                order: 0,
+                minimized: false,
+                zoom: 20.0,
+                center: [0.0, 0.0],
+                binding: "sketchxy".to_string(),
+            }],
+        };
+        let workspaces = workspaces_from_session(&sp);
+        let ids: Vec<u64> = workspaces.iter().map(Workspace::id).collect();
+        assert_eq!(ids, vec![0, 1]);
+        assert!(matches!(workspaces[0], Workspace::Sketch(_)));
+        assert!(matches!(workspaces[1], Workspace::Preview(_)));
     }
 }

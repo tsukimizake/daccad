@@ -17,7 +17,6 @@ fn default_target_name() -> String {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SessionPreview {
-    pub preview_id: u64,
     #[serde(default)]
     pub order: usize,
     /// 評価する top-level binding の名前。欠落時は `"main"`。
@@ -46,7 +45,6 @@ fn default_zoom() -> f32 {
 /// 図形はコード側が真なので、紐付け先 binding 名とビュー状態だけ持つ。
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SessionSketch {
-    pub sketch_id: u64,
     #[serde(default)]
     pub order: usize,
     #[serde(default)]

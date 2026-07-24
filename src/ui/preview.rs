@@ -76,11 +76,11 @@ impl Preview {
         p
     }
 
-    pub fn from_session(sp: &SessionPreview) -> Self {
+    pub fn from_session(id: u64, sp: &SessionPreview) -> Self {
         let mut p = if sp.is_collision {
-            Self::new_collision(sp.preview_id)
+            Self::new_collision(id)
         } else {
-            Self::new(sp.preview_id)
+            Self::new(id)
         };
         p.target = sp.target_name.clone();
         p.slider_values = sp.slider_values.clone();
@@ -93,7 +93,6 @@ impl Preview {
 
     pub fn to_session(&self, order: usize) -> SessionPreview {
         SessionPreview {
-            preview_id: self.id,
             order,
             target_name: self.target.clone(),
             slider_values: self.slider_values.clone(),
