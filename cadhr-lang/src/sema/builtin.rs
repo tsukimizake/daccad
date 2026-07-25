@@ -23,7 +23,7 @@ impl BuiltinRegistry {
         Self::default()
     }
 
-    pub fn add(mut self, b: Builtin) -> Self {
+    pub fn register(mut self, b: Builtin) -> Self {
         self.by_name.insert(b.name, b);
         self
     }
@@ -223,7 +223,7 @@ pub fn registry() -> BuiltinRegistry {
 
     // -- Range 集合演算 (intersect : Range a -> Range a -> Range a)
     let a = g.fresh();
-    let r = r.add(poly(
+    let r = r.register(poly(
         "intersect",
         vec![a],
         vec![range_of(Type::Var(a)), range_of(Type::Var(a))],
@@ -232,41 +232,41 @@ pub fn registry() -> BuiltinRegistry {
     ));
 
     // -- 3D primitives
-    let r = r.add(mono(
+    let r = r.register(mono(
         "cube",
         vec![float(), float(), float()],
         shape3d(),
         "原点中心の軸並行な箱",
     ));
-    let r = r.add(mono("sphere", vec![float()], shape3d(), "原点中心の球"));
-    let r = r.add(mono(
+    let r = r.register(mono("sphere", vec![float()], shape3d(), "原点中心の球"));
+    let r = r.register(mono(
         "cylinder",
         vec![float(), float()],
         shape3d(),
         "Z 軸に沿った円柱",
     ));
-    let r = r.add(mono("tetrahedron", vec![], shape3d(), "原点中心の正四面体"));
+    let r = r.register(mono("tetrahedron", vec![], shape3d(), "原点中心の正四面体"));
 
     // -- CSG 3D
-    let r = r.add(mono(
+    let r = r.register(mono(
         "union3d",
         vec![shape3d(), shape3d()],
         shape3d(),
         "3D 形状の和",
     ));
-    let r = r.add(mono(
+    let r = r.register(mono(
         "diff3d",
         vec![shape3d(), shape3d()],
         shape3d(),
         "3D 形状の差 (`base |> diff3d cut` = base - cut)",
     ));
-    let r = r.add(mono(
+    let r = r.register(mono(
         "intersect3d",
         vec![shape3d(), shape3d()],
         shape3d(),
         "3D 形状の積",
     ));
-    let r = r.add(mono(
+    let r = r.register(mono(
         "hull3d",
         vec![shape3d(), shape3d()],
         shape3d(),
@@ -274,19 +274,19 @@ pub fn registry() -> BuiltinRegistry {
     ));
 
     // -- Transform 3D
-    let r = r.add(mono(
+    let r = r.register(mono(
         "translate3d",
         vec![point3d(), point3d(), shape3d()],
         shape3d(),
         "Shape3D の点 src を点 dst に運ぶ (`s |> translate3d src dst`)",
     ));
-    let r = r.add(mono(
+    let r = r.register(mono(
         "scale3d",
         vec![point3d(), shape3d()],
         shape3d(),
         "Shape3D を Point3D の各軸倍率で拡縮",
     ));
-    let r = r.add(mono(
+    let r = r.register(mono(
         "rotate3d",
         vec![point3d(), shape3d()],
         shape3d(),
@@ -294,18 +294,18 @@ pub fn registry() -> BuiltinRegistry {
     ));
 
     // -- 2D primitives
-    let r = r.add(mono("circle", vec![float()], shape2d(), "原点中心の円"));
-    let r = r.add(mono("empty_3d", vec![], shape3d(), "空の Shape3D"));
-    let r = r.add(mono("empty_2d", vec![], shape2d(), "空の Shape2D"));
+    let r = r.register(mono("circle", vec![float()], shape2d(), "原点中心の円"));
+    let r = r.register(mono("empty_3d", vec![], shape3d(), "空の Shape3D"));
+    let r = r.register(mono("empty_2d", vec![], shape2d(), "空の Shape2D"));
 
     // -- Place + extrude
-    let r = r.add(mono(
+    let r = r.register(mono(
         "place",
         vec![plane(), shape2d()],
         placed2d(),
         "2D 形状を 3D 平面に貼り付け (`s |> place plane`)",
     ));
-    let r = r.add(mono(
+    let r = r.register(mono(
         "linear_extrude",
         vec![float(), placed2d()],
         shape3d(),
@@ -314,37 +314,37 @@ pub fn registry() -> BuiltinRegistry {
 
     // -- 2D ポリゴン + 平面別 extrude (簡略 API)
     let segment = || Type::con("Segment");
-    let r = r.add(mono(
+    let r = r.register(mono(
         "line",
         vec![point2d(), point2d()],
         segment(),
         "2 点を結ぶ線分。`polygon` の輪郭要素",
     ));
-    let r = r.add(mono(
+    let r = r.register(mono(
         "segments",
         vec![Type::app("List", vec![point2d()])],
         Type::app("List", vec![segment()]),
         "Point2D 列を閉路の線分列に変換する (`polygon (segments [...])`)",
     ));
-    let r = r.add(mono(
+    let r = r.register(mono(
         "polygon",
         vec![Type::app("List", vec![segment()])],
         shape2d(),
         "線分の閉路リストから 2D ポリゴンを作る",
     ));
-    let r = r.add(mono(
+    let r = r.register(mono(
         "extrude_xy",
         vec![float(), shape2d()],
         shape3d(),
         "Shape2D を XY 平面上で Z 方向に Float だけ押し出す (`s |> extrude_xy h`)",
     ));
-    let r = r.add(mono(
+    let r = r.register(mono(
         "extrude_yz",
         vec![float(), shape2d()],
         shape3d(),
         "Shape2D を YZ 平面上で X 方向に Float だけ押し出す (`s |> extrude_yz h`)",
     ));
-    let r = r.add(mono(
+    let r = r.register(mono(
         "extrude_xz",
         vec![float(), shape2d()],
         shape3d(),
@@ -352,7 +352,7 @@ pub fn registry() -> BuiltinRegistry {
     ));
 
     // -- Transform 2D
-    let r = r.add(mono(
+    let r = r.register(mono(
         "translate2d",
         vec![point2d(), point2d(), shape2d()],
         shape2d(),
@@ -360,19 +360,19 @@ pub fn registry() -> BuiltinRegistry {
     ));
 
     // -- 2D CSG
-    let r = r.add(mono(
+    let r = r.register(mono(
         "union2d",
         vec![shape2d(), shape2d()],
         shape2d(),
         "2D 形状の和",
     ));
-    let r = r.add(mono(
+    let r = r.register(mono(
         "diff2d",
         vec![shape2d(), shape2d()],
         shape2d(),
         "2D 形状の差 (`base |> diff2d cut` = base - cut)",
     ));
-    let r = r.add(mono(
+    let r = r.register(mono(
         "intersect2d",
         vec![shape2d(), shape2d()],
         shape2d(),
@@ -380,19 +380,19 @@ pub fn registry() -> BuiltinRegistry {
     ));
 
     // -- revolve / complex_extrude / sweep_extrude (XY 平面上の profile)
-    let r = r.add(mono(
+    let r = r.register(mono(
         "revolve_xy",
         vec![float(), shape2d()],
         shape3d(),
         "XY 平面上の Shape2D を Z 軸まわりに Float (度) 回転して 3D 化",
     ));
-    let r = r.add(mono(
+    let r = r.register(mono(
         "revolve_yz",
         vec![float(), shape2d()],
         shape3d(),
         "YZ 平面上の Shape2D を X 軸まわりに Float (度) 回転して 3D 化",
     ));
-    let r = r.add(mono(
+    let r = r.register(mono(
         "revolve_xz",
         vec![float(), shape2d()],
         shape3d(),
@@ -400,7 +400,7 @@ pub fn registry() -> BuiltinRegistry {
     ));
 
     // complex_extrude (XY): height, twist (degree), scale_x, scale_y, profile (pipe-friendly に最後)
-    let r = r.add(poly(
+    let r = r.register(poly(
         "complex_extrude_xy",
         vec![],
         vec![float(), float(), float(), float(), shape2d()],
@@ -409,7 +409,7 @@ pub fn registry() -> BuiltinRegistry {
     ));
 
     // sweep_extrude (XY): 3D path に沿って 2D profile を押し出し
-    let r = r.add(mono(
+    let r = r.register(mono(
         "sweep_extrude_xy",
         vec![Type::app("List", vec![point3d()]), shape2d()],
         shape3d(),
@@ -419,13 +419,13 @@ pub fn registry() -> BuiltinRegistry {
     // center3d / center2d: Shape の AABB 中心 (Point) を返す。
     // 移動したいときは translate3d / translate2d と組み合わせる:
     //   `s |> translate3d (center3d s) p`
-    let r = r.add(mono(
+    let r = r.register(mono(
         "center3d",
         vec![shape3d()],
         point3d(),
         "Shape3D の AABB 中心 Point3D を返す",
     ));
-    let r = r.add(mono(
+    let r = r.register(mono(
         "center2d",
         vec![shape2d()],
         point2d(),
@@ -433,13 +433,13 @@ pub fn registry() -> BuiltinRegistry {
     ));
 
     // control point: GUI ドラッグ用。戻り値はそのまま Point に解決 (override 無し時)。
-    let r = r.add(mono(
+    let r = r.register(mono(
         "control3d",
         vec![string(), point3d()],
         point3d(),
         "名前付き 3D control point。GUI ドラッグで上書き可能",
     ));
-    let r = r.add(mono(
+    let r = r.register(mono(
         "control2d",
         vec![string(), point2d()],
         point2d(),
@@ -448,7 +448,7 @@ pub fn registry() -> BuiltinRegistry {
 
     // -- Debug.log : forall a. String -> a -> a (Elm 互換)
     let dbg_a = g.fresh();
-    let r = r.add(poly(
+    let r = r.register(poly(
         "Debug.log",
         vec![dbg_a],
         vec![string(), Type::Var(dbg_a)],
@@ -459,13 +459,13 @@ pub fn registry() -> BuiltinRegistry {
     // -- Bezier 曲線サンプリング
     // List Point2D を返すので polygon の入力にそのまま渡せる:
     //   polygon ([p2 0 0] ++ bezier_quad (p2 0 0) (p2 5 10) (p2 10 0) 20)
-    let r = r.add(mono(
+    let r = r.register(mono(
         "bezier_quad",
         vec![point2d(), point2d(), point2d(), int()],
         Type::app("List", vec![point2d()]),
         "2 次 Bezier (start, control, end, segments) → List Point2D",
     ));
-    let r = r.add(mono(
+    let r = r.register(mono(
         "bezier_cubic",
         vec![point2d(), point2d(), point2d(), point2d(), int()],
         Type::app("List", vec![point2d()]),
@@ -473,13 +473,13 @@ pub fn registry() -> BuiltinRegistry {
     ));
 
     // -- Points
-    let r = r.add(mono(
+    let r = r.register(mono(
         "p3",
         vec![float(), float(), float()],
         point3d(),
         "3D 点",
     ));
-    let r = r.add(mono("p2", vec![float(), float()], point2d(), "2D 点"));
+    let r = r.register(mono("p2", vec![float(), float()], point2d(), "2D 点"));
 
     // -- Edge selection & chamfer
     //
@@ -487,14 +487,14 @@ pub fn registry() -> BuiltinRegistry {
     // hit_point に一番近い辺の情報 (2 端点 + 2 面の外向き法線) を Edge 値として返す。
     // GUI (preview) は edge select モードのクリックで hit point を拾って
     // `edgeNearPoint (p3 x y z) shape` を生成する。
-    let r = r.add(mono(
+    let r = r.register(mono(
         "edgeNearPoint",
         vec![point3d(), shape3d()],
         edge(),
         "hit_point に一番近い shape の sharp edge を返す。`shape |> edgeNearPoint (p3 x y z)` で使う",
     ));
     // `chamfer size edge shape` は edge を 45° cutting prism で削り、chamfer 加工した shape を返す。
-    let r = r.add(mono(
+    let r = r.register(mono(
         "chamfer",
         vec![float(), edge(), shape3d()],
         shape3d(),
@@ -502,7 +502,7 @@ pub fn registry() -> BuiltinRegistry {
     ));
 
     // -- I/O
-    let r = r.add(mono(
+    let r = r.register(mono(
         "stl",
         vec![string()],
         shape3d(),
@@ -510,9 +510,8 @@ pub fn registry() -> BuiltinRegistry {
     ));
 
     // -- 数値変換
-    let r = r.add(mono("fromInt", vec![int()], float(), "Int を Float に変換"));
 
-    r
+    r.register(mono("fromInt", vec![int()], float(), "Int を Float に変換"))
 }
 
 #[cfg(test)]

@@ -189,13 +189,14 @@ pub fn run_collision_job(params: CollisionJobParams) -> EvalJobResult {
         }
         for j in (i + 1)..n {
             // 交差は宣言ツリー上で `Intersect` ノードを作る (lazy 評価のまま)。
-            let inter = Model3D::Intersect(Box::new(models[i].clone()), Box::new(models[j].clone()));
+            let inter =
+                Model3D::Intersect(Box::new(models[i].clone()), Box::new(models[j].clone()));
             // 空かどうか確認: evaluate して vertex 数チェック
-            if let Ok(m) = evaluate_with_paths(&inter, &params.search_paths) {
-                if !m.is_empty() {
-                    collisions.push(inter);
-                    bom.push(format!("part #{i} ⊗ part #{j}: collision"));
-                }
+            if let Ok(m) = evaluate_with_paths(&inter, &params.search_paths)
+                && !m.is_empty()
+            {
+                collisions.push(inter);
+                bom.push(format!("part #{i} ⊗ part #{j}: collision"));
             }
         }
     }
@@ -233,9 +234,11 @@ pub fn run_collision_job(params: CollisionJobParams) -> EvalJobResult {
 }
 
 fn build_inputs(prog: &CompiledProgram, target: &str, params: &EvalJobParams) -> Inputs {
-    let mut inputs = Inputs::default();
-    inputs.control_overrides = params.control_overrides.clone();
-    inputs.search_paths = params.search_paths.clone();
+    let mut inputs = Inputs {
+        control_overrides: params.control_overrides.clone(),
+        search_paths: params.search_paths.clone(),
+        ..Default::default()
+    };
     if let Some(sig) = prog.binding_signature(target) {
         for p in &sig.params {
             let v = params.slider_values.get(&p.name).copied();
@@ -248,8 +251,10 @@ fn build_inputs(prog: &CompiledProgram, target: &str, params: &EvalJobParams) ->
 }
 
 fn build_collision_inputs(params: &CollisionJobParams) -> Inputs {
-    let mut inputs = Inputs::default();
-    inputs.search_paths = params.search_paths.clone();
+    let mut inputs = Inputs {
+        search_paths: params.search_paths.clone(),
+        ..Default::default()
+    };
     if let Some(sig) = params.program.binding_signature("main") {
         for p in &sig.params {
             let v = params.slider_values.get(&p.name).copied();
@@ -283,10 +288,7 @@ fn build_param_value(p: &BindingParam, v: Option<f64>) -> Value {
     }
 }
 
-fn build_mesh(
-    models: &[cadhr_lang::Model3D],
-    search_paths: &[PathBuf],
-) -> (Vec<Vertex>, Vec<u32>) {
+fn build_mesh(models: &[cadhr_lang::Model3D], search_paths: &[PathBuf]) -> (Vec<Vertex>, Vec<u32>) {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
     for m in models {

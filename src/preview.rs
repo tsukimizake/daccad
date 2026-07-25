@@ -113,20 +113,8 @@ impl Scene {
         self.camera.zoom = (self.camera.zoom + delta * ZOOM_SENSITIVITY).clamp(MIN_ZOOM, MAX_ZOOM);
     }
 
-    pub fn set_mesh(&mut self, vertices: Vec<Vertex>, indices: Vec<u32>) {
-        self.update_bbox(&vertices);
-        let edge_indices = extract_sharp_edges(&vertices, &indices, EDGE_ANGLE_THRESHOLD_DEG);
-        self.mesh = Arc::new(MeshData {
-            vertices,
-            indices,
-            edge_indices,
-        });
-        self.mesh_version = NEXT_MESH_VERSION.fetch_add(1, Ordering::Relaxed);
-    }
-
     /// control points を球体としてメインメッシュに追加してから書き戻す。
-    /// 旧 GUI の `set_mesh_with_control_points` の再復活。CP の色は `selected_cp`
-    /// で 1 つだけ強調表示する。
+    /// CP の色は `selected_cp` で 1 つだけ強調表示する。
     pub fn set_mesh_with_control_points(
         &mut self,
         mut vertices: Vec<Vertex>,
@@ -347,13 +335,19 @@ pub fn ray_mesh_intersect(
         let v0 = [v0p[0] as f64, v0p[1] as f64, v0p[2] as f64];
         let v1 = [v1p[0] as f64, v1p[1] as f64, v1p[2] as f64];
         let v2 = [v2p[0] as f64, v2p[1] as f64, v2p[2] as f64];
-        if let Some(t) = ray_triangle_intersect(origin, dir, &v0, &v1, &v2) {
-            if best_t.is_none_or(|b| t < b) {
-                best_t = Some(t);
-            }
+        if let Some(t) = ray_triangle_intersect(origin, dir, &v0, &v1, &v2)
+            && best_t.is_none_or(|b| t < b)
+        {
+            best_t = Some(t);
         }
     }
-    best_t.map(|t| [origin[0] + t * dir[0], origin[1] + t * dir[1], origin[2] + t * dir[2]])
+    best_t.map(|t| {
+        [
+            origin[0] + t * dir[0],
+            origin[1] + t * dir[1],
+            origin[2] + t * dir[2],
+        ]
+    })
 }
 
 /// Ray-sphere intersection, returns distance t or None.
@@ -522,17 +516,18 @@ impl shader::Program<SceneMessage> for Scene {
                 let was_dragging = state.dragging;
                 state.dragging = false;
 
-                if was_dragging && in_bounds {
-                    if let Some(pos) = cursor.position() {
-                        let u = (pos.x - bounds.x) / bounds.width;
-                        let v = (pos.y - bounds.y) / bounds.height;
-                        let aspect = bounds.width / bounds.height.max(1.0);
-                        state.last_cursor = None;
-                        return Some(
-                            shader::Action::publish(SceneMessage::Clicked { u, v, aspect })
-                                .and_capture(),
-                        );
-                    }
+                if was_dragging
+                    && in_bounds
+                    && let Some(pos) = cursor.position()
+                {
+                    let u = (pos.x - bounds.x) / bounds.width;
+                    let v = (pos.y - bounds.y) / bounds.height;
+                    let aspect = bounds.width / bounds.height.max(1.0);
+                    state.last_cursor = None;
+                    return Some(
+                        shader::Action::publish(SceneMessage::Clicked { u, v, aspect })
+                            .and_capture(),
+                    );
                 }
                 state.last_cursor = None;
                 Some(shader::Action::capture())
@@ -621,7 +616,7 @@ impl shader::Primitive for Primitive {
             device,
             queue,
             viewport,
-            *bounds * viewport.scale_factor() as f32,
+            *bounds * viewport.scale_factor(),
             self.id,
             &self.uniforms,
             &self.gizmo_uniforms,

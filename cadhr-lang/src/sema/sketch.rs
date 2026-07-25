@@ -23,6 +23,7 @@
 //! 連結性検査のためにここで評価する。
 
 use crate::diagnostic::{Diagnostic, Span};
+use crate::geom::{P2, Seg2, p2};
 use crate::sketch::top_let_values;
 use crate::syntax::ast::*;
 use std::collections::HashMap;
@@ -121,7 +122,6 @@ pub fn check_module(m: &Module) -> Vec<Diagnostic> {
     diag
 }
 
-
 /// 式ツリーから sketch ブロックを探して検査する。sketch の内部には再帰しない
 /// (内部の制約は `check_sketch` が見る)。
 fn find_sketches(e: &Expr, top: &TopScope, diag: &mut Vec<Diagnostic>) {
@@ -191,8 +191,8 @@ fn find_sketches(e: &Expr, top: &TopScope, diag: &mut Vec<Diagnostic>) {
 #[derive(Clone, Debug)]
 enum Entry {
     Scalar(Option<f64>),
-    Point(Option<(f64, f64)>),
-    Segment(Option<((f64, f64), (f64, f64))>),
+    Point(Option<P2>),
+    Segment(Option<Seg2>),
     /// polygon / circle。
     Shape,
 }
@@ -235,18 +235,21 @@ fn check_sketch(
         } else if top.vars.contains_key(b.name.as_str()) {
             cx.err(
                 b.name_span,
-                format!("`{}` はトップレベル var と同名です (shadow できません)", b.name),
+                format!(
+                    "`{}` はトップレベル var と同名です (shadow できません)",
+                    b.name
+                ),
             );
         } else if top.lets.contains_key(b.name.as_str()) {
             cx.err(
                 b.name_span,
-                format!("`{}` はトップレベル let と同名です (shadow できません)", b.name),
+                format!(
+                    "`{}` はトップレベル let と同名です (shadow できません)",
+                    b.name
+                ),
             );
         } else if cx.env.contains_key(b.name.as_str()) {
-            cx.err(
-                b.name_span,
-                format!("`{}` は既に定義されています", b.name),
-            );
+            cx.err(b.name_span, format!("`{}` は既に定義されています", b.name));
         }
         let entry = match b.kind {
             SketchBindKind::Var => Entry::Scalar(check_var_rhs(&mut cx, &b.body)),
@@ -366,12 +369,12 @@ fn check_geometry(cx: &mut Ctx, e: &Expr) -> Entry {
         Some("p2") if args.len() == 2 => {
             let x = check_scalar(cx, args[0]);
             let y = check_scalar(cx, args[1]);
-            Entry::Point(x.zip(y))
+            Entry::Point(x.zip(y).map(|(x, y)| p2(x, y)))
         }
         Some("line") if args.len() == 2 => {
             let a = check_point_ref(cx, args[0]);
             let b = check_point_ref(cx, args[1]);
-            Entry::Segment(a.zip(b))
+            Entry::Segment(a.zip(b).map(|(a, b)| Seg2 { a, b }))
         }
         Some("polygon") if args.len() == 1 => {
             check_polygon_arg(cx, args[0]);
@@ -417,7 +420,7 @@ fn check_geometry(cx: &mut Ctx, e: &Expr) -> Entry {
 }
 
 /// 点参照: 点 binding 名か `p2 x y`。
-fn check_point_ref(cx: &mut Ctx, e: &Expr) -> Option<(f64, f64)> {
+fn check_point_ref(cx: &mut Ctx, e: &Expr) -> Option<P2> {
     match e {
         Expr::Var {
             module: None,
@@ -442,7 +445,7 @@ fn check_point_ref(cx: &mut Ctx, e: &Expr) -> Option<(f64, f64)> {
             if head == Some("p2") && args.len() == 2 {
                 let x = check_scalar(cx, args[0]);
                 let y = check_scalar(cx, args[1]);
-                x.zip(y)
+                x.zip(y).map(|(x, y)| p2(x, y))
             } else {
                 cx.err(
                     span_of(e),
@@ -455,7 +458,7 @@ fn check_point_ref(cx: &mut Ctx, e: &Expr) -> Option<(f64, f64)> {
 }
 
 /// 線分参照: 線分 binding 名か `line a b`。
-fn check_segment_item(cx: &mut Ctx, e: &Expr) -> Option<((f64, f64), (f64, f64))> {
+fn check_segment_item(cx: &mut Ctx, e: &Expr) -> Option<Seg2> {
     match e {
         Expr::Var {
             module: None,
@@ -480,7 +483,7 @@ fn check_segment_item(cx: &mut Ctx, e: &Expr) -> Option<((f64, f64), (f64, f64))
             if head == Some("line") && args.len() == 2 {
                 let a = check_point_ref(cx, args[0]);
                 let b = check_point_ref(cx, args[1]);
-                a.zip(b)
+                a.zip(b).map(|(a, b)| Seg2 { a, b })
             } else {
                 cx.err(
                     span_of(e),
@@ -496,7 +499,7 @@ fn check_segment_item(cx: &mut Ctx, e: &Expr) -> Option<((f64, f64), (f64, f64))
 fn check_polygon_arg(cx: &mut Ctx, e: &Expr) {
     match e {
         Expr::List(items, span) => {
-            let mut segs: Vec<((f64, f64), (f64, f64))> = Vec::new();
+            let mut segs: Vec<Seg2> = Vec::new();
             let mut all_known = true;
             for it in items {
                 match check_segment_item(cx, it) {
@@ -533,18 +536,24 @@ fn check_polygon_arg(cx: &mut Ctx, e: &Expr) {
 }
 
 /// 線分列の連結性 + 閉路検査。
-fn check_chain(cx: &mut Ctx, segs: &[((f64, f64), (f64, f64))], span: Span) {
-    let near = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).abs() < EPS && (a.1 - b.1).abs() < EPS;
+fn check_chain(cx: &mut Ctx, segs: &[Seg2], span: Span) {
+    let near = |a: P2, b: P2| (a.x - b.x).abs() < EPS && (a.y - b.y).abs() < EPS;
     for w in segs.windows(2) {
-        if !near(w[0].1, w[1].0) {
-            cx.err(span, "polygon の線分が連結していません (前の線分の終点 = 次の線分の始点 にしてください)");
+        if !near(w[0].b, w[1].a) {
+            cx.err(
+                span,
+                "polygon の線分が連結していません (前の線分の終点 = 次の線分の始点 にしてください)",
+            );
             return;
         }
     }
     let last = segs[segs.len() - 1];
     let first = segs[0];
-    if !near(last.1, first.0) {
-        cx.err(span, "polygon が閉じていません (最後の線分の終点 = 最初の線分の始点 にしてください)");
+    if !near(last.b, first.a) {
+        cx.err(
+            span,
+            "polygon が閉じていません (最後の線分の終点 = 最初の線分の始点 にしてください)",
+        );
     }
 }
 

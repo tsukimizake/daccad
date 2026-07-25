@@ -15,6 +15,7 @@
 //!       `let x = 60.0` は複数 sketch で共有する凍結値になる
 //!     - 二項演算 → 書き込み可能な側がちょうど 1 つならそちらへ押し込む
 //!       (もう一方は現在値で定数化)。両方可 / 両方不可なら拒否。
+//!
 //!   共有頂点 (junction) は構成する全ての座標式へ書き込む。軸ごとに独立で、
 //!   片軸だけ固定されている場合は動かせる軸のみ適用し `pinned` として報告する。
 //! - 構造編集 ([`add_point`] など): binding の挿入 / 削除と body record の更新。
@@ -84,12 +85,24 @@ impl SketchGeom {
 /// ドラッグ対象。`geom` は [`SketchModel::geoms`] の index。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DragTarget {
-    Point { geom: usize },
+    Point {
+        geom: usize,
+    },
     /// `end`: 0 = 始点, 1 = 終点。
-    SegmentEnd { geom: usize, end: usize },
-    PolyVertex { geom: usize, vert: usize },
-    CircleCenter { geom: usize },
-    CircleRadius { geom: usize },
+    SegmentEnd {
+        geom: usize,
+        end: usize,
+    },
+    PolyVertex {
+        geom: usize,
+        vert: usize,
+    },
+    CircleCenter {
+        geom: usize,
+    },
+    CircleRadius {
+        geom: usize,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -175,17 +188,16 @@ fn find_block<'a>(
     binding: &str,
 ) -> Result<(&'a [SketchBinding], &'a Expr, Span), String> {
     for d in &module.decls {
-        if let Decl::Value(v) = d {
-            if v.name == binding && v.params.is_empty() {
-                if let Expr::Sketch {
-                    bindings,
-                    body,
-                    span,
-                } = &v.body
-                {
-                    return Ok((bindings, body, *span));
-                }
-            }
+        if let Decl::Value(v) = d
+            && v.name == binding
+            && v.params.is_empty()
+            && let Expr::Sketch {
+                bindings,
+                body,
+                span,
+            } = &v.body
+        {
+            return Ok((bindings, body, *span));
         }
     }
     Err(format!(
@@ -604,8 +616,7 @@ impl<'a> Block<'a> {
                     {
                         let src = self.point_slot(rargs[0])?;
                         let dst = self.point_slot(rargs[1])?;
-                        let center_pos =
-                            [dst.pos[0] - src.pos[0], dst.pos[1] - src.pos[1]];
+                        let center_pos = [dst.pos[0] - src.pos[0], dst.pos[1] - src.pos[1]];
                         return Ok(GeomShape::Circle(CircleShape {
                             center_pos,
                             src: src.pos,
@@ -617,10 +628,7 @@ impl<'a> Block<'a> {
                         }));
                     }
                 }
-                Err(format!(
-                    "`{}` の右辺が幾何式として解釈できません",
-                    b.name
-                ))
+                Err(format!("`{}` の右辺が幾何式として解釈できません", b.name))
             }
         }
     }
@@ -1515,9 +1523,9 @@ pub fn remove_geom(src: &str, binding: &str, geom_name: &str) -> Result<String, 
     // body field の削除
     match body {
         Expr::Record(fields, span) => {
-            let idx = fields.iter().position(
-                |f| matches!(&f.value, Expr::Var { name, .. } if name == geom_name),
-            );
+            let idx = fields
+                .iter()
+                .position(|f| matches!(&f.value, Expr::Var { name, .. } if name == geom_name));
             if let Some(i) = idx {
                 let edit = if fields.len() == 1 {
                     TextEdit {
@@ -1557,10 +1565,10 @@ fn collect_lit_leaves(
     seen: &mut HashSet<(usize, usize)>,
 ) {
     for e in exprs {
-        if let Some((v, leaf)) = signed_lit_leaf(e) {
-            if seen.insert((leaf.span.start, leaf.span.end)) {
-                out.push((leaf.span, v));
-            }
+        if let Some((v, leaf)) = signed_lit_leaf(e)
+            && seen.insert((leaf.span.start, leaf.span.end))
+        {
+            out.push((leaf.span, v));
         }
     }
 }
@@ -1597,18 +1605,18 @@ pub fn factor_vars(src: &str, binding: &str) -> Result<String, String> {
     // 値が一致する既存のトップレベルスカラー名 (var 優先、宣言順で最初のもの)。
     let mut by_value: HashMap<u64, &str> = HashMap::new();
     for d in &module.decls {
-        if let Decl::Var(v) = d {
-            if let Some((val, _)) = signed_lit_leaf(&v.body) {
-                by_value.entry(val.to_bits()).or_insert(v.name.as_str());
-            }
+        if let Decl::Var(v) = d
+            && let Some((val, _)) = signed_lit_leaf(&v.body)
+        {
+            by_value.entry(val.to_bits()).or_insert(v.name.as_str());
         }
     }
     let let_values = top_let_values(&module);
     for d in &module.decls {
-        if let Decl::Let(v) = d {
-            if let Some(val) = let_values.get(v.name.as_str()) {
-                by_value.entry(val.to_bits()).or_insert(v.name.as_str());
-            }
+        if let Decl::Let(v) = d
+            && let Some(val) = let_values.get(v.name.as_str())
+        {
+            by_value.entry(val.to_bits()).or_insert(v.name.as_str());
         }
     }
 
@@ -1697,10 +1705,7 @@ mod tests {
             panic!("expected polygon: {:?}", m.geoms[0]);
         };
         assert_eq!(name, "poly1");
-        assert_eq!(
-            verts,
-            &vec![[0.0, 0.0], [4.0, 0.0], [4.0, 3.0], [0.0, 3.0]]
-        );
+        assert_eq!(verts, &vec![[0.0, 0.0], [4.0, 0.0], [4.0, 3.0], [0.0, 3.0]]);
     }
 
     #[test]
@@ -1770,8 +1775,16 @@ mod tests {
         let m = model_of(SRC_LINES);
         // v2 (geom 1) は l1 (geom 3) の終点と poly1 (geom 4) の頂点 1 に現れる
         let v2 = DragTarget::Point { geom: 1 };
-        assert!(shares_leaf(&m, v2, DragTarget::SegmentEnd { geom: 3, end: 1 }));
-        assert!(shares_leaf(&m, v2, DragTarget::PolyVertex { geom: 4, vert: 1 }));
+        assert!(shares_leaf(
+            &m,
+            v2,
+            DragTarget::SegmentEnd { geom: 3, end: 1 }
+        ));
+        assert!(shares_leaf(
+            &m,
+            v2,
+            DragTarget::PolyVertex { geom: 4, vert: 1 }
+        ));
         assert!(!shares_leaf(&m, v2, DragTarget::Point { geom: 0 }));
     }
 
@@ -2080,7 +2093,12 @@ mod tests {
         )
         .expect("drag");
         // junction (4.0, 0.0) の 2 出現が両方 (5.0, 1.0) になる
-        assert_eq!(out.source.matches("p2 5.0 1.0").count(), 2, "{}", out.source);
+        assert_eq!(
+            out.source.matches("p2 5.0 1.0").count(),
+            2,
+            "{}",
+            out.source
+        );
         let SketchGeom::Polygon { verts, .. } = &out.model.geoms[0] else {
             panic!()
         };
@@ -2127,7 +2145,10 @@ mod tests {
         assert_eq!(model_from_source(src, "sk").expect("model").geoms.len(), 0);
 
         let (s1, name) = add_point(src, "sk", [3.0, 2.0]).expect("add_point");
-        assert!(s1.contains("sketch\n        pt1 = p2 3.0 2.0\n    in"), "{s1}");
+        assert!(
+            s1.contains("sketch\n        pt1 = p2 3.0 2.0\n    in"),
+            "{s1}"
+        );
         assert!(s1.contains("{ pt1 }"), "{s1}");
         assert_eq!(model_from_source(&s1, "sk").expect("model").geoms.len(), 1);
 
@@ -2156,7 +2177,8 @@ mod tests {
             s1.contains("circ1 = circle 1.5 |> translate2d (p2 0.0 0.0) (p2 2.0 3.0)"),
             "{s1}"
         );
-        let (s2, poly_name) = add_polygon(&s1, "sk", &[[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]).expect("add_polygon");
+        let (s2, poly_name) =
+            add_polygon(&s1, "sk", &[[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]).expect("add_polygon");
         assert_eq!(poly_name, "poly2");
         assert!(
             s2.contains("poly2 = polygon (segments [p2 0.0 0.0, p2 1.0 0.0, p2 0.0 1.0])"),
@@ -2179,8 +2201,7 @@ mod tests {
 
     #[test]
     fn append_vertex_to_line_polygon_rejected() {
-        let err =
-            append_polygon_vertex(SRC_LINES, "sk", "poly1", [9.0, 9.0]).expect_err("reject");
+        let err = append_polygon_vertex(SRC_LINES, "sk", "poly1", [9.0, 9.0]).expect_err("reject");
         assert!(err.contains("segments"), "{err}");
     }
 
@@ -2232,7 +2253,8 @@ mod tests {
 
     #[test]
     fn drag_to_negative_zero_writes_plain_zero() {
-        let src = "sk =\n    sketch\n        pt1 = p2 1.0 2.0\n    in\n    { pt1 = pt1 }\n    end\n";
+        let src =
+            "sk =\n    sketch\n        pt1 = p2 1.0 2.0\n    in\n    { pt1 = pt1 }\n    end\n";
         let out = drag(
             src,
             "sk",
@@ -2506,7 +2528,10 @@ mod tests {
         let src = "sk =\n    sketch\n        var r = 2.0\n        circ1 = circle r |> translate2d (p2 1.0 1.0) (p2 4.0 6.0)\n    in\n    { circ1 = circ1 }\n    end\n";
         let info = inspect(src, "sk", DragTarget::CircleCenter { geom: 0 }).expect("inspect");
         assert_eq!(info.axes[0].value, 3.0, "中心座標 = dst - src");
-        assert_eq!(info.axes[0].writes[0].value, 4.0, "書き込み先は dst のリテラル");
+        assert_eq!(
+            info.axes[0].writes[0].value, 4.0,
+            "書き込み先は dst のリテラル"
+        );
         let ri = inspect(src, "sk", DragTarget::CircleRadius { geom: 0 }).expect("inspect");
         assert_eq!(ri.axes.len(), 1);
         assert_eq!(ri.axes[0].label, "半径");
@@ -2523,12 +2548,8 @@ mod tests {
     #[test]
     fn inspect_junction_dedupes_shared_leaf() {
         // 名前付き点の junction は同じ葉に集約されるので write は 1 つ。
-        let info = inspect(
-            SRC_LINES,
-            "sk",
-            DragTarget::PolyVertex { geom: 4, vert: 1 },
-        )
-        .expect("inspect");
+        let info =
+            inspect(SRC_LINES, "sk", DragTarget::PolyVertex { geom: 4, vert: 1 }).expect("inspect");
         assert_eq!(info.axes[0].writes.len(), 1);
         assert_eq!(info.axes[0].writes[0].value, 4.0);
     }
@@ -2575,12 +2596,16 @@ mod tests {
             9.0,
         )
         .expect_err("reject");
-        assert!(err.contains("書き込める var がありません") || err.contains("範囲外"), "{err}");
+        assert!(
+            err.contains("書き込める var がありません") || err.contains("範囲外"),
+            "{err}"
+        );
     }
 
     #[test]
     fn set_var_value_negative_literal_reparses() {
-        let src = "sk =\n    sketch\n        pt1 = p2 1.0 2.0\n    in\n    { pt1 = pt1 }\n    end\n";
+        let src =
+            "sk =\n    sketch\n        pt1 = p2 1.0 2.0\n    in\n    { pt1 = pt1 }\n    end\n";
         let out = set_var_value(src, "sk", DragTarget::Point { geom: 0 }, 0, 0, -3.5).expect("set");
         assert!(out.source.contains("p2 (-3.5) 2.0"), "{}", out.source);
     }

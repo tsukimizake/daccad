@@ -842,7 +842,10 @@ pub fn decl_parser<'tokens, 'src: 'tokens>()
         });
 
     // type_alias は `type alias` で始まるので type_decl より先にチェック。
-    choice((type_alias, type_decl, slider, var_decl, let_decl, signature, value)).boxed()
+    choice((
+        type_alias, type_decl, slider, var_decl, let_decl, signature, value,
+    ))
+    .boxed()
 }
 
 /// `exposing (..)` または `exposing (a, b, T(..), T(C1))`
@@ -1307,7 +1310,9 @@ mod tests {
                     assert_eq!(fields.len(), 2);
                     assert_eq!(fields[0].name, "a");
                     match &fields[0].value {
-                        Expr::Var { module: None, name, .. } => assert_eq!(name, "a"),
+                        Expr::Var {
+                            module: None, name, ..
+                        } => assert_eq!(name, "a"),
                         other => panic!("expected shorthand Var, got {other:?}"),
                     }
                 }
@@ -1326,7 +1331,9 @@ mod tests {
                 Expr::Record(fields, _) => {
                     assert_eq!(fields.len(), 2);
                     assert_eq!(fields[0].name, "a");
-                    assert!(matches!(&fields[0].value, Expr::Var { module: None, name, .. } if name == "a"));
+                    assert!(
+                        matches!(&fields[0].value, Expr::Var { module: None, name, .. } if name == "a")
+                    );
                     assert_eq!(fields[1].name, "b");
                     assert!(matches!(&fields[1].value, Expr::Lit(Lit::Int(1), _)));
                 }

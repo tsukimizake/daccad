@@ -15,6 +15,7 @@
 //! 返すもの) も同じ API で評価できる。
 
 pub mod diagnostic;
+pub mod geom;
 pub mod module;
 pub mod runtime;
 pub mod sema;
@@ -244,7 +245,11 @@ impl CompiledProgram {
             if v.name != name {
                 continue;
             }
-            if !v.params.iter().all(|p| matches!(p, syntax::ast::Pattern::Var(_, _))) {
+            if !v
+                .params
+                .iter()
+                .all(|p| matches!(p, syntax::ast::Pattern::Var(_, _)))
+            {
                 return None;
             }
             return Some(BindingSignature {
@@ -570,10 +575,22 @@ main = plate
         let prog = compile(src).expect("compile");
         let bindings = prog.previewable_bindings();
         let names: Vec<&str> = bindings.iter().map(|b| b.name.as_str()).collect();
-        assert!(names.contains(&"plate"), "plate should be previewable; got {names:?}");
-        assert!(names.contains(&"hex_head"), "hex_head should be previewable; got {names:?}");
-        assert!(names.contains(&"main"), "main should be previewable; got {names:?}");
-        assert!(!names.contains(&"helper"), "helper (Float -> Float) should not be previewable; got {names:?}");
+        assert!(
+            names.contains(&"plate"),
+            "plate should be previewable; got {names:?}"
+        );
+        assert!(
+            names.contains(&"hex_head"),
+            "hex_head should be previewable; got {names:?}"
+        );
+        assert!(
+            names.contains(&"main"),
+            "main should be previewable; got {names:?}"
+        );
+        assert!(
+            !names.contains(&"helper"),
+            "helper (Float -> Float) should not be previewable; got {names:?}"
+        );
     }
 
     #[test]
@@ -586,14 +603,14 @@ plate = cube 20.0 20.0 1.0
 main = plate
 ";
         let prog = compile(src).expect("compile");
-        let names: Vec<String> = prog.shape2d_bindings().into_iter().map(|b| b.name).collect();
+        let names: Vec<String> = prog
+            .shape2d_bindings()
+            .into_iter()
+            .map(|b| b.name)
+            .collect();
         assert_eq!(
             names,
-            vec![
-                "profile".to_string(),
-                "disc".to_string(),
-                "sk1".to_string()
-            ]
+            vec!["profile".to_string(), "disc".to_string(), "sk1".to_string()]
         );
     }
 
@@ -619,8 +636,7 @@ sk1 = { poly1 = polygon (segments [p2 0.0 0.0, p2 4.0 0.0, p2 0.0 4.0]), pt1 = p
 main = extrude_xy 1.0 sk1.poly1
 ";
         let prog = compile(src).expect("compile");
-        let contours =
-            run_binding_2d(&prog, "sk1", &Inputs::default()).expect("run_binding_2d");
+        let contours = run_binding_2d(&prog, "sk1", &Inputs::default()).expect("run_binding_2d");
         assert_eq!(contours.len(), 2);
     }
 
@@ -707,7 +723,8 @@ main = extrude_xy zc skxz.poly1
     #[test]
     fn sketch_validation_errors_are_fatal() {
         // var の右辺が Int リテラル → sketch DSL 違反で compile が Err になる。
-        let src = "sk =\n    sketch\n        var x = 1\n        p = p2 x x\n    in\n    p\n    end\n";
+        let src =
+            "sk =\n    sketch\n        var x = 1\n        p = p2 x x\n    in\n    p\n    end\n";
         let err = compile(src).expect_err("expected sketch validation error");
         assert!(
             err.iter().any(|d| d.message().contains("sketch")),

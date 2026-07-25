@@ -4,6 +4,7 @@
 //! 関数の実行時挙動をここに登録する。manifold-csg 呼び出しは行わず、宣言的な
 //! `Model3D` を組み立てて `manifold_bridge::evaluate` に渡す。
 
+use crate::geom::{P2, P3, Seg2, p2};
 use crate::runtime::value::{Model2D, Model3D, Plane3D, Value};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -16,10 +17,10 @@ thread_local! {
     pub static CONTROL_OVERRIDES: RefCell<HashMap<String, [f64; 3]>> = RefCell::new(HashMap::new());
     /// eval 中に呼ばれた control point の (name, current_value) を記録する。
     /// `run_main` が完了したあと `take_recorded_controls` で取り出す。
-    pub static RECORDED_CONTROLS: RefCell<Vec<(String, [f64; 3])>> = RefCell::new(Vec::new());
+    pub static RECORDED_CONTROLS: RefCell<Vec<(String, [f64; 3])>> = const { RefCell::new(Vec::new()) };
     /// `center3d` などの builtin が内部で manifold 評価する際に使う STL 検索パス。
     /// `run_main` 直前に `set_include_paths` で更新する。
-    pub static INCLUDE_PATHS: RefCell<Vec<PathBuf>> = RefCell::new(Vec::new());
+    pub static INCLUDE_PATHS: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
 }
 
 /// `run_main` が eval 前に呼んで thread-local の override map を更新する。
@@ -100,9 +101,7 @@ fn as_shape3d(v: &Value) -> Result<Model3D, String> {
 
 /// Edge 値 (opaque) から (p1, p2, n1, n2) を取り出す。
 /// Edge の内部表現は `Value::Opaque("Edge", [Point3D p1, Point3D p2, Point3D n1, Point3D n2])`。
-fn as_edge(
-    v: &Value,
-) -> Result<((f64, f64, f64), (f64, f64, f64), (f64, f64, f64), (f64, f64, f64)), String> {
+fn as_edge(v: &Value) -> Result<(P3, P3, P3, P3), String> {
     match v {
         Value::Opaque(tag, args) if tag == "Edge" && args.len() == 4 => {
             let p1 = as_point3d(&args[0])?;
@@ -115,19 +114,14 @@ fn as_edge(
     }
 }
 
-fn edge_value(
-    p1: (f64, f64, f64),
-    p2: (f64, f64, f64),
-    n1: (f64, f64, f64),
-    n2: (f64, f64, f64),
-) -> Value {
+fn edge_value(p1: P3, p2: P3, n1: P3, n2: P3) -> Value {
     Value::Opaque(
         "Edge".to_string(),
         vec![
-            point3d_value(p1.0, p1.1, p1.2),
-            point3d_value(p2.0, p2.1, p2.2),
-            point3d_value(n1.0, n1.1, n1.2),
-            point3d_value(n2.0, n2.1, n2.2),
+            point3d_value(p1.x, p1.y, p1.z),
+            point3d_value(p2.x, p2.y, p2.z),
+            point3d_value(n1.x, n1.y, n1.z),
+            point3d_value(n2.x, n2.y, n2.z),
         ],
     )
 }
@@ -156,20 +150,23 @@ fn record_float(fields: &[(String, Value)], name: &str) -> Result<f64, String> {
         .and_then(|(_, v)| as_f64(v))
 }
 
-fn as_point3d(v: &Value) -> Result<(f64, f64, f64), String> {
+fn as_point3d(v: &Value) -> Result<P3, String> {
     match v {
-        Value::Record(fs) => Ok((
-            record_float(fs, "x")?,
-            record_float(fs, "y")?,
-            record_float(fs, "z")?,
-        )),
+        Value::Record(fs) => Ok(P3 {
+            x: record_float(fs, "x")?,
+            y: record_float(fs, "y")?,
+            z: record_float(fs, "z")?,
+        }),
         _ => Err(format!("Point3D が期待されましたが {v} でした")),
     }
 }
 
-fn as_point2d(v: &Value) -> Result<(f64, f64), String> {
+fn as_point2d(v: &Value) -> Result<P2, String> {
     match v {
-        Value::Record(fs) => Ok((record_float(fs, "x")?, record_float(fs, "y")?)),
+        Value::Record(fs) => Ok(P2 {
+            x: record_float(fs, "x")?,
+            y: record_float(fs, "y")?,
+        }),
         _ => Err(format!("Point2D が期待されましたが {v} でした")),
     }
 }
@@ -188,9 +185,9 @@ fn as_list(v: &Value) -> Result<&[Value], String> {
     }
 }
 
-fn as_segment(v: &Value) -> Result<((f64, f64), (f64, f64)), String> {
+fn as_segment(v: &Value) -> Result<Seg2, String> {
     match v {
-        Value::Segment { a, b } => Ok((*a, *b)),
+        Value::Segment(s) => Ok(*s),
         _ => Err(format!("Segment が期待されましたが {v} でした")),
     }
 }
@@ -318,10 +315,10 @@ pub fn registry() -> BuiltinEvalRegistry {
             let r = as_f64(&args[0])?;
             // 32 角形で近似。GUI 描画でほとんど円に見える程度。
             let n = 32;
-            let mut pts: Vec<(f64, f64)> = Vec::with_capacity(n);
+            let mut pts: Vec<P2> = Vec::with_capacity(n);
             for i in 0..n {
                 let t = 2.0 * std::f64::consts::PI * (i as f64) / (n as f64);
-                pts.push((r * t.cos(), r * t.sin()));
+                pts.push(p2(r * t.cos(), r * t.sin()));
             }
             Ok(Value::Shape2D(Model2D::Polygon(pts)))
         })
@@ -344,14 +341,14 @@ pub fn registry() -> BuiltinEvalRegistry {
         })
         // -- 2D ポリゴン + 平面別 extrude
         .add("line", 2, |args| {
-            Ok(Value::Segment {
+            Ok(Value::Segment(Seg2 {
                 a: as_point2d(&args[0])?,
                 b: as_point2d(&args[1])?,
-            })
+            }))
         })
         .add("segments", 1, |args| {
             let points = as_list(&args[0])?;
-            let mut pts: Vec<(f64, f64)> = Vec::with_capacity(points.len());
+            let mut pts: Vec<P2> = Vec::with_capacity(points.len());
             for p in points {
                 pts.push(as_point2d(p)?);
             }
@@ -365,7 +362,7 @@ pub fn registry() -> BuiltinEvalRegistry {
                     if i + 1 == n && a == b {
                         break;
                     }
-                    segs.push(Value::Segment { a, b });
+                    segs.push(Value::Segment(Seg2 { a, b }));
                 }
             }
             Ok(Value::List(segs))
@@ -374,9 +371,9 @@ pub fn registry() -> BuiltinEvalRegistry {
             let segs_v = as_list(&args[0])?;
             // 線分列を描画順に連結した頂点列に畳む。連結していない線分は
             // 両端点をそのまま並べる (polygon は暗黙に閉じる)。
-            let mut pts: Vec<(f64, f64)> = Vec::new();
+            let mut pts: Vec<P2> = Vec::new();
             for s in segs_v {
-                let (a, b) = as_segment(s)?;
+                let Seg2 { a, b } = as_segment(s)?;
                 if pts.last() != Some(&a) {
                     pts.push(a);
                 }
@@ -464,7 +461,7 @@ pub fn registry() -> BuiltinEvalRegistry {
         // -- sweep_extrude (XY 平面 profile + 3D path)
         .add("sweep_extrude_xy", 2, |args| {
             let path_v = as_list(&args[0])?;
-            let mut path: Vec<(f64, f64, f64)> = Vec::with_capacity(path_v.len());
+            let mut path: Vec<P3> = Vec::with_capacity(path_v.len());
             for p in path_v {
                 path.push(as_point3d(p)?);
             }
@@ -479,16 +476,15 @@ pub fn registry() -> BuiltinEvalRegistry {
         .add("center3d", 1, |args| {
             let model = as_shape3d(&args[0])?;
             let paths = INCLUDE_PATHS.with(|p| p.borrow().clone());
-            let (cx, cy, cz) =
-                crate::runtime::manifold_bridge::bbox_center_3d(&model, &paths)
-                    .map_err(|e| format!("center3d: {e}"))?;
-            Ok(point3d_value(cx, cy, cz))
+            let c = crate::runtime::manifold_bridge::bbox_center_3d(&model, &paths)
+                .map_err(|e| format!("center3d: {e}"))?;
+            Ok(point3d_value(c.x, c.y, c.z))
         })
         .add("center2d", 1, |args| {
             let model = as_shape2d(&args[0])?;
-            let (cx, cy) = crate::runtime::manifold_bridge::bbox_center_2d(&model)
+            let c = crate::runtime::manifold_bridge::bbox_center_2d(&model)
                 .map_err(|e| format!("center2d: {e}"))?;
-            Ok(point2d_value(cx, cy))
+            Ok(point2d_value(c.x, c.y))
         })
         // -- 2D translate: src 点を dst 点に運ぶ。
         .add("translate2d", 3, |args| {
@@ -509,7 +505,7 @@ pub fn registry() -> BuiltinEvalRegistry {
                 c.borrow()
                     .get(&name)
                     .copied()
-                    .unwrap_or([default.0, default.1, default.2])
+                    .unwrap_or([default.x, default.y, default.z])
             });
             RECORDED_CONTROLS.with(|r| r.borrow_mut().push((name, current)));
             Ok(point3d_value(current[0], current[1], current[2]))
@@ -521,50 +517,49 @@ pub fn registry() -> BuiltinEvalRegistry {
                 c.borrow()
                     .get(&name)
                     .copied()
-                    .unwrap_or([default.0, default.1, 0.0])
+                    .unwrap_or([default.x, default.y, 0.0])
             });
             // 2D は z を 0 として記録する (GUI 側で扱いを分岐)。
             RECORDED_CONTROLS.with(|r| r.borrow_mut().push((name, current)));
             Ok(point2d_value(current[0], current[1]))
         })
-    // -- edgeNearPoint: hit_point に一番近い shape の sharp edge を Edge 値で返す。
-    //    Shape3D を実際に manifold 評価し、隣接 2 面の法線を含めて返す。
-    .add("edgeNearPoint", 2, |args| {
-        let hit = as_point3d(&args[0])?;
-        let model = as_shape3d(&args[1])?;
-        let paths = INCLUDE_PATHS.with(|p| p.borrow().clone());
-        // preview の sharp-edge 抽出と同じ 25° を採用。
-        let edge = crate::runtime::manifold_bridge::find_edge_near_point(
-            &model, &paths, hit, 25.0,
-        )
-        .map_err(|e| format!("edgeNearPoint: {e}"))?
-        .ok_or_else(|| {
-            "edgeNearPoint: shape に sharp edge が見つかりませんでした".to_string()
-        })?;
-        Ok(edge_value(edge.p1, edge.p2, edge.n1, edge.n2))
-    })
-    // -- chamfer: 指定 Edge を 45° の cutting prism で削って shape を返す。
-    .add("chamfer", 3, |args| {
-        let size = as_f64(&args[0])?;
-        let (p1, p2, n1, n2) = as_edge(&args[1])?;
-        let shape = as_shape3d(&args[2])?;
-        Ok(Value::Shape3D(Model3D::Chamfer {
-            shape: Box::new(shape),
-            p1,
-            p2,
-            n1,
-            n2,
-            size,
-        }))
-    })
-    // -- Debug.log : String -> a -> a (Elm 互換。stderr に出力して値をそのまま返す)
-    .add("Debug.log", 2, |args| {
-        let tag = as_string(&args[0]).unwrap_or_else(|_| format!("{}", args[0]));
-        eprintln!("[Debug.log] {tag}: {}", args[1]);
-        Ok(args[1].clone())
-    })
-    // -- Bezier サンプリング
-    .add("bezier_quad", 4, |args| {
+        // -- edgeNearPoint: hit_point に一番近い shape の sharp edge を Edge 値で返す。
+        //    Shape3D を実際に manifold 評価し、隣接 2 面の法線を含めて返す。
+        .add("edgeNearPoint", 2, |args| {
+            let hit = as_point3d(&args[0])?;
+            let model = as_shape3d(&args[1])?;
+            let paths = INCLUDE_PATHS.with(|p| p.borrow().clone());
+            // preview の sharp-edge 抽出と同じ 25° を採用。
+            let edge =
+                crate::runtime::manifold_bridge::find_edge_near_point(&model, &paths, hit, 25.0)
+                    .map_err(|e| format!("edgeNearPoint: {e}"))?
+                    .ok_or_else(|| {
+                        "edgeNearPoint: shape に sharp edge が見つかりませんでした".to_string()
+                    })?;
+            Ok(edge_value(edge.p1, edge.p2, edge.n1, edge.n2))
+        })
+        // -- chamfer: 指定 Edge を 45° の cutting prism で削って shape を返す。
+        .add("chamfer", 3, |args| {
+            let size = as_f64(&args[0])?;
+            let (p1, p2, n1, n2) = as_edge(&args[1])?;
+            let shape = as_shape3d(&args[2])?;
+            Ok(Value::Shape3D(Model3D::Chamfer {
+                shape: Box::new(shape),
+                p1,
+                p2,
+                n1,
+                n2,
+                size,
+            }))
+        })
+        // -- Debug.log : String -> a -> a (Elm 互換。stderr に出力して値をそのまま返す)
+        .add("Debug.log", 2, |args| {
+            let tag = as_string(&args[0]).unwrap_or_else(|_| format!("{}", args[0]));
+            eprintln!("[Debug.log] {tag}: {}", args[1]);
+            Ok(args[1].clone())
+        })
+        // -- Bezier サンプリング
+        .add("bezier_quad", 4, |args| {
             let p0 = as_point2d(&args[0])?;
             let c = as_point2d(&args[1])?;
             let p1 = as_point2d(&args[2])?;
@@ -575,8 +570,8 @@ pub fn registry() -> BuiltinEvalRegistry {
             for i in 1..=n {
                 let t = i as f64 / n as f64;
                 let mt = 1.0 - t;
-                let x = mt * mt * p0.0 + 2.0 * mt * t * c.0 + t * t * p1.0;
-                let y = mt * mt * p0.1 + 2.0 * mt * t * c.1 + t * t * p1.1;
+                let x = mt * mt * p0.x + 2.0 * mt * t * c.x + t * t * p1.x;
+                let y = mt * mt * p0.y + 2.0 * mt * t * c.y + t * t * p1.y;
                 pts.push(point2d_value(x, y));
             }
             Ok(Value::List(pts))
@@ -595,8 +590,8 @@ pub fn registry() -> BuiltinEvalRegistry {
                 let b1 = 3.0 * mt * mt * t;
                 let b2 = 3.0 * mt * t * t;
                 let b3 = t * t * t;
-                let x = b0 * p0.0 + b1 * c1.0 + b2 * c2.0 + b3 * p1.0;
-                let y = b0 * p0.1 + b1 * c1.1 + b2 * c2.1 + b3 * p1.1;
+                let x = b0 * p0.x + b1 * c1.x + b2 * c2.x + b3 * p1.x;
+                let y = b0 * p0.y + b1 * c1.y + b2 * c2.y + b3 * p1.y;
                 pts.push(point2d_value(x, y));
             }
             Ok(Value::List(pts))

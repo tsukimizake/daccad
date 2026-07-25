@@ -545,9 +545,7 @@ impl<'r> Evaluator<'r> {
                     .fold((*env).clone(), |env, (n, v)| env.extend(&n, v));
                 let new_env = Rc::new(new_env);
                 if params.len() == 1 {
-                    let expr = match body {
-                        ClosureBody::Expr(e) => e,
-                    };
+                    let ClosureBody::Expr(expr) = body;
                     self.eval_expr(&expr, &new_env)
                 } else {
                     // 部分適用 — 残りの params で新しい closure を作る
@@ -919,9 +917,7 @@ pub fn run_main(env: &Env, args: Vec<Value>) -> Result<Value, Diagnostic> {
                     .fold((*cenv).clone(), |env, (n, v)| env.extend(&n, v));
                 let new_env = Rc::new(new_env);
                 if params.len() == 1 {
-                    let expr = match body {
-                        ClosureBody::Expr(e) => e,
-                    };
+                    let ClosureBody::Expr(expr) = body;
                     // evaluator 必要 — run_main は使われない簡易ヘルパとして残す
                     let _ = expr;
                     return Err(Diagnostic::runtime(

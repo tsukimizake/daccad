@@ -104,10 +104,10 @@ impl ClassRegistry {
                     if inst.head != *head {
                         continue;
                     }
-                    if let Some(a) = inst.arity {
-                        if a != args.len() {
-                            continue;
-                        }
+                    if let Some(a) = inst.arity
+                        && a != args.len()
+                    {
+                        continue;
                     }
                     let mut derived = Vec::new();
                     for (i, arg_ty) in args.iter().enumerate() {

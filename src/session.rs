@@ -77,14 +77,12 @@ pub fn save_session(
     std::fs::create_dir_all(dir).map_err(|e| format!("Failed to create directory: {e}"))?;
 
     let db_path = dir.join("db.cadhr");
-    std::fs::write(&db_path, editor_text)
-        .map_err(|e| format!("Failed to save db file: {e}"))?;
+    std::fs::write(&db_path, editor_text).map_err(|e| format!("Failed to save db file: {e}"))?;
 
-    let json = serde_json::to_string_pretty(&session)
-        .map_err(|e| format!("Failed to serialize: {e}"))?;
+    let json =
+        serde_json::to_string_pretty(&session).map_err(|e| format!("Failed to serialize: {e}"))?;
     let previews_path = dir.join("previews.json");
-    std::fs::write(&previews_path, json)
-        .map_err(|e| format!("Failed to save previews: {e}"))?;
+    std::fs::write(&previews_path, json).map_err(|e| format!("Failed to save previews: {e}"))?;
 
     Ok(())
 }

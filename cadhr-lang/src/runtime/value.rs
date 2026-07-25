@@ -6,6 +6,7 @@
 //! - 3D 幾何 (`Shape3D`) は宣言的な `Model3D` ツリーとして保持
 //!   (manifold-csg への evaluate は GUI 側で行う)
 
+use crate::geom::{P2, P3, Seg2};
 use crate::syntax::ast::Pattern;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -49,7 +50,7 @@ pub enum Value {
     /// 2D 幾何形状 (extrude / revolve の入力)。
     Shape2D(Model2D),
     /// 2D 線分 (`line a b`)。`polygon` の輪郭要素。
-    Segment { a: (f64, f64), b: (f64, f64) },
+    Segment(Seg2),
     /// 名前付きの不透明値 (place の PlacedShape2D)。
     Opaque(String, Vec<Value>),
 }
@@ -162,16 +163,16 @@ pub enum Model3D {
     Tetrahedron,
     Translate {
         shape: Box<Model3D>,
-        src: (f64, f64, f64),
-        dst: (f64, f64, f64),
+        src: P3,
+        dst: P3,
     },
     Scale {
         shape: Box<Model3D>,
-        factor: (f64, f64, f64),
+        factor: P3,
     },
     Rotate {
         shape: Box<Model3D>,
-        angles: (f64, f64, f64),
+        angles: P3,
     },
     Union(Box<Model3D>, Box<Model3D>),
     Diff(Box<Model3D>, Box<Model3D>),
@@ -206,17 +207,17 @@ pub enum Model3D {
     SweepExtrude {
         profile: Model2D,
         plane: Plane3D,
-        path: Vec<(f64, f64, f64)>,
+        path: Vec<P3>,
     },
     /// 指定した一辺 (p1, p2) を挟む 2 面 (法線 n1, n2) の 45° chamfer。
     /// `manifold_bridge` が (p1,p2) を軸として `size` サイズの三角柱を構築し、
     /// 内側 (`-n1`, `-n2` 方向) で `shape` から差し引く。
     Chamfer {
         shape: Box<Model3D>,
-        p1: (f64, f64, f64),
-        p2: (f64, f64, f64),
-        n1: (f64, f64, f64),
-        n2: (f64, f64, f64),
+        p1: P3,
+        p2: P3,
+        n1: P3,
+        n2: P3,
         size: f64,
     },
     Empty,
@@ -226,7 +227,7 @@ pub enum Model3D {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Model2D {
     /// 単一閉路ポリゴン。先頭点と終点が同じでも違ってもよく、bridge 側で閉じる。
-    Polygon(Vec<(f64, f64)>),
+    Polygon(Vec<P2>),
     /// 2D CSG ノード。
     Union2D(Box<Model2D>, Box<Model2D>),
     Diff2D(Box<Model2D>, Box<Model2D>),
@@ -234,8 +235,8 @@ pub enum Model2D {
     /// 2D 平行移動。`shape` の点 `src` を `dst` に運ぶ。
     Translate2D {
         shape: Box<Model2D>,
-        src: (f64, f64),
-        dst: (f64, f64),
+        src: P2,
+        dst: P2,
     },
     Empty2D,
 }
@@ -295,8 +296,8 @@ impl fmt::Display for Value {
             }
             Value::Shape3D(m) => write!(f, "<Shape3D {m:?}>"),
             Value::Shape2D(m) => write!(f, "<Shape2D {m:?}>"),
-            Value::Segment { a, b } => {
-                write!(f, "<Segment ({}, {}) -> ({}, {})>", a.0, a.1, b.0, b.1)
+            Value::Segment(Seg2 { a, b }) => {
+                write!(f, "<Segment ({}, {}) -> ({}, {})>", a.x, a.y, b.x, b.y)
             }
             Value::Opaque(tag, _) => write!(f, "<{tag}>"),
         }

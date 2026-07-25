@@ -123,7 +123,11 @@ mod tests {
         let t0 = Instant::now();
         h.record_at(snap(""), EditKind::Typing, t0);
         h.record_at(snap("a"), EditKind::Typing, t0 + Duration::from_millis(100));
-        h.record_at(snap("ab"), EditKind::Typing, t0 + Duration::from_millis(200));
+        h.record_at(
+            snap("ab"),
+            EditKind::Typing,
+            t0 + Duration::from_millis(200),
+        );
         assert_eq!(h.undo.len(), 1);
         let restored = h.undo(snap("abc")).expect("undo");
         assert_eq!(restored.text, "");

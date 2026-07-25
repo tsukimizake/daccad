@@ -44,7 +44,9 @@ pub enum WorkspaceEvent {
     /// 状態が変わった (セッション未保存化)。
     Edited,
     /// 再評価が必要。`edited` はセッション未保存化も伴うかどうか。
-    EvalNeeded { edited: bool },
+    EvalNeeded {
+        edited: bool,
+    },
     /// target binding が変わった。signature デフォルト適用と再評価が必要。
     TargetChanged,
     /// 3MF export 要求。None はエクスポート対象なし。

@@ -71,10 +71,11 @@ pub fn emacs_key_binding<Msg>(key_press: KeyPress, undo: Msg, redo: Msg) -> Opti
     }
 
     // KeyPress::key は修飾なしのキーなので shift 有無に関わらず "z" で判定できる
-    if (modifiers.command() || modifiers.control()) && !modifiers.alt() {
-        if let keyboard::Key::Character("z") = key.as_ref() {
-            return Some(Binding::Custom(if modifiers.shift() { redo } else { undo }));
-        }
+    if (modifiers.command() || modifiers.control())
+        && !modifiers.alt()
+        && let keyboard::Key::Character("z") = key.as_ref()
+    {
+        return Some(Binding::Custom(if modifiers.shift() { redo } else { undo }));
     }
 
     if !modifiers.control() || modifiers.shift() || modifiers.alt() || modifiers.command() {

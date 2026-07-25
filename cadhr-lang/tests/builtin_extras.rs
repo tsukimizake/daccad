@@ -69,7 +69,11 @@ fn diff2d_extruded_xz_keeps_hole() {
     let out = compile_run(src);
     let mesh = cadhr_lang::runtime::manifold_bridge::to_mesh_arrays(&out.models[0]).unwrap();
     // 穴なしの箱は 12 三角形 (36 indices)。穴があれば必ずそれより多い。
-    assert!(mesh.indices.len() > 36, "hole was lost: {} indices", mesh.indices.len());
+    assert!(
+        mesh.indices.len() > 36,
+        "hole was lost: {} indices",
+        mesh.indices.len()
+    );
 }
 
 #[test]
@@ -200,7 +204,8 @@ fn sweep_extrude_follows_3d_path() {
     // 3D path (0,0,0) → (0,10,0) → (10,10,10) を 1 mm 円で sweep。
     // sweep mesh が全 3 軸方向 (X, Y, Z) で path 端点 (10,10,10) 近くまで届くことで、
     // 単一平面への退化なしに 3D 追従していることを確認する。
-    let src = "main = sweep_extrude_xy [p3 0.0 0.0 0.0, p3 0.0 10.0 0.0, p3 10.0 10.0 10.0] (circle 1.0)";
+    let src =
+        "main = sweep_extrude_xy [p3 0.0 0.0 0.0, p3 0.0 10.0 0.0, p3 10.0 10.0 10.0] (circle 1.0)";
     let out = compile_run(src);
     let mesh = cadhr_lang::runtime::manifold_bridge::to_mesh_arrays(&out.models[0]).unwrap();
     assert!(!mesh.is_empty());

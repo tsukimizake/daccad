@@ -402,6 +402,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant)] // 3.14 は PI ではなく Float リテラルの字句テスト
     fn numbers_and_strings() {
         assert_eq!(
             lex_strip("3.14 42"),

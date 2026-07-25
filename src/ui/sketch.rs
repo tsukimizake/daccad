@@ -734,7 +734,7 @@ impl canvas::Program<SketchMsg> for SketchCanvas<'_> {
                         let cross = Stroke::default().with_width(2.0).with_color(POINT_COLOR);
                         frame.stroke(
                             &Path::line(Point::new(c.x - 5.0, c.y), Point::new(c.x + 5.0, c.y)),
-                            cross.clone(),
+                            cross,
                         );
                         frame.stroke(
                             &Path::line(Point::new(c.x, c.y - 5.0), Point::new(c.x, c.y + 5.0)),
@@ -863,13 +863,11 @@ impl canvas::Program<SketchMsg> for SketchCanvas<'_> {
                 }
                 overlay.fill(&Path::circle(ph, 4.0), SNAP_INDICATOR);
             }
-            DragState::Hover(p) => {
-                if self.sketch.tool != Tool::Select {
-                    overlay.fill(
-                        &Path::circle(to_screen(view, osize, *p), 4.0),
-                        SNAP_INDICATOR,
-                    );
-                }
+            DragState::Hover(p) if self.sketch.tool != Tool::Select => {
+                overlay.fill(
+                    &Path::circle(to_screen(view, osize, *p), 4.0),
+                    SNAP_INDICATOR,
+                );
             }
             _ => {}
         }
@@ -1061,9 +1059,11 @@ pub fn view<'a>(s: &'a Sketch, index: usize, total: usize) -> Element<'a, Sketch
         );
     } else if s.model.is_none() {
         col = col.push(
-            iced::widget::button(text(format!("`{}` を新規 sketch として作成", s.binding)).size(13))
-                .style(parts::dark_button_style)
-                .on_press(SketchMsg::CreateBinding),
+            iced::widget::button(
+                text(format!("`{}` を新規 sketch として作成", s.binding)).size(13),
+            )
+            .style(parts::dark_button_style)
+            .on_press(SketchMsg::CreateBinding),
         );
     }
     if !s.status.is_empty() {

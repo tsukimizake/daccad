@@ -1,5 +1,5 @@
-use iced::advanced::text::highlighter;
 use iced::advanced::text::Highlighter;
+use iced::advanced::text::highlighter;
 use std::ops::Range;
 
 /// エラー span は (byte_start, byte_end) のタプル。cadhr_lang::Span 互換。
@@ -94,10 +94,7 @@ impl Highlighter for SpanHighlighter {
     }
 }
 
-pub fn format(
-    highlight: &Highlight,
-    _theme: &iced::Theme,
-) -> highlighter::Format<iced::Font> {
+pub fn format(highlight: &Highlight, _theme: &iced::Theme) -> highlighter::Format<iced::Font> {
     use iced::Color;
     match highlight {
         Highlight::Normal => highlighter::Format::default(),

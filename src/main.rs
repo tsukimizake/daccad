@@ -210,15 +210,15 @@ fn init() -> (Model, Task<Msg>) {
         panes,
     };
 
-    if let Some(path) = session::restore_last_session_path() {
-        if let Some((db, previews)) = session::load_session(&path) {
-            model.editor = text_editor::Content::with_text(&db);
-            model.current_file_path = Some(path);
-            let workspaces = workspaces_from_session(&previews);
-            if !workspaces.is_empty() {
-                model.next_workspace_id = workspaces.len();
-                model.workspaces = workspaces;
-            }
+    if let Some(path) = session::restore_last_session_path()
+        && let Some((db, previews)) = session::load_session(&path)
+    {
+        model.editor = text_editor::Content::with_text(&db);
+        model.current_file_path = Some(path);
+        let workspaces = workspaces_from_session(&previews);
+        if !workspaces.is_empty() {
+            model.next_workspace_id = workspaces.len();
+            model.workspaces = workspaces;
         }
     }
     let task = request_compile(&mut model);
@@ -607,11 +607,9 @@ fn handle_sketch_edit(model: &mut Model, id: usize, edit: SketchEdit) -> Task<Ms
         ),
         SketchEdit::AddSegment { geom, a, b } => match geom {
             // 追記中の polygon があれば末尾に頂点を足す (a はチェーン継続なので無視)
-            Some(g) => apply_sketch_text_edit(
-                model,
-                id,
-                sk::append_polygon_vertex(&src, &binding, &g, b),
-            ),
+            Some(g) => {
+                apply_sketch_text_edit(model, id, sk::append_polygon_vertex(&src, &binding, &g, b))
+            }
             None => match sk::add_polygon(&src, &binding, &[a, b]) {
                 Ok((new_src, name)) => {
                     let task = apply_sketch_text_edit(model, id, Ok(new_src));
@@ -944,18 +942,17 @@ fn update(model: &mut Model, message: Msg) -> Task<Msg> {
             }
             if let Some(path) = &model.current_file_path {
                 let db_path = path.join("db.cadhr");
-                if let Ok(meta) = std::fs::metadata(&db_path) {
-                    if let Ok(modified) = meta.modified() {
-                        if model.last_modified.is_none_or(|prev| modified > prev) {
-                            model.last_modified = Some(modified);
-                            if let Ok(content) = std::fs::read_to_string(&db_path) {
-                                model
-                                    .history
-                                    .record(editor_snapshot(model), history::EditKind::Oneshot);
-                                model.editor = text_editor::Content::with_text(&content);
-                                return request_compile(model);
-                            }
-                        }
+                if let Ok(meta) = std::fs::metadata(&db_path)
+                    && let Ok(modified) = meta.modified()
+                    && model.last_modified.is_none_or(|prev| modified > prev)
+                {
+                    model.last_modified = Some(modified);
+                    if let Ok(content) = std::fs::read_to_string(&db_path) {
+                        model
+                            .history
+                            .record(editor_snapshot(model), history::EditKind::Oneshot);
+                        model.editor = text_editor::Content::with_text(&content);
+                        return request_compile(model);
                     }
                 }
             }
@@ -1159,7 +1156,8 @@ mod tests {
         send_sketch(&mut model, id, SketchMsg::BindingChanged("sketchxy".into()));
         let s = sketch_ref(&model, id);
         assert!(
-            s.status.contains("sketch ブロックの binding ではありません"),
+            s.status
+                .contains("sketch ブロックの binding ではありません"),
             "{}",
             s.status
         );
@@ -1168,7 +1166,8 @@ mod tests {
         // view に出ている作成ボタンをクリックし、出たメッセージを update に流す
         let msgs: Vec<SketchMsg> = {
             let mut ui = Simulator::new(ui::sketch::view(s, 0, 1));
-            ui.click("`sketchxy` を新規 sketch として作成").expect("create button");
+            ui.click("`sketchxy` を新規 sketch として作成")
+                .expect("create button");
             ui.into_messages().collect()
         };
         assert!(

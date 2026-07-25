@@ -9,6 +9,7 @@
 
 #![cfg(feature = "manifold")]
 
+use crate::geom::{P2, P3, p2, p3};
 use crate::runtime::value::{Model2D, Model3D, Plane3D};
 use manifold_csg::{CrossSection, Manifold};
 use std::path::{Path as StdPath, PathBuf};
@@ -57,16 +58,16 @@ pub fn evaluate_with_paths(
             .hull()),
 
         Model3D::Translate { shape, src, dst } => {
-            let dx = dst.0 - src.0;
-            let dy = dst.1 - src.1;
-            let dz = dst.2 - src.2;
+            let dx = dst.x - src.x;
+            let dy = dst.y - src.y;
+            let dz = dst.z - src.z;
             Ok(evaluate_with_paths(shape, include_paths)?.translate(dx, dy, dz))
         }
         Model3D::Scale { shape, factor } => {
-            Ok(evaluate_with_paths(shape, include_paths)?.scale(factor.0, factor.1, factor.2))
+            Ok(evaluate_with_paths(shape, include_paths)?.scale(factor.x, factor.y, factor.z))
         }
         Model3D::Rotate { shape, angles } => {
-            Ok(evaluate_with_paths(shape, include_paths)?.rotate(angles.0, angles.1, angles.2))
+            Ok(evaluate_with_paths(shape, include_paths)?.rotate(angles.x, angles.y, angles.z))
         }
         Model3D::LinearExtrude {
             profile,
@@ -120,10 +121,10 @@ pub fn evaluate_with_paths(
 /// 上記断面を p1 から p2 へ +axial に伸ばした三角柱に、両端 cap を付けて閉じたメッシュとする。
 /// n1, n2 は shape の外向き法線 (2 隣接面の face normal) を想定。
 fn chamfer_cutter_manifold(
-    p1: (f64, f64, f64),
-    p2: (f64, f64, f64),
-    n1: (f64, f64, f64),
-    n2: (f64, f64, f64),
+    p1: P3,
+    p2: P3,
+    n1: P3,
+    n2: P3,
     size: f64,
 ) -> Result<Manifold, BridgeError> {
     if size <= 0.0 {
@@ -131,11 +132,11 @@ fn chamfer_cutter_manifold(
             "chamfer: size は正の値を要求 (実際: {size})"
         )));
     }
-    let n1a = normalize3([n1.0, n1.1, n1.2]);
-    let n2a = normalize3([n2.0, n2.1, n2.2]);
+    let n1a = normalize3([n1.x, n1.y, n1.z]);
+    let n2a = normalize3([n2.x, n2.y, n2.z]);
     // edge に沿った単位ベクトル。両端で prism を size 分だけ延長し、隣接面と
     // 接する corner をきれいに切り抜けるようにする。
-    let raw_delta = [p2.0 - p1.0, p2.1 - p1.1, p2.2 - p1.2];
+    let raw_delta = [p2.x - p1.x, p2.y - p1.y, p2.z - p1.z];
     let raw_len = norm3(raw_delta);
     if raw_len < 1e-9 {
         return Err(BridgeError::InvalidShape(
@@ -149,14 +150,14 @@ fn chamfer_cutter_manifold(
     ];
     let overshoot = size;
     let p1_ext = (
-        p1.0 - axis[0] * overshoot,
-        p1.1 - axis[1] * overshoot,
-        p1.2 - axis[2] * overshoot,
+        p1.x - axis[0] * overshoot,
+        p1.y - axis[1] * overshoot,
+        p1.z - axis[2] * overshoot,
     );
     let p2_ext = (
-        p2.0 + axis[0] * overshoot,
-        p2.1 + axis[1] * overshoot,
-        p2.2 + axis[2] * overshoot,
+        p2.x + axis[0] * overshoot,
+        p2.y + axis[1] * overshoot,
+        p2.z + axis[2] * overshoot,
     );
     // n1 と n2 は edge 周りの 2 面の外向き法線。三角断面のインセット方向は
     // それぞれ face1 に沿う (-n2) / face2 に沿う (-n1) だが、実際は「edge から
@@ -255,9 +256,8 @@ fn chamfer_cutter_manifold(
         flat_indices.push(t[1]);
         flat_indices.push(t[2]);
     }
-    Manifold::from_mesh_f32(&flat_verts, 3, &flat_indices).map_err(|e| {
-        BridgeError::InvalidShape(format!("chamfer cutter の manifold 化失敗: {e}"))
-    })
+    Manifold::from_mesh_f32(&flat_verts, 3, &flat_indices)
+        .map_err(|e| BridgeError::InvalidShape(format!("chamfer cutter の manifold 化失敗: {e}")))
 }
 
 /// 与えられた `Model3D` を manifold 化し、hit_point に一番近い sharp edge を
@@ -268,7 +268,7 @@ fn chamfer_cutter_manifold(
 pub fn find_edge_near_point(
     model: &Model3D,
     include_paths: &[PathBuf],
-    hit_point: (f64, f64, f64),
+    hit_point: P3,
     angle_thresh_deg: f64,
 ) -> Result<Option<EdgeHit>, BridgeError> {
     let manifold = evaluate_with_paths(model, include_paths)?;
@@ -292,17 +292,17 @@ pub fn find_edge_near_point(
     let mut pos_map: HashMap<(u32, u32, u32), u32> = HashMap::new();
     let mut canonical: Vec<u32> = Vec::with_capacity(n_verts);
     let mut canon_pos: Vec<[f64; 3]> = Vec::new();
-    for i in 0..n_verts {
+    for pos in &positions {
         let key = (
-            (positions[i][0] as f32).to_bits(),
-            (positions[i][1] as f32).to_bits(),
-            (positions[i][2] as f32).to_bits(),
+            (pos[0] as f32).to_bits(),
+            (pos[1] as f32).to_bits(),
+            (pos[2] as f32).to_bits(),
         );
         let next_id = pos_map.len() as u32;
         let entry = *pos_map.entry(key).or_insert(next_id);
         canonical.push(entry);
         if entry as usize == canon_pos.len() {
-            canon_pos.push(positions[i]);
+            canon_pos.push(*pos);
         }
     }
 
@@ -352,10 +352,10 @@ pub fn find_edge_near_point(
             best = Some((
                 dist,
                 EdgeHit {
-                    p1: (pa[0], pa[1], pa[2]),
-                    p2: (pb[0], pb[1], pb[2]),
-                    n1: (n_a[0], n_a[1], n_a[2]),
-                    n2: (n_b[0], n_b[1], n_b[2]),
+                    p1: p3(pa[0], pa[1], pa[2]),
+                    p2: p3(pb[0], pb[1], pb[2]),
+                    n1: p3(n_a[0], n_a[1], n_a[2]),
+                    n2: p3(n_b[0], n_b[1], n_b[2]),
                 },
             ));
         }
@@ -365,15 +365,15 @@ pub fn find_edge_near_point(
 
 #[derive(Clone, Copy, Debug)]
 pub struct EdgeHit {
-    pub p1: (f64, f64, f64),
-    pub p2: (f64, f64, f64),
-    pub n1: (f64, f64, f64),
-    pub n2: (f64, f64, f64),
+    pub p1: P3,
+    pub p2: P3,
+    pub n1: P3,
+    pub n2: P3,
 }
 
-fn point_segment_distance(p: (f64, f64, f64), a: [f64; 3], b: [f64; 3]) -> f64 {
+fn point_segment_distance(p: P3, a: [f64; 3], b: [f64; 3]) -> f64 {
     let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
-    let ap = [p.0 - a[0], p.1 - a[1], p.2 - a[2]];
+    let ap = [p.x - a[0], p.y - a[1], p.z - a[2]];
     let ab_len2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
     let t = if ab_len2 <= 1e-24 {
         0.0
@@ -381,7 +381,7 @@ fn point_segment_distance(p: (f64, f64, f64), a: [f64; 3], b: [f64; 3]) -> f64 {
         ((ap[0] * ab[0] + ap[1] * ab[1] + ap[2] * ab[2]) / ab_len2).clamp(0.0, 1.0)
     };
     let closest = [a[0] + t * ab[0], a[1] + t * ab[1], a[2] + t * ab[2]];
-    let d = [p.0 - closest[0], p.1 - closest[1], p.2 - closest[2]];
+    let d = [p.x - closest[0], p.y - closest[1], p.z - closest[2]];
     (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
 }
 
@@ -391,27 +391,24 @@ pub fn evaluate(model: &Model3D) -> Result<Manifold, BridgeError> {
 }
 
 /// Shape3D の AABB 中心を計算。`center3d` builtin の本体。
-pub fn bbox_center_3d(
-    model: &Model3D,
-    include_paths: &[PathBuf],
-) -> Result<(f64, f64, f64), BridgeError> {
+pub fn bbox_center_3d(model: &Model3D, include_paths: &[PathBuf]) -> Result<P3, BridgeError> {
     let m = evaluate_with_paths(model, include_paths)?;
     let bb = m
         .bounding_box()
         .ok_or_else(|| BridgeError::InvalidShape("bbox_center_3d: 空の Shape3D".to_string()))?;
     let [cx, cy, cz] = bb.center();
-    Ok((cx, cy, cz))
+    Ok(p3(cx, cy, cz))
 }
 
 /// Shape2D の AABB 中心を計算。`center2d` builtin の本体。
-pub fn bbox_center_2d(model: &Model2D) -> Result<(f64, f64), BridgeError> {
+pub fn bbox_center_2d(model: &Model2D) -> Result<P2, BridgeError> {
     let cs = to_cross_section(model)
         .filter(|cs| !cs.is_empty())
         .ok_or_else(|| BridgeError::InvalidShape("bbox_center_2d: 空の Shape2D".to_string()))?;
     let bounds = cs.bounds();
     let [min_x, min_y] = bounds.min();
     let [max_x, max_y] = bounds.max();
-    Ok(((min_x + max_x) / 2.0, (min_y + max_y) / 2.0))
+    Ok(p2((min_x + max_x) / 2.0, (min_y + max_y) / 2.0))
 }
 
 /// `Model2D` を評価して輪郭 polygon 群を返す。穴は別 contour (逆巻き) として
@@ -428,7 +425,7 @@ fn to_cross_section(profile: &Model2D) -> Option<CrossSection> {
     match profile {
         Model2D::Polygon(points) if !points.is_empty() => {
             // from_simple_polygon は FillRule::Positive なので CCW を保証する必要がある。
-            let mut pts: Vec<[f64; 2]> = points.iter().map(|&(x, y)| [x, y]).collect();
+            let mut pts: Vec<[f64; 2]> = points.iter().map(|p| [p.x, p.y]).collect();
             ensure_ccw(&mut pts);
             Some(CrossSection::from_simple_polygon(&pts))
         }
@@ -449,7 +446,7 @@ fn to_cross_section(profile: &Model2D) -> Option<CrossSection> {
         },
         Model2D::Translate2D { shape, src, dst } => {
             let cs = to_cross_section(shape)?;
-            Some(cs.translate(dst.0 - src.0, dst.1 - src.1))
+            Some(cs.translate(dst.x - src.x, dst.y - src.y))
         }
     }
 }
@@ -558,11 +555,7 @@ fn load_stl(path: &str, include_paths: &[PathBuf]) -> Result<Manifold, BridgeErr
         .map_err(|e| BridgeError::Stl(format!("{}: manifold 化失敗: {e}", resolved.display())))
 }
 
-fn sweep_polygon(
-    profile: &Model2D,
-    plane: Plane3D,
-    path: &[(f64, f64, f64)],
-) -> Result<Manifold, BridgeError> {
+fn sweep_polygon(profile: &Model2D, plane: Plane3D, path: &[P3]) -> Result<Manifold, BridgeError> {
     let cs = to_cross_section(profile)
         .filter(|cs| !cs.is_empty())
         .ok_or_else(|| BridgeError::InvalidShape("sweep_extrude: profile が空".to_string()))?;
@@ -570,7 +563,7 @@ fn sweep_polygon(
     let first = contours
         .first()
         .ok_or_else(|| BridgeError::InvalidShape("sweep_extrude: profile が空".to_string()))?;
-    let profile_pairs: Vec<(f64, f64)> = first.iter().map(|&[x, y]| (x, y)).collect();
+    let profile_pairs: Vec<P2> = first.iter().map(|&[x, y]| p2(x, y)).collect();
     let (verts, indices) = sweep_mesh(&profile_pairs, path)?;
     let m = Manifold::from_mesh_f32(&verts, 3, &indices)
         .map_err(|e| BridgeError::InvalidShape(format!("sweep_extrude: manifold 化失敗: {e}")))?;
@@ -583,14 +576,11 @@ fn sweep_polygon(
 /// フレームの定義:
 ///   - T (tangent): path の進行方向
 ///   - N: profile.x が向く軸 (初期は reference up = world Z から T 直交成分を取る。
-///        T が Z にほぼ平行なときは world Y にフォールバック)
+///     T が Z にほぼ平行なときは world Y にフォールバック)
 ///   - B = N × T: profile.y が向く軸 (これを使うと start cap (center, j, j_next) /
-///                end cap (center, j_next, j) の winding が outward 向きになる)
+///     end cap (center, j_next, j) の winding が outward 向きになる)
 ///   - 2 点目以降の N は前点 N を `T_prev → T_cur` の最小回転で並進輸送して求める
-fn sweep_mesh(
-    profile: &[(f64, f64)],
-    path: &[(f64, f64, f64)],
-) -> Result<(Vec<f32>, Vec<u32>), BridgeError> {
+fn sweep_mesh(profile: &[P2], path: &[P3]) -> Result<(Vec<f32>, Vec<u32>), BridgeError> {
     let n_profile = profile.len();
     if n_profile < 3 {
         return Err(BridgeError::InvalidShape(
@@ -600,7 +590,7 @@ fn sweep_mesh(
     // 連続する重複点を除去 (退化したセグメントで tangent 計算が壊れるのを防ぐ)
     let mut clean: Vec<[f64; 3]> = Vec::with_capacity(path.len());
     for p in path {
-        let v = [p.0, p.1, p.2];
+        let v = [p.x, p.y, p.z];
         if let Some(last) = clean.last() {
             let dx = v[0] - last[0];
             let dy = v[1] - last[1];
@@ -683,7 +673,7 @@ fn sweep_mesh(
     for i in 0..n_path {
         let p = clean[i];
         let (n, b) = frames[i];
-        for &(lx, ly) in profile {
+        for &P2 { x: lx, y: ly } in profile {
             vertices.push((p[0] + lx * n[0] + ly * b[0]) as f32);
             vertices.push((p[1] + lx * n[1] + ly * b[1]) as f32);
             vertices.push((p[2] + lx * n[2] + ly * b[2]) as f32);
@@ -741,11 +731,7 @@ fn initial_frame(t: [f64; 3]) -> ([f64; 3], [f64; 3]) {
 
 /// Rodrigues の公式で `t_prev → t_cur` を回す最小回転を `n_prev` に適用する。
 /// tangent が変わらない (sin_theta ≈ 0) 場合は n をそのまま返す。
-fn parallel_transport(
-    t_prev: [f64; 3],
-    t_cur: [f64; 3],
-    n_prev: [f64; 3],
-) -> [f64; 3] {
+fn parallel_transport(t_prev: [f64; 3], t_cur: [f64; 3], n_prev: [f64; 3]) -> [f64; 3] {
     let axis_raw = cross3(t_prev, t_cur);
     let sin_theta = norm3(axis_raw);
     let cos_theta = dot3(t_prev, t_cur);
@@ -806,7 +792,7 @@ fn ring_center(vertices: &[f32], base_offset_floats: usize, n_profile: usize) ->
     ((sx / n) as f32, (sy / n) as f32, (sz / n) as f32)
 }
 
-fn ensure_ccw(points: &mut Vec<[f64; 2]>) {
+fn ensure_ccw(points: &mut [[f64; 2]]) {
     if points.len() < 3 {
         return;
     }
@@ -847,11 +833,7 @@ impl MeshArrays {
     /// `vert_props` は頂点ごとに `num_props` 個の f32 (先頭 3 つが位置、`num_props >= 6` なら
     /// 4..6 が法線) が並んだ平坦バッファ。
     fn from_mesh_data(vert_props: &[f32], num_props: usize, indices: &[u32]) -> Self {
-        let n_vertices = if num_props == 0 {
-            0
-        } else {
-            vert_props.len() / num_props
-        };
+        let n_vertices = vert_props.len().checked_div(num_props).unwrap_or(0);
         let mut positions = Vec::with_capacity(n_vertices);
         let mut normals = Vec::with_capacity(n_vertices);
         for i in 0..n_vertices {
@@ -879,15 +861,6 @@ impl MeshArrays {
     }
 }
 
-/// 評価済み `Manifold` の AABB を返す。`center3d` builtin の実装で使う。
-pub fn bbox_of(model: &Model3D) -> Option<((f64, f64, f64), (f64, f64, f64))> {
-    let manifold = evaluate(model).ok()?;
-    let bb = manifold.bounding_box()?;
-    let [min_x, min_y, min_z] = bb.min();
-    let [max_x, max_y, max_z] = bb.max();
-    Some(((min_x, min_y, min_z), (max_x, max_y, max_z)))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -902,7 +875,7 @@ mod tests {
         let arrays = to_mesh_arrays(&m).unwrap();
         assert!(!arrays.is_empty());
         assert_eq!(arrays.positions.len(), arrays.normals.len());
-        assert!(arrays.indices.len() % 3 == 0);
+        assert!(arrays.indices.len().is_multiple_of(3));
     }
 
     #[test]
@@ -921,7 +894,8 @@ mod tests {
 
     #[test]
     fn revolve_to_mesh() {
-        let profile = Model2D::Polygon(vec![(1.0, 0.0), (3.0, 0.0), (3.0, 1.0), (1.0, 1.0)]);
+        let profile =
+            Model2D::Polygon(vec![p2(1.0, 0.0), p2(3.0, 0.0), p2(3.0, 1.0), p2(1.0, 1.0)]);
         let m = Model3D::Revolve {
             profile,
             plane: Plane3D::XY,
@@ -933,8 +907,8 @@ mod tests {
 
     #[test]
     fn union_2d_extruded() {
-        let a = Model2D::Polygon(vec![(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)]);
-        let b = Model2D::Polygon(vec![(2.0, 2.0), (6.0, 2.0), (6.0, 6.0), (2.0, 6.0)]);
+        let a = Model2D::Polygon(vec![p2(0.0, 0.0), p2(4.0, 0.0), p2(4.0, 4.0), p2(0.0, 4.0)]);
+        let b = Model2D::Polygon(vec![p2(2.0, 2.0), p2(6.0, 2.0), p2(6.0, 6.0), p2(2.0, 6.0)]);
         let union = Model2D::Union2D(Box::new(a), Box::new(b));
         let m = Model3D::LinearExtrude {
             profile: union,

@@ -10,11 +10,7 @@ use cadhr_lang::compile;
 
 fn diag_strings(src: &str) -> Vec<String> {
     match compile(src) {
-        Ok(prog) => prog
-            .diagnostics
-            .iter()
-            .map(|d| format!("{d:?}"))
-            .collect(),
+        Ok(prog) => prog.diagnostics.iter().map(|d| format!("{d:?}")).collect(),
         Err(ds) => ds.iter().map(|d| format!("{d:?}")).collect(),
     }
 }
@@ -38,10 +34,7 @@ main =
     { models = [cube 1.0 1.0 1.0], bom = [], controls = [] }
 ";
     let diags = diag_strings(src);
-    assert!(
-        !diags.is_empty(),
-        "再帰の部分適用で型エラーが出るべき"
-    );
+    assert!(!diags.is_empty(), "再帰の部分適用で型エラーが出るべき");
 }
 
 #[test]

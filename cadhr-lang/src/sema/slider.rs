@@ -56,15 +56,15 @@ pub fn extract_sliders(module: &Module) -> (Vec<SliderDecl>, Vec<Diagnostic>) {
     }
     // 引数なしの値 decl のみ評価して環境に追加 (引数を持つ関数定義は除外)。
     for decl in &module.decls {
-        if let Decl::Value(v) = decl {
-            if v.params.is_empty() {
-                match ev.eval_expr(&v.body, &Rc::new(const_env.clone())) {
-                    Ok(value) => {
-                        const_env = const_env.extend(&v.name, value);
-                    }
-                    Err(_) => {
-                        // 動的なものは無視 (slider rhs では使えない)
-                    }
+        if let Decl::Value(v) = decl
+            && v.params.is_empty()
+        {
+            match ev.eval_expr(&v.body, &Rc::new(const_env.clone())) {
+                Ok(value) => {
+                    const_env = const_env.extend(&v.name, value);
+                }
+                Err(_) => {
+                    // 動的なものは無視 (slider rhs では使えない)
                 }
             }
         }

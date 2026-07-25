@@ -11,8 +11,8 @@ use iced::widget::{column, combo_box, container, row, shader, slider, text, text
 use iced::{Element, Fill, Length};
 
 use crate::interpreter::{EvalJobParams, EvalJobResult};
-use crate::preview::{Scene, SceneMessage};
 use crate::preview::pipeline::Vertex;
+use crate::preview::{Scene, SceneMessage};
 use crate::session::SessionPreview;
 use crate::ui::parts;
 use crate::ui::workspace::WorkspaceEvent;
@@ -216,13 +216,16 @@ impl Preview {
                     return WorkspaceEvent::None;
                 };
                 // 既存値がなければ control_points から default を引いて初期化
-                let entry = self.control_overrides.entry(name.clone()).or_insert_with(|| {
-                    self.control_points
-                        .iter()
-                        .find(|(n, _)| n == &name)
-                        .map(|(_, pos)| *pos)
-                        .unwrap_or([0.0, 0.0, 0.0])
-                });
+                let entry = self
+                    .control_overrides
+                    .entry(name.clone())
+                    .or_insert_with(|| {
+                        self.control_points
+                            .iter()
+                            .find(|(n, _)| n == &name)
+                            .map(|(_, pos)| *pos)
+                            .unwrap_or([0.0, 0.0, 0.0])
+                    });
                 if axis < 3 {
                     entry[axis] = v;
                 }
@@ -323,9 +326,8 @@ pub fn view<'a>(
         } else {
             "Edge Select"
         };
-        header = header.push(
-            parts::dark_button(edge_btn_label).on_press(PreviewMsg::ToggleEdgeSelectMode),
-        );
+        header = header
+            .push(parts::dark_button(edge_btn_label).on_press(PreviewMsg::ToggleEdgeSelectMode));
     }
     let header = header.push(parts::dark_button("×").on_press(PreviewMsg::Close));
 
@@ -390,9 +392,7 @@ pub fn view<'a>(
                 }
                 col = col.push(s_col);
             }
-        } else if !p.target.is_empty()
-            && !candidate_signatures.iter().any(|s| s.name == p.target)
-        {
+        } else if !p.target.is_empty() && !candidate_signatures.iter().any(|s| s.name == p.target) {
             col = col.push(
                 text(format!("warning: binding `{}` not previewable", p.target))
                     .color(iced::Color::from_rgb(1.0, 0.7, 0.4)),
@@ -438,4 +438,3 @@ fn numeric_input<'a>(name: String, axis: usize, value: f64) -> Element<'a, Previ
         .width(Length::Fixed(60.0))
         .into()
 }
-

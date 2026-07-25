@@ -1,9 +1,9 @@
 use bytemuck::{Pod, Zeroable};
+use iced::Rectangle;
 use iced::advanced::graphics::Viewport;
 use iced::wgpu;
 use iced::wgpu::util::DeviceExt;
 use iced::widget::shader;
-use iced::Rectangle;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -249,6 +249,7 @@ impl Pipeline {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn update_instance(
         &mut self,
         device: &wgpu::Device,
@@ -347,27 +348,32 @@ impl Pipeline {
                 inst.uploaded_version = mesh_version;
                 return;
             }
-            inst.vertex_buffer = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("vbuf"),
-                contents: bytemuck::cast_slice(&mesh.vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            }));
-            inst.index_buffer = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("ibuf"),
-                contents: bytemuck::cast_slice(&mesh.indices),
-                usage: wgpu::BufferUsages::INDEX,
-            }));
+            inst.vertex_buffer = Some(device.create_buffer_init(
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("vbuf"),
+                    contents: bytemuck::cast_slice(&mesh.vertices),
+                    usage: wgpu::BufferUsages::VERTEX,
+                },
+            ));
+            inst.index_buffer = Some(device.create_buffer_init(
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("ibuf"),
+                    contents: bytemuck::cast_slice(&mesh.indices),
+                    usage: wgpu::BufferUsages::INDEX,
+                },
+            ));
             inst.index_count = mesh.indices.len() as u32;
             if mesh.edge_indices.is_empty() {
                 inst.edge_index_buffer = None;
                 inst.edge_index_count = 0;
             } else {
-                inst.edge_index_buffer =
-                    Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                inst.edge_index_buffer = Some(device.create_buffer_init(
+                    &wgpu::util::BufferInitDescriptor {
                         label: Some("ebuf"),
                         contents: bytemuck::cast_slice(&mesh.edge_indices),
                         usage: wgpu::BufferUsages::INDEX,
-                    }));
+                    },
+                ));
                 inst.edge_index_count = mesh.edge_indices.len() as u32;
             }
             inst.uploaded_version = mesh_version;
@@ -431,12 +437,12 @@ impl Pipeline {
         pass.set_index_buffer(ibuf.slice(..), wgpu::IndexFormat::Uint32);
         pass.draw_indexed(0..inst.index_count, 0, 0..1);
 
-        if let Some(ebuf) = inst.edge_index_buffer.as_ref() {
-            if inst.edge_index_count > 0 {
-                pass.set_pipeline(&self.edge_pipeline);
-                pass.set_index_buffer(ebuf.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..inst.edge_index_count, 0, 0..1);
-            }
+        if let Some(ebuf) = inst.edge_index_buffer.as_ref()
+            && inst.edge_index_count > 0
+        {
+            pass.set_pipeline(&self.edge_pipeline);
+            pass.set_index_buffer(ebuf.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..inst.edge_index_count, 0, 0..1);
         }
 
         // 軸ジゾモは独立した render pass で左下角に重ねる。
@@ -498,10 +504,7 @@ impl Pipeline {
         pass.set_pipeline(&self.gizmo_pipeline);
         pass.set_bind_group(0, &inst.gizmo_bind_group, &[]);
         pass.set_vertex_buffer(0, self.gizmo_vertex_buffer.slice(..));
-        pass.set_index_buffer(
-            self.gizmo_index_buffer.slice(..),
-            wgpu::IndexFormat::Uint32,
-        );
+        pass.set_index_buffer(self.gizmo_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
         pass.draw_indexed(0..self.gizmo_index_count, 0, 0..1);
     }
 
@@ -519,12 +522,36 @@ fn build_gizmo_geometry() -> (Vec<Vertex>, Vec<u32>) {
     const Z_COLOR: [f32; 4] = [0.35, 0.55, 1.0, 1.0];
 
     let vertices = vec![
-        Vertex { position: [0.0, 0.0, 0.0], normal: [0.0; 3], color: X_COLOR },
-        Vertex { position: [1.0, 0.0, 0.0], normal: [0.0; 3], color: X_COLOR },
-        Vertex { position: [0.0, 0.0, 0.0], normal: [0.0; 3], color: Y_COLOR },
-        Vertex { position: [0.0, 1.0, 0.0], normal: [0.0; 3], color: Y_COLOR },
-        Vertex { position: [0.0, 0.0, 0.0], normal: [0.0; 3], color: Z_COLOR },
-        Vertex { position: [0.0, 0.0, 1.0], normal: [0.0; 3], color: Z_COLOR },
+        Vertex {
+            position: [0.0, 0.0, 0.0],
+            normal: [0.0; 3],
+            color: X_COLOR,
+        },
+        Vertex {
+            position: [1.0, 0.0, 0.0],
+            normal: [0.0; 3],
+            color: X_COLOR,
+        },
+        Vertex {
+            position: [0.0, 0.0, 0.0],
+            normal: [0.0; 3],
+            color: Y_COLOR,
+        },
+        Vertex {
+            position: [0.0, 1.0, 0.0],
+            normal: [0.0; 3],
+            color: Y_COLOR,
+        },
+        Vertex {
+            position: [0.0, 0.0, 0.0],
+            normal: [0.0; 3],
+            color: Z_COLOR,
+        },
+        Vertex {
+            position: [0.0, 0.0, 1.0],
+            normal: [0.0; 3],
+            color: Z_COLOR,
+        },
     ];
     let indices = vec![0, 1, 2, 3, 4, 5];
     (vertices, indices)

@@ -56,8 +56,7 @@ fn close_until_let<'src>(
     loop {
         match stack.last() {
             Some(Ctx::Layout {
-                opener: Opener::Of,
-                ..
+                opener: Opener::Of, ..
             }) => {
                 out.push(virt(Token::BlockClose, span));
                 stack.pop();
@@ -101,34 +100,30 @@ fn resolve_line<'src>(
     out: &mut Vec<Spanned<Token<'src>>>,
     span: SimpleSpan,
 ) {
-    loop {
-        match stack.last() {
-            Some(Ctx::Layout {
-                col: lc,
-                opener,
-            }) => {
-                if col == *lc {
-                    out.push(virt(Token::BlockSep, span));
-                    break;
-                } else if col < *lc {
-                    // Top は床: それ以上閉じない。
-                    if *opener == Opener::Top {
-                        break;
-                    }
-                    out.push(virt(Token::BlockClose, span));
-                    stack.pop();
-                    // 新しい先頭に対して再評価
-                } else {
-                    break; // col > lc: 継続行
-                }
+    // Bracket / 空スタックは括弧内の継続行とみなしループを抜ける
+    while let Some(Ctx::Layout { col: lc, opener }) = stack.last() {
+        if col == *lc {
+            out.push(virt(Token::BlockSep, span));
+            break;
+        } else if col < *lc {
+            // Top は床: それ以上閉じない。
+            if *opener == Opener::Top {
+                break;
             }
-            _ => break, // Bracket / 空: 継続
+            out.push(virt(Token::BlockClose, span));
+            stack.pop();
+            // 新しい先頭に対して再評価
+        } else {
+            break; // col > lc: 継続行
         }
     }
 }
 
 /// lexer 出力に layout rule を適用する。
-pub fn apply_layout<'src>(src: &str, tokens: Vec<Spanned<Token<'src>>>) -> Vec<Spanned<Token<'src>>> {
+pub fn apply_layout<'src>(
+    src: &str,
+    tokens: Vec<Spanned<Token<'src>>>,
+) -> Vec<Spanned<Token<'src>>> {
     let line_starts = compute_line_starts(src);
     let col_of = |offset: usize| -> usize {
         let idx = line_starts.partition_point(|&s| s <= offset);
@@ -197,16 +192,14 @@ pub fn apply_layout<'src>(src: &str, tokens: Vec<Spanned<Token<'src>>>) -> Vec<S
                 );
                 // top-level decl 先頭の `let` も同様: `let x = <スカラー式>` の
                 // 宣言キーワードであり、レイアウトブロックを開かない。
-                let at_top_decl_head = matches!(
-                    stack.last(),
-                    Some(Ctx::Layout {
-                        opener: Opener::Top,
-                        ..
-                    })
-                ) && matches!(
-                    out.last().map(|s| &s.inner),
-                    None | Some(Token::BlockSep)
-                );
+                let at_top_decl_head =
+                    matches!(
+                        stack.last(),
+                        Some(Ctx::Layout {
+                            opener: Opener::Top,
+                            ..
+                        })
+                    ) && matches!(out.last().map(|s| &s.inner), None | Some(Token::BlockSep));
                 if !(at_sketch_binding_head || at_top_decl_head) {
                     pending = Some(Opener::Let);
                 }

@@ -362,9 +362,7 @@ impl Diagnostic {
                 class_name,
                 ty,
                 ..
-            } => format!(
-                "{context}: 型 `{ty}` は `{class_name}` のインスタンスではありません"
-            ),
+            } => format!("{context}: 型 `{ty}` は `{class_name}` のインスタンスではありません"),
             AmbiguousConstraint {
                 context,
                 class_name,

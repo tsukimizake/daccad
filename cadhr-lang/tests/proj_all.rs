@@ -21,7 +21,7 @@ fn try_project(name: &str) {
         return;
     }
     let src = std::fs::read_to_string(&main_path).expect("read");
-    let prog = match compile_with_paths(&src, &[root.clone()]) {
+    let prog = match compile_with_paths(&src, std::slice::from_ref(&root)) {
         Ok(p) => p,
         Err(diags) => {
             for d in &diags {

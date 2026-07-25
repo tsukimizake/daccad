@@ -142,9 +142,11 @@ pub fn to_type_raw(t: &InferTy) -> Type {
         },
         InferTy::Con(n, args) => Type::Con(n, args.iter().map(to_type_raw).collect()),
         InferTy::Arrow(f, to) => Type::arrow(to_type_raw(&f), to_type_raw(&to)),
-        InferTy::Record(fs) => {
-            Type::Record(fs.iter().map(|(n, t)| (n.clone(), to_type_raw(t))).collect())
-        }
+        InferTy::Record(fs) => Type::Record(
+            fs.iter()
+                .map(|(n, t)| (n.clone(), to_type_raw(t)))
+                .collect(),
+        ),
     }
 }
 
@@ -156,8 +158,13 @@ pub fn show(t: &InferTy) -> String {
 /// 単一化エラー。呼び出し側 (infer.rs) が span 付き `Diagnostic` に変換する。
 #[derive(Clone, Debug)]
 pub enum UnifyError {
-    Mismatch { left: String, right: String },
-    InfiniteType { ty: String },
+    Mismatch {
+        left: String,
+        right: String,
+    },
+    InfiniteType {
+        ty: String,
+    },
     RecordFieldMismatch {
         left_fields: Vec<String>,
         right_fields: Vec<String>,
@@ -190,10 +197,7 @@ pub fn unify(a: &InferTy, b: &InferTy) -> Result<(), UnifyError> {
     }
 }
 
-fn unify_records(
-    r1: &[(String, InferTy)],
-    r2: &[(String, InferTy)],
-) -> Result<(), UnifyError> {
+fn unify_records(r1: &[(String, InferTy)], r2: &[(String, InferTy)]) -> Result<(), UnifyError> {
     let names1: Vec<String> = r1.iter().map(|(n, _)| n.clone()).collect();
     let names2: Vec<String> = r2.iter().map(|(n, _)| n.clone()).collect();
     let mut s1 = names1.clone();

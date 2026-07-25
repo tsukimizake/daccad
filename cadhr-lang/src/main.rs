@@ -71,7 +71,7 @@ fn run_check(paths: &[PathBuf], bindings: &[String]) -> i32 {
     let mut ok = 0usize;
     let mut fail = 0usize;
     for db_path in &targets {
-        match check_one(db_path, &bindings) {
+        match check_one(db_path, bindings) {
             Ok(CheckOutcome::Run { results, warnings }) => {
                 println!("[ok]   {} (warn={warnings})", db_path.display());
                 for r in &results {
@@ -191,9 +191,10 @@ fn check_one(db_path: &Path, bindings: &[String]) -> Result<CheckOutcome, String
 
     // 実行する binding: 指定があればそれ、無ければ main (無ければ compile 検査のみ)。
     let run_targets: Vec<String> = if bindings.is_empty() {
-        let has_main = main_module.decls.iter().any(|d| {
-            matches!(d, Decl::Value(v) | Decl::Var(v) | Decl::Let(v) if v.name == "main")
-        });
+        let has_main = main_module
+            .decls
+            .iter()
+            .any(|d| matches!(d, Decl::Value(v) | Decl::Var(v) | Decl::Let(v) if v.name == "main"));
         if !has_main {
             return Ok(CheckOutcome::Library { warnings });
         }

@@ -175,10 +175,10 @@ fn unwrap_as(p: &Pattern) -> &Pattern {
 }
 
 fn is_irrefutable(p: &Pattern) -> bool {
-    match unwrap_as(p) {
-        Pattern::Var(_, _) | Pattern::Wildcard(_) | Pattern::Record(_, _) => true,
-        _ => false,
-    }
+    matches!(
+        unwrap_as(p),
+        Pattern::Var(_, _) | Pattern::Wildcard(_) | Pattern::Record(_, _)
+    )
 }
 
 /// 「これら patterns でこの型 hint の全値を網羅しているか」を判定。
@@ -222,10 +222,9 @@ fn missing_for(patterns: &[&Pattern], env: &AdtEnv, hint: &TypeHint) -> Option<S
                 }
                 // ctor が現れているので、各 arg 位置で再帰的に網羅性を確認
                 let arg_types = env.ctor_arg_types.get(ctor).cloned().unwrap_or_default();
-                let n_args = arg_types.len();
-                for i in 0..n_args {
+                for (i, arg_type) in arg_types.iter().enumerate() {
                     let col: Vec<&Pattern> = groups.iter().filter_map(|g| g.get(i)).collect();
-                    let sub_hint = type_hint_from(&arg_types[i], env);
+                    let sub_hint = type_hint_from(arg_type, env);
                     if let Some(m) = missing_for(&col, env, &sub_hint) {
                         missing_inner.push(format!("{ctor} 引数 {} に {m}", i + 1));
                     }
@@ -342,7 +341,7 @@ fn check_case(arms: &[CaseArm], case_span: Span, env: &AdtEnv, diag: &mut Vec<Di
     if let Some(missing) = missing_for(&pats, env, &hint) {
         diag.push(Diagnostic::NonExhaustiveMissing {
             span: case_span,
-            missing: format!("{missing}"),
+            missing: missing.to_string(),
         });
     }
 }

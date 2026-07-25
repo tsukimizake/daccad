@@ -698,9 +698,10 @@ fn assign_order(t: &Type, quant: &HashSet<u32>, remap: &mut HashMap<u32, u32>) {
 fn remap_type(t: &Type, remap: &HashMap<u32, u32>) -> Type {
     match t {
         Type::Var(TyVar(id)) => Type::Var(TyVar(*remap.get(id).unwrap_or(id))),
-        Type::Con(n, args) => {
-            Type::Con(n.clone(), args.iter().map(|a| remap_type(a, remap)).collect())
-        }
+        Type::Con(n, args) => Type::Con(
+            n.clone(),
+            args.iter().map(|a| remap_type(a, remap)).collect(),
+        ),
         Type::Arrow(f, to) => Type::arrow(remap_type(f, remap), remap_type(to, remap)),
         Type::Record(fs) => Type::Record(
             fs.iter()
@@ -960,7 +961,10 @@ fn infer_module_into(
     let mut graph: HashMap<String, Vec<String>> = HashMap::new();
     for v in &value_decls {
         let used = value_decl_free_names(v);
-        let mut deps: Vec<String> = used.into_iter().filter(|n| decl_names.contains(n)).collect();
+        let mut deps: Vec<String> = used
+            .into_iter()
+            .filter(|n| decl_names.contains(n))
+            .collect();
         deps.sort();
         graph.insert(v.name.clone(), deps);
     }
@@ -1106,13 +1110,11 @@ fn resolve_field_obligations(infer: &mut Infer, diag: &mut Vec<Diagnostic>) {
                 alias,
                 field: ob.field,
             }),
-            FieldLookup::Unresolved | FieldLookup::NotRecord => {
-                diag.push(Diagnostic::NotARecord {
-                    span: ob.span,
-                    field: ob.field,
-                    ty: format!("{}", to_type_raw(&ob.receiver)),
-                })
-            }
+            FieldLookup::Unresolved | FieldLookup::NotRecord => diag.push(Diagnostic::NotARecord {
+                span: ob.span,
+                field: ob.field,
+                ty: format!("{}", to_type_raw(&ob.receiver)),
+            }),
         }
     }
 }
@@ -1275,7 +1277,10 @@ fn infer_value_decl(
     let mut local_env = env.clone();
     let mut param_tys: Vec<InferTy> = Vec::new();
     for (i, p) in v.params.iter().enumerate() {
-        let pt = sig_param_tys.get(i).cloned().unwrap_or_else(|| infer.fresh());
+        let pt = sig_param_tys
+            .get(i)
+            .cloned()
+            .unwrap_or_else(|| infer.fresh());
         param_tys.push(pt.clone());
         bind_pattern(infer, &mut local_env, p, &pt, diag);
     }
@@ -1351,16 +1356,18 @@ fn bind_pattern(
             let resolved = resolve(expected);
             let fields_opt: Option<Vec<(String, InferTy)>> = match &resolved {
                 InferTy::Record(fs) => Some(fs.clone()),
-                InferTy::Con(alias_name, _) => match infer.record_aliases.get(alias_name).cloned() {
-                    Some(fs) => {
-                        let mut out = Vec::new();
-                        for (n, t) in &fs {
-                            out.push((n.clone(), infer.type_to_infer_fresh(t)));
+                InferTy::Con(alias_name, _) => {
+                    match infer.record_aliases.get(alias_name).cloned() {
+                        Some(fs) => {
+                            let mut out = Vec::new();
+                            for (n, t) in &fs {
+                                out.push((n.clone(), infer.type_to_infer_fresh(t)));
+                            }
+                            Some(out)
                         }
-                        Some(out)
+                        None => None,
                     }
-                    None => None,
-                },
+                }
                 InferTy::Var(_) => {
                     let fs: Vec<(String, InferTy)> =
                         names.iter().map(|n| (n.clone(), infer.fresh())).collect();
@@ -1781,10 +1788,7 @@ fn lit_type(l: &Lit) -> InferTy {
     }
 }
 
-fn binop_type(
-    op: BinOp,
-    infer: &mut Infer,
-) -> ((InferTy, InferTy), InferTy, Vec<InferConstraint>) {
+fn binop_type(op: BinOp, infer: &mut Infer) -> ((InferTy, InferTy), InferTy, Vec<InferConstraint>) {
     use BinOp::*;
     match op {
         // Num a => a -> a -> a
@@ -1969,8 +1973,7 @@ mod tests {
     #[test]
     fn let_poly_used_at_two_types() {
         // let 束縛した id を Bool (条件) と Int (分岐) の両方で使う。
-        let (schemes, diag) =
-            infer_src("f = let id = \\x -> x in if id True then id 3 else id 4");
+        let (schemes, diag) = infer_src("f = let id = \\x -> x in if id True then id 3 else id 4");
         assert!(diag.is_empty(), "diags: {diag:?}");
         assert_eq!(schemes["f"].ty.to_string(), "Int");
     }
@@ -2007,7 +2010,11 @@ mod tests {
         // 偽の AmbiguousConstraint になる (回帰防止)。
         let (schemes, diag) = infer_src("f x = [x] == [x]");
         assert!(diag.is_empty(), "diags: {diag:?}");
-        assert_eq!(schemes["f"].constraints.len(), 1, "Eq 制約が 1 つ持ち上がるはず");
+        assert_eq!(
+            schemes["f"].constraints.len(),
+            1,
+            "Eq 制約が 1 つ持ち上がるはず"
+        );
         assert_eq!(schemes["f"].constraints[0].class_name, "Eq");
         assert!(schemes["f"].ty.to_string().ends_with("-> Bool"));
     }
