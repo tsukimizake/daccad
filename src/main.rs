@@ -150,7 +150,6 @@ struct Model {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 enum Msg {
     EditorAction(text_editor::Action),
     Undo,

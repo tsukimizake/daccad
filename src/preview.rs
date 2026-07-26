@@ -28,7 +28,6 @@ const MAX_PITCH: f64 = std::f64::consts::FRAC_PI_2 - 0.001;
 const EDGE_ANGLE_THRESHOLD_DEG: f32 = 25.0;
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub enum SceneMessage {
     /// マウスドラッグによる回転 (ピクセル差分)。update 側で Scene.camera に適用する。
     Orbit { dx: f64, dy: f64 },
@@ -239,7 +238,6 @@ impl Scene {
 
 /// Generate ray from UV coordinates (0..1) through the camera.
 /// Returns (origin, direction) in world space.
-#[allow(dead_code)]
 pub fn generate_ray_from_uv(
     u: f32,
     v: f32,
@@ -279,7 +277,6 @@ pub fn generate_ray_from_uv(
 
 /// Ray-triangle intersection (Möller-Trumbore)。
 /// 前方 (t > 0) の hit 距離を返す。
-#[allow(dead_code)]
 pub fn ray_triangle_intersect(
     origin: &[f64; 3],
     dir: &[f64; 3],
@@ -320,7 +317,6 @@ pub fn ray_triangle_intersect(
 
 /// mesh 全体に対して ray-triangle intersection を回し、最も近い hit point (world 座標) を返す。
 /// `vertices` は Vertex 配列、`indices` は 3n 個の u32 (三角形リスト)。
-#[allow(dead_code)]
 pub fn ray_mesh_intersect(
     origin: &[f64; 3],
     dir: &[f64; 3],
@@ -348,32 +344,6 @@ pub fn ray_mesh_intersect(
             origin[2] + t * dir[2],
         ]
     })
-}
-
-/// Ray-sphere intersection, returns distance t or None.
-#[allow(dead_code)]
-pub fn ray_sphere_intersect(
-    origin: &[f64; 3],
-    dir: &[f64; 3],
-    center: &[f64; 3],
-    radius: f64,
-) -> Option<f64> {
-    let oc = [
-        origin[0] - center[0],
-        origin[1] - center[1],
-        origin[2] - center[2],
-    ];
-    let a = dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2];
-    let b = 2.0 * (oc[0] * dir[0] + oc[1] * dir[1] + oc[2] * dir[2]);
-    let c = oc[0] * oc[0] + oc[1] * oc[1] + oc[2] * oc[2] - radius * radius;
-    let discriminant = b * b - 4.0 * a * c;
-    if discriminant < 0.0 {
-        return None;
-    }
-    let t1 = (-b - discriminant.sqrt()) / (2.0 * a);
-    let t2 = (-b + discriminant.sqrt()) / (2.0 * a);
-    let t = if t1 > 0.0 { t1 } else { t2 };
-    if t > 0.0 { Some(t) } else { None }
 }
 
 fn append_sphere(
