@@ -108,18 +108,6 @@ fn pretty_decl(d: &Decl, buf: &mut String) {
             buf.push_str(" : ");
             pretty_type(&s.ty, buf);
         }
-        Decl::Var(v) => {
-            buf.push_str("var ");
-            buf.push_str(&v.name);
-            buf.push_str(" = ");
-            pretty_expr(&v.body, 0, buf);
-        }
-        Decl::Let(v) => {
-            buf.push_str("let ");
-            buf.push_str(&v.name);
-            buf.push_str(" = ");
-            pretty_expr(&v.body, 0, buf);
-        }
         Decl::Value(v) => {
             buf.push_str(&v.name);
             for p in &v.params {
@@ -649,12 +637,6 @@ mod tests {
     #[test]
     fn rt_slider() {
         round_trip("slider main.length = 6.0 .. 80.0");
-    }
-
-    #[test]
-    fn rt_top_level_var() {
-        let s = round_trip("var z1 = 50.0\nsk = z1");
-        assert!(s.contains("var z1 = 50.0"), "{s}");
     }
 
     #[test]

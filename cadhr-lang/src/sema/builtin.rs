@@ -511,7 +511,23 @@ pub fn registry() -> BuiltinRegistry {
 
     // -- 数値変換
 
-    r.register(mono("fromInt", vec![int()], float(), "Int を Float に変換"))
+    let r = r.register(mono("fromInt", vec![int()], float(), "Int を Float に変換"));
+
+    // -- 数学関数 (sketch のスカラー式でも使える)
+    let r = r.register(mono(
+        "sqrt",
+        vec![float()],
+        float(),
+        "平方根。負の数はエラー",
+    ));
+    let r = r.register(mono("sin", vec![float()], float(), "正弦 (角度は度)"));
+    let r = r.register(mono("cos", vec![float()], float(), "余弦 (角度は度)"));
+    r.register(mono(
+        "tan",
+        vec![float()],
+        float(),
+        "正接 (角度は度)。90 + 180k 度はエラー",
+    ))
 }
 
 #[cfg(test)]

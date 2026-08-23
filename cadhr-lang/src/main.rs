@@ -194,7 +194,7 @@ fn check_one(db_path: &Path, bindings: &[String]) -> Result<CheckOutcome, String
         let has_main = main_module
             .decls
             .iter()
-            .any(|d| matches!(d, Decl::Value(v) | Decl::Var(v) | Decl::Let(v) if v.name == "main"));
+            .any(|d| matches!(d, Decl::Value(v) if v.name == "main"));
         if !has_main {
             return Ok(CheckOutcome::Library { warnings });
         }

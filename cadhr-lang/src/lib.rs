@@ -128,10 +128,11 @@ pub fn compile_with_paths(
     let resolver = Resolver::new(search_paths.to_vec());
     let unit = resolver.resolve_from_source(src)?;
 
-    // sketch DSL の制約検査。構文的な検査なので型推論より先に fail fast する
+    // 同名重複 + sketch DSL の制約検査。構文的な検査なので型推論より先に fail fast する
     // (違反した sketch ブロックは GUI と紐付けられないため error 扱い)。
     let mut sketch_diag: Vec<Diagnostic> = Vec::new();
     for lm in &unit.modules {
+        sketch_diag.extend(sema::duplicates::check_module(&lm.module));
         sketch_diag.extend(sema::sketch::check_module(&lm.module));
     }
     if !sketch_diag.is_empty() {
@@ -651,26 +652,26 @@ main = extrude_xy 1.0 sk1.poly1
 
     #[cfg(feature = "manifold")]
     #[test]
-    fn top_level_var_shared_between_sketches() {
-        // z1 は 2 つの sketch から参照され、通常の binding からも Float として使える。
+    fn sketch_export_shared_between_sketches() {
+        // skxz の export (var z1 / let zc) を別 sketch と通常の binding から参照できる。
         let src = "\
-var z1 = 3.0
-
 skxz =
     sketch
+        var z1 = 3.0
+        let zc = z1 + 1.0
         poly1 = polygon (segments [p2 0.0 0.0, p2 4.0 0.0, p2 4.0 z1, p2 0.0 z1])
     in
-    { poly1 = poly1 }
+    { poly1 = poly1, z1, zc }
     end
 
 skyz =
     sketch
-        circ1 = circle 2.0 |> translate2d (p2 0.0 0.0) (p2 5.0 z1)
+        circ1 = circle 2.0 |> translate2d (p2 0.0 0.0) (p2 5.0 skxz.zc)
     in
     { circ1 = circ1 }
     end
 
-main = extrude_xy z1 skxz.poly1
+main = extrude_xy skxz.z1 skxz.poly1
 ";
         let prog = compile(src).expect("compile");
         let out = run_binding(&prog, "main", &Inputs::default()).expect("run_binding");
@@ -679,29 +680,27 @@ main = extrude_xy z1 skxz.poly1
         assert_eq!(contours.len(), 1);
     }
 
+    #[cfg(feature = "manifold")]
     #[test]
-    fn top_level_let_shared_between_sketches() {
-        // トップレベル let (計算式込み) を複数 sketch から参照できる。
+    fn sketch_point_export_axis_shared_between_sketches() {
+        // export された点の座標を別 sketch から `.x` / `.y` で参照できる。
         let src = "\
-var z1 = 3.0
-
-let zc = z1 + 1.0
-
 skxz =
     sketch
-        poly1 = polygon (segments [p2 0.0 0.0, p2 4.0 0.0, p2 4.0 zc, p2 0.0 zc])
+        anchor = p2 4.0 3.0
+        poly1 = polygon (segments [p2 0.0 0.0, anchor, p2 0.0 3.0])
     in
-    { poly1 = poly1 }
+    { poly1 = poly1, anchor }
     end
 
 skyz =
     sketch
-        circ1 = circle 2.0 |> translate2d (p2 0.0 0.0) (p2 5.0 zc)
+        circ1 = circle 2.0 |> translate2d (p2 0.0 0.0) (p2 skxz.anchor.x skxz.anchor.y)
     in
     { circ1 = circ1 }
     end
 
-main = extrude_xy zc skxz.poly1
+main = extrude_xy skxz.anchor.y skxz.poly1
 ";
         let prog = compile(src).expect("compile");
         let out = run_binding(&prog, "main", &Inputs::default()).expect("run_binding");
@@ -711,11 +710,39 @@ main = extrude_xy zc skxz.poly1
     }
 
     #[test]
-    fn top_level_var_bad_rhs_is_fatal() {
-        let src = "var z1 = 1.0 + 2.0\nmain = cube z1 z1 z1\n";
-        let err = compile(src).expect_err("expected var validation error");
+    fn duplicate_top_level_is_fatal() {
+        let src = "a = 1.0\na = 2.0\nmain = cube a a a\n";
+        let err = compile(src).expect_err("expected duplicate error");
         assert!(
-            err.iter().any(|d| d.message().contains("Float リテラル")),
+            err.iter().any(|d| d.message().contains("重複")),
+            "diags: {err:?}"
+        );
+    }
+
+    #[test]
+    fn sketch_cycle_is_fatal() {
+        let src = "\
+skA =
+    sketch
+        let a = skB.b + 1.0
+        p = p2 a 0.0
+    in
+    { p = p, a }
+    end
+
+skB =
+    sketch
+        let b = skA.a + 1.0
+        q = p2 b 0.0
+    in
+    { q = q, b }
+    end
+
+main = cube 1.0 1.0 1.0
+";
+        let err = compile(src).expect_err("expected cycle error");
+        assert!(
+            err.iter().any(|d| d.message().contains("循環")),
             "diags: {err:?}"
         );
     }

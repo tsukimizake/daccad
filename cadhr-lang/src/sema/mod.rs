@@ -8,6 +8,7 @@
 
 pub mod builtin;
 pub mod class;
+pub mod duplicates;
 pub mod env;
 pub mod exhaustive;
 pub mod infer;

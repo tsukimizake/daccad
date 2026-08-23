@@ -73,17 +73,6 @@ pub enum Decl {
     Signature(SignatureDecl),
     /// `f x y = body`
     Value(ValueDecl),
-    /// `var x = <Floatリテラル>`。sketch ブロック間で共有するスカラーで、
-    /// 逆評価 (GUI ドラッグ) の書き込み対象になる。型推論・評価上は通常の
-    /// 定数定義と同じなので payload は `ValueDecl` を共有する (params は常に空)。
-    /// RHS の制約は `sema::sketch` が検査する。
-    Var(ValueDecl),
-    /// `let x = <スカラー式>`。sketch ブロック間で共有する導出スカラー。
-    /// sketch 内の let と同じ意味論: 逆評価は RHS を辿って var へ押し込み、
-    /// RHS に var が無い (リテラルのみ等) 場合は読み取り専用になる。
-    /// RHS はスカラー式 (リテラル / 四則演算 / 他のトップレベル var・let への参照) のみで、
-    /// 制約は `sema::sketch` が検査する。型推論・評価上は通常の定数定義と同じ。
-    Let(ValueDecl),
     /// `type T a b = C1 a | C2 b`
     Type(TypeDecl),
     /// `type alias R = { f : T }`

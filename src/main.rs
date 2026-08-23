@@ -524,7 +524,7 @@ fn scaffold_sketch_binding(src: &str, binding: &str) -> Result<String, String> {
             .unwrap_or_else(|| "parse error".to_string())
     })?;
     let taken = module.decls.iter().any(|d| match d {
-        Decl::Value(v) | Decl::Var(v) | Decl::Let(v) => v.name == binding,
+        Decl::Value(v) => v.name == binding,
         _ => false,
     });
     if taken {

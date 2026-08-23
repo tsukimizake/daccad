@@ -5,14 +5,14 @@
 //! - [`drag`]: 逆評価。ハンドルのドラッグ (新しい座標) を var / リテラルへの
 //!   テキスト書き換えとして解決する。書き込み先の決定規則:
 //!     - 座標式全体が符号付き Float リテラル → そのリテラル (匿名 var 扱い)
-//!     - `var` 束縛への参照 → その定義リテラル (ブロック内 var / トップレベル var とも。
-//!       トップレベル var は複数 sketch ブロックから共有されるので、書き込むと
-//!       参照している全ブロックが連動する)
+//!     - `var` 束縛への参照 → その定義リテラル
 //!     - `let` 束縛への参照 → RHS を辿って var へ押し込む (導出値。
 //!       `let t = b + 150.0` の t をドラッグすると b が書き換わる)。
-//!       RHS に var が無い (`let y = 3.0` 等) 場合は書き込み不可。
-//!       トップレベル `let` ([`top_let_values`]) も同じ導出値の規則で、リテラルのみの
-//!       `let x = 60.0` は複数 sketch で共有する凍結値になる
+//!       RHS に var が無い (`let y = 3.0` 等) 場合は書き込み不可
+//!     - cross-sketch 参照 `A.f` → export 元 sketch の var / let に同じ規則を適用
+//!       (`A.f` が var 由来なら書き込み、let 由来なら A のスコープで RHS を辿る)。
+//!       `A.pt.x` / `.y` は export された点の該当軸の座標式へ押し込む。
+//!       書き込むと参照している全 sketch のハンドルが連動する
 //!     - 二項演算 → 書き込み可能な側がちょうど 1 つならそちらへ押し込む
 //!       (もう一方は現在値で定数化)。両方可 / 両方不可なら拒否。
 //!
@@ -20,10 +20,15 @@
 //!   片軸だけ固定されている場合は動かせる軸のみ適用し `pinned` として報告する。
 //! - 構造編集 ([`add_point`] など): binding の挿入 / 削除と body record の更新。
 //!
+//! cross-sketch 参照の静的解決は [`Sketches`] が担う: モジュール内の全 top-level
+//! sketch を参照の依存順 (topo 順) に評価し、循環は解決不能としてエラーにする
+//! (runtime の依存順評価も循環を拒否するので一致する)。
+//!
 //! 将来の拘束ソルバー導入時は「新しい値の割り当てを決める」部分 (invert) を
 //! 差し替え、リテラル書き換え ([`TextEdit`] / [`apply_edits`]) はそのまま使う。
 
 use crate::diagnostic::Span;
+use crate::geom::{MATH_FNS, eval_math_fn};
 use crate::syntax::ast::*;
 use crate::syntax::free_vars::free_var_names_in;
 use crate::syntax::parse;
@@ -166,20 +171,45 @@ pub fn apply_edits(src: &str, edits: &[TextEdit]) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// binding 探索 + forward eval
+// top-level sketch の収集 / export / 依存順 (sema::sketch と共有)
 // ---------------------------------------------------------------------------
 
-/// body が `Expr::Sketch` そのものである引数なし top-level binding の名前一覧。
-pub fn sketch_binding_names(module: &Module) -> Vec<String> {
+/// top-level の sketch binding 1 つ分 (body が `Expr::Sketch` の引数なし binding)。
+pub(crate) struct TopSketch<'a> {
+    pub name: &'a str,
+    pub bindings: &'a [SketchBinding],
+    pub body: &'a Expr,
+    pub span: Span,
+}
+
+pub(crate) fn top_sketches(module: &Module) -> Vec<TopSketch<'_>> {
     module
         .decls
         .iter()
         .filter_map(|d| match d {
-            Decl::Value(v) if v.params.is_empty() && matches!(v.body, Expr::Sketch { .. }) => {
-                Some(v.name.clone())
-            }
+            Decl::Value(v) if v.params.is_empty() => match &v.body {
+                Expr::Sketch {
+                    bindings,
+                    body,
+                    span,
+                } => Some(TopSketch {
+                    name: v.name.as_str(),
+                    bindings,
+                    body,
+                    span: *span,
+                }),
+                _ => None,
+            },
             _ => None,
         })
+        .collect()
+}
+
+/// body が `Expr::Sketch` そのものである引数なし top-level binding の名前一覧。
+pub fn sketch_binding_names(module: &Module) -> Vec<String> {
+    top_sketches(module)
+        .iter()
+        .map(|s| s.name.to_string())
         .collect()
 }
 
@@ -187,6 +217,19 @@ fn find_block<'a>(
     module: &'a Module,
     binding: &str,
 ) -> Result<(&'a [SketchBinding], &'a Expr, Span), String> {
+    // 同名の top-level binding が複数あるとどれを指すか決められない
+    // (表示系の Sketches と同じ規則で操作を拒否する)。
+    if module
+        .decls
+        .iter()
+        .filter(|d| matches!(d, Decl::Value(v) if v.name == binding))
+        .count()
+        > 1
+    {
+        return Err(format!(
+            "`{binding}` と同名の top-level binding が複数あります"
+        ));
+    }
     for d in &module.decls {
         if let Decl::Value(v) = d
             && v.name == binding
@@ -205,117 +248,207 @@ fn find_block<'a>(
     ))
 }
 
-/// 同一モジュールのトップレベル `var` 宣言 (名前 → RHS 式)。
-fn top_var_map(module: &Module) -> HashMap<&str, &Expr> {
-    module
-        .decls
-        .iter()
-        .filter_map(|d| match d {
-            Decl::Var(v) => Some((v.name.as_str(), &v.body)),
-            _ => None,
-        })
-        .collect()
-}
-
-/// 同一モジュールのトップレベル `let` 宣言の静的値。RHS はスカラー式 (Float リテラル /
-/// 四則演算 / 単項マイナス / 他のトップレベル var・let への参照) で、宣言順に関係なく
-/// 参照できる。sketch ブロックからスカラーとして参照でき、逆評価は sketch 内 let と
-/// 同じく RHS を辿って var へ押し込む (RHS に var が無ければ読み取り専用)。
-/// 循環参照や有限値にならないもの (sema がエラーにする) は含めない。
-pub fn top_let_values(module: &Module) -> HashMap<&str, f64> {
-    let vars: HashMap<&str, f64> = module
-        .decls
-        .iter()
-        .filter_map(|d| match d {
-            Decl::Var(v) => signed_lit_leaf(&v.body).map(|(val, _)| (v.name.as_str(), val)),
-            _ => None,
-        })
-        .collect();
-    let cands: HashMap<&str, &Expr> = module
-        .decls
-        .iter()
-        .filter_map(|d| match d {
-            Decl::Let(v) => Some((v.name.as_str(), &v.body)),
-            _ => None,
-        })
-        .collect();
-
-    fn eval_name<'a>(
-        name: &'a str,
-        vars: &HashMap<&'a str, f64>,
-        cands: &HashMap<&'a str, &'a Expr>,
-        memo: &mut HashMap<&'a str, Option<f64>>,
-        visiting: &mut HashSet<&'a str>,
-    ) -> Option<f64> {
-        if let Some(v) = vars.get(name) {
-            return Some(*v);
-        }
-        if let Some(r) = memo.get(name) {
-            return *r;
-        }
-        if !visiting.insert(name) {
-            return None;
-        }
-        let r = cands
-            .get(name)
-            .copied()
-            .and_then(|e| fold_scalar(e, &mut |n| eval_name(n, vars, cands, memo, visiting)));
-        visiting.remove(name);
-        memo.insert(name, r);
-        r
-    }
-
-    let mut memo: HashMap<&str, Option<f64>> = HashMap::new();
-    let mut visiting: HashSet<&str> = HashSet::new();
-    let names: Vec<&str> = cands.keys().copied().collect();
-    for name in names {
-        eval_name(name, &vars, &cands, &mut memo, &mut visiting);
-    }
-    memo.into_iter()
-        .filter_map(|(name, r)| r.filter(|v| v.is_finite()).map(|v| (name, v)))
-        .collect()
-}
-
-/// スカラー式の静的畳み込み。名前解決は `lookup` に委譲する (解決できなければ None)。
-fn fold_scalar<'a>(e: &'a Expr, lookup: &mut dyn FnMut(&'a str) -> Option<f64>) -> Option<f64> {
-    match e {
-        Expr::Lit(Lit::Float(v), _) => Some(*v),
-        Expr::Negate(inner, _) => Some(-fold_scalar(inner, lookup)?),
-        Expr::BinOp {
-            op, left, right, ..
-        } => {
-            let l = fold_scalar(left, lookup)?;
-            let r = fold_scalar(right, lookup)?;
-            match op {
-                BinOp::Add => Some(l + r),
-                BinOp::Sub => Some(l - r),
-                BinOp::Mul => Some(l * r),
-                BinOp::Div => Some(l / r),
-                _ => None,
+/// body record の export (field 名 → 参照先 binding 名)。`{ f = name }` / punning
+/// `{ name }` の Var field のみ拾う (form の妥当性は sema が検査する)。
+/// 単一幾何名 body は export なし。
+pub(crate) fn export_map<'a>(
+    bindings: &'a [SketchBinding],
+    body: &'a Expr,
+) -> HashMap<&'a str, &'a str> {
+    let names: HashSet<&str> = bindings.iter().map(|b| b.name.as_str()).collect();
+    let mut out = HashMap::new();
+    if let Expr::Record(fields, _) = body {
+        for f in fields {
+            if let Expr::Var {
+                module: None, name, ..
+            } = &f.value
+                && names.contains(name.as_str())
+            {
+                out.insert(f.name.as_str(), name.as_str());
             }
         }
-        Expr::Var {
-            module: None, name, ..
-        } => lookup(name),
-        _ => None,
+    }
+    out
+}
+
+/// 式中の field 参照チェーン (`A.f` / `A.pt.x`) の (最内 receiver 名, 直後の field 名)
+/// を集める。cross-sketch 参照の依存走査 ([`sketch_topo`]) と export 参照の検出
+/// ([`remove_geom`]) に使う。
+fn collect_field_refs<'a>(e: &'a Expr, out: &mut Vec<(&'a str, &'a str)>) {
+    if let Expr::Field { receiver, name, .. } = e {
+        let mut field = name.as_str();
+        let mut base = receiver.as_ref();
+        while let Expr::Field { receiver, name, .. } = base {
+            field = name.as_str();
+            base = receiver.as_ref();
+        }
+        match base {
+            Expr::Var {
+                module: None, name, ..
+            } => out.push((name.as_str(), field)),
+            other => collect_field_refs(other, out),
+        }
+        return;
+    }
+    match e {
+        Expr::Var { .. } | Expr::Ctor { .. } | Expr::Lit(..) | Expr::Error(_) => {}
+        Expr::List(items, _) => items.iter().for_each(|x| collect_field_refs(x, out)),
+        Expr::Record(fields, _) => fields
+            .iter()
+            .for_each(|f| collect_field_refs(&f.value, out)),
+        Expr::RecordUpdate { base, updates, .. } => {
+            collect_field_refs(base, out);
+            updates
+                .iter()
+                .for_each(|f| collect_field_refs(&f.value, out));
+        }
+        Expr::App { func, arg, .. } => {
+            collect_field_refs(func, out);
+            collect_field_refs(arg, out);
+        }
+        Expr::Lambda { body, .. } => collect_field_refs(body, out),
+        Expr::Let { bindings, body, .. } => {
+            bindings
+                .iter()
+                .for_each(|b| collect_field_refs(&b.body, out));
+            collect_field_refs(body, out);
+        }
+        Expr::Sketch { bindings, body, .. } => {
+            bindings
+                .iter()
+                .for_each(|b| collect_field_refs(&b.body, out));
+            collect_field_refs(body, out);
+        }
+        Expr::If {
+            cond,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            collect_field_refs(cond, out);
+            collect_field_refs(then_branch, out);
+            collect_field_refs(else_branch, out);
+        }
+        Expr::Case {
+            scrutinee, arms, ..
+        } => {
+            collect_field_refs(scrutinee, out);
+            for a in arms {
+                if let Some(g) = &a.guard {
+                    collect_field_refs(g, out);
+                }
+                collect_field_refs(&a.body, out);
+            }
+        }
+        Expr::BinOp { left, right, .. } => {
+            collect_field_refs(left, out);
+            collect_field_refs(right, out);
+        }
+        Expr::Negate(inner, _) => collect_field_refs(inner, out),
+        Expr::Range { lo, hi, .. } => {
+            collect_field_refs(lo, out);
+            collect_field_refs(hi, out);
+        }
+        Expr::Field { .. } => unreachable!("上で処理済み"),
+    }
+}
+
+/// binding 群が参照する sketch 名 (`names` に含まれるもの)。
+fn sketch_deps<'a>(bindings: &'a [SketchBinding], names: &HashSet<&'a str>) -> HashSet<&'a str> {
+    let mut refs = Vec::new();
+    for b in bindings {
+        collect_field_refs(&b.body, &mut refs);
+    }
+    refs.into_iter()
+        .map(|(base, _)| base)
+        .filter(|n| names.contains(n))
+        .collect()
+}
+
+/// [`sketch_topo`] の結果。各 Vec は宣言順。
+pub(crate) struct SketchOrder<'a> {
+    /// 依存順 (foreign 参照が必ず先に評価済みになる順)。
+    pub order: Vec<&'a str>,
+    /// 参照循環の実メンバー (自己参照含む = 依存グラフで自分自身へ到達できるもの)。
+    pub cycle: Vec<&'a str>,
+    /// 循環に (推移的に) 依存していて評価順を決められない sketch。
+    pub dependent: Vec<&'a str>,
+}
+
+/// sketch 間の依存グラフを解く。
+pub(crate) fn sketch_topo<'a>(sketches: &[&TopSketch<'a>]) -> SketchOrder<'a> {
+    let names: HashSet<&str> = sketches.iter().map(|s| s.name).collect();
+    let deps: Vec<HashSet<&str>> = sketches
+        .iter()
+        .map(|s| sketch_deps(s.bindings, &names))
+        .collect();
+    let index: HashMap<&str, usize> = sketches
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.name, i))
+        .collect();
+    let mut order: Vec<&'a str> = Vec::new();
+    let mut done: HashSet<&str> = HashSet::new();
+    let mut progressed = true;
+    while progressed {
+        progressed = false;
+        for (i, s) in sketches.iter().enumerate() {
+            if !done.contains(s.name) && deps[i].iter().all(|d| done.contains(d)) {
+                done.insert(s.name);
+                order.push(s.name);
+                progressed = true;
+            }
+        }
+    }
+    // 解決できなかったもののうち、依存を辿って自分自身へ戻れるものが循環の実メンバー。
+    let reaches_self = |start: &str| -> bool {
+        let mut stack: Vec<&str> = vec![start];
+        let mut seen: HashSet<&str> = HashSet::new();
+        while let Some(n) = stack.pop() {
+            for d in &deps[index[n]] {
+                if *d == start {
+                    return true;
+                }
+                if seen.insert(d) {
+                    stack.push(d);
+                }
+            }
+        }
+        false
+    };
+    let mut cycle = Vec::new();
+    let mut dependent = Vec::new();
+    for s in sketches {
+        if !done.contains(s.name) {
+            if reaches_self(s.name) {
+                cycle.push(s.name);
+            } else {
+                dependent.push(s.name);
+            }
+        }
+    }
+    SketchOrder {
+        order,
+        cycle,
+        dependent,
     }
 }
 
 pub fn model(module: &Module, binding: &str) -> Result<SketchModel, String> {
-    let (bindings, _body, span) = find_block(module, binding)?;
-    let block = Block::build(module, bindings)?;
+    let sketches = Sketches::build_for(module, binding);
+    let (scope, block) = sketches.entry(binding)?;
     let mut geoms = Vec::new();
     let mut links = Vec::new();
-    for b in bindings {
+    for b in block.bindings {
         if b.kind != SketchBindKind::Bare {
             continue;
         }
         let gi = geoms.len();
-        match block.geom_shape(b)? {
+        match sketches.geom_shape(scope, b)? {
             GeomShape::Point(slot) => {
                 links.push(HandleLink {
                     target: DragTarget::Point { geom: gi },
-                    leaves: block.slot_leaves(&slot),
+                    leaves: sketches.slot_leaves(scope, &slot),
                 });
                 geoms.push(SketchGeom::Point {
                     name: b.name.clone(),
@@ -325,11 +458,11 @@ pub fn model(module: &Module, binding: &str) -> Result<SketchModel, String> {
             GeomShape::Segment(a, bb) => {
                 links.push(HandleLink {
                     target: DragTarget::SegmentEnd { geom: gi, end: 0 },
-                    leaves: block.slot_leaves(&a),
+                    leaves: sketches.slot_leaves(scope, &a),
                 });
                 links.push(HandleLink {
                     target: DragTarget::SegmentEnd { geom: gi, end: 1 },
-                    leaves: block.slot_leaves(&bb),
+                    leaves: sketches.slot_leaves(scope, &bb),
                 });
                 geoms.push(SketchGeom::Segment {
                     name: b.name.clone(),
@@ -341,7 +474,7 @@ pub fn model(module: &Module, binding: &str) -> Result<SketchModel, String> {
                 for (vi, s) in slots.iter().enumerate() {
                     links.push(HandleLink {
                         target: DragTarget::PolyVertex { geom: gi, vert: vi },
-                        leaves: block.slot_leaves(s),
+                        leaves: sketches.slot_leaves(scope, s),
                     });
                 }
                 geoms.push(SketchGeom::Polygon {
@@ -355,12 +488,12 @@ pub fn model(module: &Module, binding: &str) -> Result<SketchModel, String> {
                     leaves: c
                         .dst
                         .as_ref()
-                        .map(|d| block.slot_leaves(d))
+                        .map(|d| sketches.slot_leaves(scope, d))
                         .unwrap_or_default(),
                 });
                 links.push(HandleLink {
                     target: DragTarget::CircleRadius { geom: gi },
-                    leaves: block.axis_leaves(&c.radius.exprs, c.radius.value),
+                    leaves: sketches.axis_leaves(scope, &c.radius.exprs, c.radius.value),
                 });
                 geoms.push(SketchGeom::Circle {
                     name: b.name.clone(),
@@ -372,7 +505,7 @@ pub fn model(module: &Module, binding: &str) -> Result<SketchModel, String> {
     }
     Ok(SketchModel {
         binding: binding.to_string(),
-        span,
+        span: block.span,
         geoms,
         links,
     })
@@ -442,112 +575,392 @@ enum GeomShape<'a> {
     Circle(CircleShape<'a>),
 }
 
-/// スカラー名の解決結果 ([`Block::scalar_binding`])。
+/// スカラー名の解決結果 ([`Sketches::scalar_binding`])。
 enum ScalarBinding<'a> {
-    /// 書き込み対象の `var` (RHS は符号付きリテラル)。ブロック内 / トップレベルとも。
-    Var { name: &'a str, body: &'a Expr },
-    /// 導出値の `let`。逆評価は RHS を辿って var へ押し込む。ブロック内 / トップレベルとも。
-    Let(&'a Expr),
+    /// 書き込み対象の `var` (RHS は符号付きリテラル)。`block` は所属 sketch。
+    Var {
+        block: &'a str,
+        name: &'a str,
+        body: &'a Expr,
+    },
+    /// 導出値の `let`。逆評価は RHS を辿って var へ押し込む。`block` は RHS のスコープ。
+    Let { block: &'a str, body: &'a Expr },
     /// スカラーとして辿れない (幾何 binding / 未定義)。
     Opaque,
 }
 
-struct Block<'a> {
-    by_name: HashMap<&'a str, &'a SketchBinding>,
-    scalar_values: HashMap<&'a str, f64>,
-    /// トップレベル `var` (名前 → RHS 式)。ブロック内 binding が優先される。
-    top_vars: HashMap<&'a str, &'a Expr>,
-    /// トップレベル `let` (名前 → RHS 式)。静的に評価できたもののみ持つ
-    /// (循環参照などは除外されるので、RHS を辿る再帰は必ず停止する)。
-    top_lets: HashMap<&'a str, &'a Expr>,
+/// cross-sketch 参照 (`A.f` / `A.pt.x`) の解決結果 ([`Sketches::field_ref`])。
+enum FieldRef<'a> {
+    /// export されたスカラー (var / let binding)。
+    Scalar {
+        block: &'a str,
+        binding: &'a SketchBinding,
+    },
+    /// export された点の座標軸。`expr` は `p2` の該当軸の引数式。
+    PointAxis { block: &'a str, expr: &'a Expr },
 }
 
-impl<'a> Block<'a> {
-    fn build(module: &'a Module, bindings: &'a [SketchBinding]) -> Result<Self, String> {
-        let let_values = top_let_values(module);
-        let mut block = Block {
-            by_name: HashMap::new(),
-            scalar_values: HashMap::new(),
-            top_vars: top_var_map(module),
-            top_lets: module
-                .decls
-                .iter()
-                .filter_map(|d| match d {
-                    Decl::Let(v) if let_values.contains_key(v.name.as_str()) => {
-                        Some((v.name.as_str(), &v.body))
-                    }
-                    _ => None,
-                })
-                .collect(),
-        };
-        block.scalar_values.extend(let_values);
-        // RHS がリテラルでない top var は sema が拒否するのでここでは単に無視する
-        // (参照時に「スカラーではありません」エラーになる)。
-        for (name, e) in &block.top_vars {
-            if let Some((v, _)) = signed_lit_leaf(e) {
-                block.scalar_values.insert(*name, v);
-            }
-        }
-        for b in bindings {
-            if b.kind != SketchBindKind::Bare {
-                let v = block.eval_scalar(&b.body)?;
-                block.scalar_values.insert(b.name.as_str(), v);
-            }
-            block.by_name.insert(b.name.as_str(), b);
-        }
-        Ok(block)
+/// sketch ブロック 1 つ分の束縛表と静的スカラー値。
+struct Block<'a> {
+    bindings: &'a [SketchBinding],
+    by_name: HashMap<&'a str, &'a SketchBinding>,
+    /// body record の export (field 名 → binding 名)。
+    exports: HashMap<&'a str, &'a str>,
+    /// var / let の静的値 (評価に成功したもののみ)。
+    scalar_values: HashMap<&'a str, f64>,
+    span: Span,
+    /// スカラー束縛の評価で最初に出たエラー。ある場合このブロックは操作対象にできない。
+    error: Option<String>,
+}
+
+/// モジュール内の top-level sketch の静的解決コンテキスト。cross-sketch 参照は
+/// export 経由で他ブロックの束縛へジャンプする。ブロックは依存順 (topo 順) に
+/// 評価するので、解決の再帰は依存順を遡る方向にしか進まず必ず停止する。
+struct Sketches<'a> {
+    blocks: HashMap<&'a str, Block<'a>>,
+    /// 参照循環の実メンバー (自己参照含む)。宣言順。
+    cycle: Vec<&'a str>,
+    /// 循環に依存していて評価順を決められない sketch。宣言順。
+    dependent: Vec<&'a str>,
+    /// 同名の top-level sketch が複数ある名前 (どれを指すか決められないので操作拒否)。
+    duplicated: HashSet<&'a str>,
+}
+
+impl<'a> Sketches<'a> {
+    /// 全 top-level sketch を評価する ([`writeback_ambiguities`] のような全走査用)。
+    fn build(module: &'a Module) -> Sketches<'a> {
+        Self::build_impl(module, None)
     }
 
-    /// スカラー名を var / let / 不透明に解決する。ブロック内 binding が優先され、
-    /// 次にトップレベルの var / let を見る。
-    fn scalar_binding(&self, name: &str) -> ScalarBinding<'a> {
-        match self.by_name.get(name) {
-            Some(b) if b.kind == SketchBindKind::Var => ScalarBinding::Var {
-                name: b.name.as_str(),
-                body: &b.body,
-            },
-            Some(b) if b.kind == SketchBindKind::Let => ScalarBinding::Let(&b.body),
-            Some(_) => ScalarBinding::Opaque,
-            None => {
-                if let Some((tname, body)) = self.top_vars.get_key_value(name) {
-                    ScalarBinding::Var { name: tname, body }
-                } else if let Some(body) = self.top_lets.get(name) {
-                    ScalarBinding::Let(body)
-                } else {
-                    ScalarBinding::Opaque
+    /// `target` の推移的依存のみ静的評価する (GUI 操作用)。無関係な sketch の
+    /// 評価コストを払わず、そのエラーにも影響されない。
+    fn build_for(module: &'a Module, target: &str) -> Sketches<'a> {
+        Self::build_impl(module, Some(target))
+    }
+
+    fn build_impl(module: &'a Module, target: Option<&str>) -> Sketches<'a> {
+        let tops = top_sketches(module);
+        // sketch 以外も含む全 top-level binding 名で重複を数える
+        // (sketch と通常 binding の同名も解決先が定まらないため)。
+        let mut duplicated: HashSet<&'a str> = HashSet::new();
+        {
+            let mut seen: HashSet<&str> = HashSet::new();
+            for d in &module.decls {
+                if let Decl::Value(v) = d
+                    && !seen.insert(v.name.as_str())
+                {
+                    duplicated.insert(v.name.as_str());
                 }
             }
         }
+        // target 指定時は依存 DFS で評価対象を絞る。
+        let selected: Vec<&TopSketch<'a>> = match target {
+            None => tops.iter().collect(),
+            Some(t) => {
+                let names: HashSet<&str> = tops.iter().map(|s| s.name).collect();
+                let mut keep: HashSet<&str> = HashSet::new();
+                let mut stack: Vec<&str> = tops
+                    .iter()
+                    .filter(|s| s.name == t)
+                    .map(|s| s.name)
+                    .collect();
+                while let Some(n) = stack.pop() {
+                    if !keep.insert(n) {
+                        continue;
+                    }
+                    for s in tops.iter().filter(|s| s.name == n) {
+                        for d in sketch_deps(s.bindings, &names) {
+                            if !keep.contains(d) {
+                                stack.push(d);
+                            }
+                        }
+                    }
+                }
+                tops.iter().filter(|s| keep.contains(s.name)).collect()
+            }
+        };
+        let order = sketch_topo(&selected);
+        // 解決可能なものは依存順、循環関与分は最後 (エラーを block へ記録するため評価は試みる)。
+        let eval_order: Vec<&'a str> = order
+            .order
+            .iter()
+            .chain(order.cycle.iter())
+            .chain(order.dependent.iter())
+            .copied()
+            .collect();
+        let by: HashMap<&str, &TopSketch<'a>> = selected.iter().map(|s| (s.name, *s)).collect();
+        let mut sketches = Sketches {
+            blocks: HashMap::new(),
+            cycle: order.cycle,
+            dependent: order.dependent,
+            duplicated,
+        };
+        // ブロックの骨格 (束縛表と export) は全 sketch 分作る。スカラーの静的評価は
+        // selected のみ、依存順に行う。
+        for s in &tops {
+            sketches.blocks.insert(
+                s.name,
+                Block {
+                    bindings: s.bindings,
+                    by_name: s.bindings.iter().map(|b| (b.name.as_str(), b)).collect(),
+                    exports: export_map(s.bindings, s.body),
+                    scalar_values: HashMap::new(),
+                    span: s.span,
+                    error: None,
+                },
+            );
+        }
+        for name in eval_order {
+            let s = by[name];
+            for b in s.bindings {
+                if b.kind == SketchBindKind::Bare {
+                    continue;
+                }
+                match sketches.eval_scalar(s.name, &b.body) {
+                    Ok(v) if !v.is_finite() => {
+                        let block = sketches.blocks.get_mut(s.name).expect("挿入済み");
+                        block
+                            .error
+                            .get_or_insert(format!("`{}` が有限値になりません ({v})", b.name));
+                    }
+                    Ok(v) => {
+                        let block = sketches.blocks.get_mut(s.name).expect("挿入済み");
+                        block.scalar_values.insert(b.name.as_str(), v);
+                    }
+                    Err(e) => {
+                        let block = sketches.blocks.get_mut(s.name).expect("挿入済み");
+                        block.error.get_or_insert(e);
+                    }
+                }
+            }
+        }
+        sketches
     }
 
-    fn eval_scalar(&self, e: &Expr) -> Result<f64, String> {
-        let mut missing: Option<String> = None;
-        fold_scalar(e, &mut |name| {
-            let v = self.scalar_values.get(name).copied();
-            if v.is_none() && missing.is_none() {
-                missing = Some(format!("`{name}` はスカラーではありません"));
+    /// 名前が解決不能な場合の理由。
+    fn unresolvable(&self, name: &str) -> Option<String> {
+        if self.duplicated.contains(name) {
+            return Some(format!(
+                "`{name}` と同名の top-level binding が複数あります"
+            ));
+        }
+        if self.cycle.iter().any(|n| *n == name) {
+            return Some(format!(
+                "`{name}` は sketch 間の参照循環に含まれています (循環: {})",
+                self.cycle.join(", ")
+            ));
+        }
+        if self.dependent.iter().any(|n| *n == name) {
+            return Some(format!(
+                "`{name}` は循環している sketch に依存しているため解決できません (循環: {})",
+                self.cycle.join(", ")
+            ));
+        }
+        None
+    }
+
+    /// GUI 操作の対象ブロックを引く。スカラー評価に失敗しているブロック・
+    /// 循環に関与するブロック・同名重複のあるブロックは操作できない。
+    fn entry(&self, binding: &str) -> Result<(&'a str, &Block<'a>), String> {
+        if let Some(reason) = self.unresolvable(binding) {
+            return Err(reason);
+        }
+        let Some((name, block)) = self.blocks.get_key_value(binding) else {
+            return Err(format!(
+                "`{binding}` は sketch ブロックの binding ではありません"
+            ));
+        };
+        if let Some(e) = &block.error {
+            return Err(e.clone());
+        }
+        Ok((*name, block))
+    }
+
+    fn block(&self, scope: &str) -> Result<&Block<'a>, String> {
+        self.blocks
+            .get(scope)
+            .ok_or_else(|| format!("sketch `{scope}` が見つかりません"))
+    }
+
+    /// export された field の参照先 binding を引く。
+    fn export_binding(
+        &self,
+        sk: &str,
+        field: &str,
+    ) -> Result<(&'a str, &'a SketchBinding), String> {
+        if let Some(reason) = self.unresolvable(sk) {
+            return Err(reason);
+        }
+        let Some((name, block)) = self.blocks.get_key_value(sk) else {
+            return Err(format!("`{sk}` は同一モジュールの sketch ではありません"));
+        };
+        let Some(binding_name) = block.exports.get(field) else {
+            return Err(format!("sketch `{sk}` は `{field}` を export していません"));
+        };
+        let b = block
+            .by_name
+            .get(binding_name)
+            .ok_or_else(|| format!("`{sk}.{field}` の参照先が見つかりません"))?;
+        Ok((*name, *b))
+    }
+
+    /// 参照位置 `at` で receiver 名 `sk` がブロック内束縛に shadow されているか。
+    /// binding は逐次スコープなので、参照より前に完結した binding のみ shadow する
+    /// (sema / runtime の名前解決と一致させる)。
+    fn shadowed_receiver(&self, scope: &str, sk: &str, at: Span) -> Result<(), String> {
+        if let Some(bl) = self.blocks.get(scope)
+            && let Some(b) = bl.by_name.get(sk)
+            && b.span.end <= at.start
+        {
+            return Err(format!(
+                "`{sk}` はブロック内の束縛です (sketch 参照には使えません)"
+            ));
+        }
+        Ok(())
+    }
+
+    /// `A.f` / `A.pt.x` 形の field 式を解決する (scope = 参照元ブロック)。
+    fn field_ref(&self, scope: &str, e: &Expr) -> Result<FieldRef<'a>, String> {
+        let Expr::Field {
+            receiver,
+            name: field,
+            ..
+        } = e
+        else {
+            return Err("field 参照ではありません".to_string());
+        };
+        match receiver.as_ref() {
+            // `A.f` — export されたスカラー
+            Expr::Var {
+                module: None,
+                name: sk,
+                span,
+            } => {
+                self.shadowed_receiver(scope, sk, *span)?;
+                let (block, b) = self.export_binding(sk, field)?;
+                match b.kind {
+                    SketchBindKind::Var | SketchBindKind::Let => {
+                        Ok(FieldRef::Scalar { block, binding: b })
+                    }
+                    SketchBindKind::Bare => Err(format!(
+                        "`{sk}.{field}` はスカラーではありません (点の座標は `.x` / `.y` で参照します)"
+                    )),
+                }
             }
-            v
-        })
-        .ok_or_else(|| missing.unwrap_or_else(|| "スカラー式として評価できません".to_string()))
+            // `A.pt.x` — export された点の座標
+            Expr::Field {
+                receiver: inner,
+                name: ptfield,
+                ..
+            } => {
+                let Expr::Var {
+                    module: None,
+                    name: sk,
+                    span,
+                } = inner.as_ref()
+                else {
+                    return Err("field 参照が解釈できません".to_string());
+                };
+                self.shadowed_receiver(scope, sk, *span)?;
+                let axis = match field.as_str() {
+                    "x" => 0,
+                    "y" => 1,
+                    _ => return Err(format!("点の座標 field は x / y のみです (`.{field}`)")),
+                };
+                let (block, b) = self.export_binding(sk, ptfield)?;
+                let (head, args) = app_spine(&b.body);
+                if b.kind == SketchBindKind::Bare && head == Some("p2") && args.len() == 2 {
+                    Ok(FieldRef::PointAxis {
+                        block,
+                        expr: args[axis],
+                    })
+                } else {
+                    Err(format!("`{sk}.{ptfield}` は点ではありません"))
+                }
+            }
+            _ => Err("field 参照が解釈できません".to_string()),
+        }
+    }
+
+    /// スカラー名を var / let / 不透明に解決する (scope = ブロック名)。
+    fn scalar_binding(&self, scope: &'a str, name: &str) -> ScalarBinding<'a> {
+        match self.blocks.get(scope).and_then(|bl| bl.by_name.get(name)) {
+            Some(b) if b.kind == SketchBindKind::Var => ScalarBinding::Var {
+                block: scope,
+                name: b.name.as_str(),
+                body: &b.body,
+            },
+            Some(b) if b.kind == SketchBindKind::Let => ScalarBinding::Let {
+                block: scope,
+                body: &b.body,
+            },
+            _ => ScalarBinding::Opaque,
+        }
+    }
+
+    /// スカラー式の静的評価 (scope = ブロック名)。
+    fn eval_scalar(&self, scope: &str, e: &Expr) -> Result<f64, String> {
+        match e {
+            Expr::Lit(Lit::Float(v), _) => Ok(*v),
+            Expr::Negate(inner, _) => Ok(-self.eval_scalar(scope, inner)?),
+            Expr::BinOp {
+                op, left, right, ..
+            } => {
+                let l = self.eval_scalar(scope, left)?;
+                let r = self.eval_scalar(scope, right)?;
+                match op {
+                    BinOp::Add => Ok(l + r),
+                    BinOp::Sub => Ok(l - r),
+                    BinOp::Mul => Ok(l * r),
+                    BinOp::Div => Ok(l / r),
+                    _ => Err("スカラー式として評価できません".to_string()),
+                }
+            }
+            Expr::Var {
+                module: None, name, ..
+            } => self
+                .block(scope)?
+                .scalar_values
+                .get(name.as_str())
+                .copied()
+                .ok_or_else(|| format!("`{name}` はスカラーではありません")),
+            Expr::Field { .. } => match self.field_ref(scope, e)? {
+                FieldRef::Scalar { block, binding } => self
+                    .block(block)?
+                    .scalar_values
+                    .get(binding.name.as_str())
+                    .copied()
+                    .ok_or_else(|| format!("`{}` の値が解決できません", binding.name)),
+                FieldRef::PointAxis { block, expr } => self.eval_scalar(block, expr),
+            },
+            Expr::App { .. } => match app_spine(e) {
+                (Some(f), args) if args.len() == 1 && MATH_FNS.contains(&f) => {
+                    let v = self.eval_scalar(scope, args[0])?;
+                    eval_math_fn(f, v).expect("MATH_FNS で判定済み")
+                }
+                _ => Err("スカラー式として評価できません".to_string()),
+            },
+            _ => Err("スカラー式として評価できません".to_string()),
+        }
     }
 
     /// 点参照 (点 binding 名か `p2 x y`) をスロットに解決する。
-    fn point_slot(&self, e: &'a Expr) -> Result<PosSlot<'a>, String> {
+    fn point_slot(&self, scope: &'a str, e: &'a Expr) -> Result<PosSlot<'a>, String> {
         if let Expr::Var {
             module: None, name, ..
         } = e
         {
             let b = self
+                .block(scope)?
                 .by_name
                 .get(name.as_str())
                 .ok_or_else(|| format!("未定義の名前 `{name}`"))?;
-            return self.point_slot(&b.body);
+            return self.point_slot(scope, &b.body);
         }
         let (head, args) = app_spine(e);
         if head == Some("p2") && args.len() == 2 {
-            let x = self.eval_scalar(args[0])?;
-            let y = self.eval_scalar(args[1])?;
+            let x = self.eval_scalar(scope, args[0])?;
+            let y = self.eval_scalar(scope, args[1])?;
             Ok(PosSlot {
                 pos: [x, y],
                 xs: vec![args[0]],
@@ -559,43 +972,51 @@ impl<'a> Block<'a> {
     }
 
     /// 線分参照 (線分 binding 名か `line a b`) を両端点スロットに解決する。
-    fn segment_ends(&self, e: &'a Expr) -> Result<(PosSlot<'a>, PosSlot<'a>), String> {
+    fn segment_ends(
+        &self,
+        scope: &'a str,
+        e: &'a Expr,
+    ) -> Result<(PosSlot<'a>, PosSlot<'a>), String> {
         if let Expr::Var {
             module: None, name, ..
         } = e
         {
             let b = self
+                .block(scope)?
                 .by_name
                 .get(name.as_str())
                 .ok_or_else(|| format!("未定義の名前 `{name}`"))?;
-            return self.segment_ends(&b.body);
+            return self.segment_ends(scope, &b.body);
         }
         let (head, args) = app_spine(e);
         if head == Some("line") && args.len() == 2 {
-            Ok((self.point_slot(args[0])?, self.point_slot(args[1])?))
+            Ok((
+                self.point_slot(scope, args[0])?,
+                self.point_slot(scope, args[1])?,
+            ))
         } else {
             Err("線分参照が `line a b` の形ではありません".to_string())
         }
     }
 
-    fn geom_shape(&self, b: &'a SketchBinding) -> Result<GeomShape<'a>, String> {
+    fn geom_shape(&self, scope: &'a str, b: &'a SketchBinding) -> Result<GeomShape<'a>, String> {
         let e = &b.body;
         let (head, args) = app_spine(e);
         match head {
-            Some("p2") if args.len() == 2 => Ok(GeomShape::Point(self.point_slot(e)?)),
+            Some("p2") if args.len() == 2 => Ok(GeomShape::Point(self.point_slot(scope, e)?)),
             Some("line") if args.len() == 2 => {
-                let (a, bb) = self.segment_ends(e)?;
+                let (a, bb) = self.segment_ends(scope, e)?;
                 Ok(GeomShape::Segment(a, bb))
             }
             Some("polygon") if args.len() == 1 => {
-                Ok(GeomShape::Polygon(self.polygon_slots(args[0])?))
+                Ok(GeomShape::Polygon(self.polygon_slots(scope, args[0])?))
             }
             Some("circle") if args.len() == 1 => Ok(GeomShape::Circle(CircleShape {
                 center_pos: [0.0, 0.0],
                 dst: None,
                 src: [0.0, 0.0],
                 radius: Slot {
-                    value: self.eval_scalar(args[0])?,
+                    value: self.eval_scalar(scope, args[0])?,
                     exprs: vec![args[0]],
                 },
             })),
@@ -614,15 +1035,15 @@ impl<'a> Block<'a> {
                         && rhead == Some("translate2d")
                         && rargs.len() == 2
                     {
-                        let src = self.point_slot(rargs[0])?;
-                        let dst = self.point_slot(rargs[1])?;
+                        let src = self.point_slot(scope, rargs[0])?;
+                        let dst = self.point_slot(scope, rargs[1])?;
                         let center_pos = [dst.pos[0] - src.pos[0], dst.pos[1] - src.pos[1]];
                         return Ok(GeomShape::Circle(CircleShape {
                             center_pos,
                             src: src.pos,
                             dst: Some(dst),
                             radius: Slot {
-                                value: self.eval_scalar(largs[0])?,
+                                value: self.eval_scalar(scope, largs[0])?,
                                 exprs: vec![largs[0]],
                             },
                         }));
@@ -634,13 +1055,13 @@ impl<'a> Block<'a> {
     }
 
     /// polygon の頂点スロット列。line 形式は隣接線分の端点を junction として合流する。
-    fn polygon_slots(&self, arg: &'a Expr) -> Result<Vec<PosSlot<'a>>, String> {
+    fn polygon_slots(&self, scope: &'a str, arg: &'a Expr) -> Result<Vec<PosSlot<'a>>, String> {
         match arg {
             // `polygon [line .., ...]` (線分列)
             Expr::List(items, _) => {
                 let mut ends: Vec<(PosSlot<'a>, PosSlot<'a>)> = Vec::new();
                 for it in items {
-                    ends.push(self.segment_ends(it)?);
+                    ends.push(self.segment_ends(scope, it)?);
                 }
                 let n = ends.len();
                 let mut verts: Vec<PosSlot<'a>> = Vec::new();
@@ -661,7 +1082,7 @@ impl<'a> Block<'a> {
                     if let Expr::List(items, _) = args[0] {
                         let mut verts = Vec::new();
                         for it in items {
-                            verts.push(self.point_slot(it)?);
+                            verts.push(self.point_slot(scope, it)?);
                         }
                         Ok(verts)
                     } else {
@@ -674,28 +1095,40 @@ impl<'a> Block<'a> {
         }
     }
 
-    /// 部分木に `var` 束縛 (ブロック内 / トップレベル) への参照が含まれるか。
-    /// `let` 参照は導出値として RHS に再帰する (ブロック内 let の循環は `build` の
-    /// 逐次評価が、トップレベル let の循環は `top_lets` の除外が先に弾く)。
-    fn contains_writable(&self, e: &Expr) -> bool {
+    /// 部分木に書き込み可能な葉が含まれるか。`let` と cross-sketch 参照は導出値として
+    /// RHS / export 先に再帰する (再帰はブロックの依存順を遡る方向なので停止する。
+    /// ブロック内の不正な let 連鎖は [`Sketches::build`] の評価エラーが先に弾く)。
+    fn contains_writable(&self, scope: &'a str, e: &Expr) -> bool {
         match e {
             Expr::Var {
                 module: None, name, ..
-            } => match self.scalar_binding(name) {
+            } => match self.scalar_binding(scope, name) {
                 ScalarBinding::Var { .. } => true,
-                ScalarBinding::Let(body) => self.contains_writable(body),
+                ScalarBinding::Let { block, body } => self.contains_writable(block, body),
                 ScalarBinding::Opaque => false,
             },
-            Expr::Negate(inner, _) => self.contains_writable(inner),
+            Expr::Field { .. } => match self.field_ref(scope, e) {
+                Ok(FieldRef::Scalar { block, binding }) => match binding.kind {
+                    SketchBindKind::Var => true,
+                    SketchBindKind::Let => self.contains_writable(block, &binding.body),
+                    SketchBindKind::Bare => false,
+                },
+                // 点座標はリテラル葉そのものも書き込み対象 (点のドラッグと同じ扱い)
+                Ok(FieldRef::PointAxis { block, expr }) => {
+                    signed_lit_leaf(expr).is_some() || self.contains_writable(block, expr)
+                }
+                Err(_) => false,
+            },
+            Expr::Negate(inner, _) => self.contains_writable(scope, inner),
             Expr::BinOp { left, right, .. } => {
-                self.contains_writable(left) || self.contains_writable(right)
+                self.contains_writable(scope, left) || self.contains_writable(scope, right)
             }
             _ => false,
         }
     }
 
     /// 座標式 `e` に目標値 `target` を流し、書き換えるリテラル葉と新値を返す。
-    fn invert(&self, e: &Expr, target: f64) -> Result<Write<'a>, SolveErr> {
+    fn invert(&self, scope: &'a str, e: &Expr, target: f64) -> Result<Write<'a>, SolveErr> {
         // 座標式全体が符号付きリテラル → 匿名 var として書き込み可
         if let Some((cur, leaf)) = signed_lit_leaf(e) {
             return Ok(Write {
@@ -705,54 +1138,78 @@ impl<'a> Block<'a> {
                 current: cur,
             });
         }
-        self.invert_inner(e, target)
+        self.invert_inner(scope, e, target)
     }
 
-    fn invert_inner(&self, e: &Expr, target: f64) -> Result<Write<'a>, SolveErr> {
+    fn invert_inner(&self, scope: &'a str, e: &Expr, target: f64) -> Result<Write<'a>, SolveErr> {
         match e {
             Expr::Var {
                 module: None, name, ..
-            } => match self.scalar_binding(name) {
-                ScalarBinding::Var { name, body } => {
+            } => match self.scalar_binding(scope, name) {
+                ScalarBinding::Var { block, name, body } => {
                     // var の RHS は符号付きリテラル (validation 保証)
                     let (cur, leaf) = signed_lit_leaf(body).ok_or(SolveErr::ReadOnly)?;
                     Ok(Write {
                         leaf,
                         value: target,
-                        var: Some(name),
+                        var: Some((block, name)),
                         current: cur,
                     })
                 }
                 // let は導出値: RHS を辿って依存先の var へ押し込む。
-                ScalarBinding::Let(body) => self.invert_inner(body, target),
+                ScalarBinding::Let { block, body } => self.invert_inner(block, body, target),
                 ScalarBinding::Opaque => Err(SolveErr::ReadOnly),
             },
-            Expr::Negate(inner, _) => self.invert_inner(inner, -target),
+            Expr::Field { .. } => {
+                match self.field_ref(scope, e).map_err(|_| SolveErr::ReadOnly)? {
+                    FieldRef::Scalar { block, binding } => match binding.kind {
+                        SketchBindKind::Var => {
+                            let (cur, leaf) =
+                                signed_lit_leaf(&binding.body).ok_or(SolveErr::ReadOnly)?;
+                            Ok(Write {
+                                leaf,
+                                value: target,
+                                var: Some((block, binding.name.as_str())),
+                                current: cur,
+                            })
+                        }
+                        SketchBindKind::Let => self.invert_inner(block, &binding.body, target),
+                        SketchBindKind::Bare => Err(SolveErr::ReadOnly),
+                    },
+                    // 点座標: export 元の座標式へ押し込む (リテラルなら匿名書き込み)
+                    FieldRef::PointAxis { block, expr } => self.invert(block, expr, target),
+                }
+            }
+            Expr::Negate(inner, _) => self.invert_inner(scope, inner, -target),
             Expr::BinOp {
                 op, left, right, ..
             } => {
-                let lw = self.contains_writable(left);
-                let rw = self.contains_writable(right);
+                let lw = self.contains_writable(scope, left);
+                let rw = self.contains_writable(scope, right);
                 match (lw, rw) {
                     (true, true) => Err(SolveErr::Ambiguous),
                     (false, false) => Err(SolveErr::ReadOnly),
                     (true, false) => {
-                        let rv = self.eval_scalar(right).map_err(|_| SolveErr::ReadOnly)?;
+                        let rv = self
+                            .eval_scalar(scope, right)
+                            .map_err(|_| SolveErr::ReadOnly)?;
                         match op {
-                            BinOp::Add => self.invert_inner(left, target - rv),
-                            BinOp::Sub => self.invert_inner(left, target + rv),
-                            BinOp::Mul if rv != 0.0 => self.invert_inner(left, target / rv),
+                            BinOp::Add => self.invert_inner(scope, left, target - rv),
+                            BinOp::Sub => self.invert_inner(scope, left, target + rv),
+                            BinOp::Mul if rv != 0.0 => self.invert_inner(scope, left, target / rv),
                             BinOp::Mul => Err(SolveErr::ZeroFactor),
-                            BinOp::Div => self.invert_inner(left, target * rv),
+                            BinOp::Div => self.invert_inner(scope, left, target * rv),
                             _ => Err(SolveErr::ReadOnly),
                         }
                     }
                     (false, true) => {
-                        let lv = self.eval_scalar(left).map_err(|_| SolveErr::ReadOnly)?;
+                        let lv = self
+                            .eval_scalar(scope, left)
+                            .map_err(|_| SolveErr::ReadOnly)?;
                         match op {
-                            BinOp::Add => self.invert_inner(right, target - lv),
-                            BinOp::Sub => self.invert_inner(right, lv - target),
-                            BinOp::Mul if lv != 0.0 => self.invert_inner(right, target / lv),
+                            BinOp::Add => self.invert_inner(scope, right, target - lv),
+                            BinOp::Sub => self.invert_inner(scope, right, lv - target),
+                            BinOp::Mul if lv != 0.0 => self.invert_inner(scope, right, target / lv),
                             BinOp::Mul => Err(SolveErr::ZeroFactor),
                             // Div の右辺はリテラル (validation 保証) なので writable にならない
                             _ => Err(SolveErr::ReadOnly),
@@ -766,10 +1223,10 @@ impl<'a> Block<'a> {
 
     /// 軸 1 つ分のドラッグ書き込み先リテラル葉 (span start)。1 式でも書き込め
     /// ない場合 [`drag`] はその軸ごと固定するので、連動情報としても空を返す。
-    fn axis_leaves(&self, exprs: &[&Expr], value: f64) -> Vec<usize> {
+    fn axis_leaves(&self, scope: &'a str, exprs: &[&Expr], value: f64) -> Vec<usize> {
         let mut leaves = Vec::new();
         for e in exprs {
-            match self.invert(e, value) {
+            match self.invert(scope, e, value) {
                 Ok(w) => leaves.push(w.leaf.span.start),
                 Err(_) => return Vec::new(),
             }
@@ -777,9 +1234,9 @@ impl<'a> Block<'a> {
         leaves
     }
 
-    fn slot_leaves(&self, slot: &PosSlot) -> Vec<usize> {
-        let mut leaves = self.axis_leaves(&slot.xs, slot.pos[0]);
-        leaves.extend(self.axis_leaves(&slot.ys, slot.pos[1]));
+    fn slot_leaves(&self, scope: &'a str, slot: &PosSlot) -> Vec<usize> {
+        let mut leaves = self.axis_leaves(scope, &slot.xs, slot.pos[0]);
+        leaves.extend(self.axis_leaves(scope, &slot.ys, slot.pos[1]));
         leaves
     }
 }
@@ -823,10 +1280,21 @@ struct Write<'a> {
     leaf: Leaf,
     /// 葉へ書き込む新値。
     value: f64,
-    /// 書き込み先 var の名前。None は座標式そのものがリテラル (匿名)。
-    var: Option<&'a str>,
+    /// 書き込み先 var の (所属 sketch, 名前)。None は座標式そのものがリテラル (匿名)。
+    var: Option<(&'a str, &'a str)>,
     /// 葉の現在値 (符号込み)。
     current: f64,
+}
+
+/// var 名の表示形。操作対象ブロック外の var は `sketch名.var名` で修飾する。
+fn var_display(scope: &str, var: Option<(&str, &str)>) -> Option<String> {
+    var.map(|(block, name)| {
+        if block == scope {
+            name.to_string()
+        } else {
+            format!("{block}.{name}")
+        }
+    })
 }
 
 fn signed_lit_leaf(e: &Expr) -> Option<(f64, Leaf)> {
@@ -896,7 +1364,8 @@ struct HandleAxis<'a> {
 }
 
 fn handle_axes<'a>(
-    block: &Block<'a>,
+    sketches: &Sketches<'a>,
+    scope: &'a str,
     bare: &[&'a SketchBinding],
     target: DragTarget,
 ) -> Result<Vec<HandleAxis<'a>>, String> {
@@ -925,19 +1394,19 @@ fn handle_axes<'a>(
     };
     match target {
         DragTarget::Point { geom } => {
-            let GeomShape::Point(slot) = block.geom_shape(geom_of(geom)?)? else {
+            let GeomShape::Point(slot) = sketches.geom_shape(scope, geom_of(geom)?)? else {
                 return Err("対象が点ではありません".into());
             };
             Ok(pos_axes(slot))
         }
         DragTarget::SegmentEnd { geom, end } => {
-            let GeomShape::Segment(a, b) = block.geom_shape(geom_of(geom)?)? else {
+            let GeomShape::Segment(a, b) = sketches.geom_shape(scope, geom_of(geom)?)? else {
                 return Err("対象が線分ではありません".into());
             };
             Ok(pos_axes(if end == 0 { a } else { b }))
         }
         DragTarget::PolyVertex { geom, vert } => {
-            let GeomShape::Polygon(slots) = block.geom_shape(geom_of(geom)?)? else {
+            let GeomShape::Polygon(slots) = sketches.geom_shape(scope, geom_of(geom)?)? else {
                 return Err("対象が polygon ではありません".into());
             };
             let slot = slots
@@ -947,7 +1416,7 @@ fn handle_axes<'a>(
             Ok(pos_axes(slot))
         }
         DragTarget::CircleCenter { geom } => {
-            let GeomShape::Circle(c) = block.geom_shape(geom_of(geom)?)? else {
+            let GeomShape::Circle(c) = sketches.geom_shape(scope, geom_of(geom)?)? else {
                 return Err("対象が circle ではありません".into());
             };
             match c.dst {
@@ -984,7 +1453,7 @@ fn handle_axes<'a>(
             }
         }
         DragTarget::CircleRadius { geom } => {
-            let GeomShape::Circle(c) = block.geom_shape(geom_of(geom)?)? else {
+            let GeomShape::Circle(c) = sketches.geom_shape(scope, geom_of(geom)?)? else {
                 return Err("対象が circle ではありません".into());
             };
             Ok(vec![HandleAxis {
@@ -1015,19 +1484,18 @@ pub struct WritebackWarning {
 pub fn writeback_ambiguities(module: &Module) -> Vec<WritebackWarning> {
     let mut out = Vec::new();
     let mut seen: HashSet<(usize, usize)> = HashSet::new();
+    let sketches = Sketches::build(module);
     for binding in sketch_binding_names(module) {
-        let Ok((bindings, _body, _span)) = find_block(module, &binding) else {
+        let Ok((scope, block)) = sketches.entry(&binding) else {
             continue;
         };
-        let Ok(block) = Block::build(module, bindings) else {
-            continue;
-        };
-        let bare: Vec<&SketchBinding> = bindings
+        let bare: Vec<&SketchBinding> = block
+            .bindings
             .iter()
             .filter(|b| b.kind == SketchBindKind::Bare)
             .collect();
         for (gi, b) in bare.iter().enumerate() {
-            let Ok(shape) = block.geom_shape(b) else {
+            let Ok(shape) = sketches.geom_shape(scope, b) else {
                 continue;
             };
             let targets: Vec<(DragTarget, String)> = match shape {
@@ -1059,14 +1527,14 @@ pub fn writeback_ambiguities(module: &Module) -> Vec<WritebackWarning> {
                 ],
             };
             for (target, desc) in targets {
-                let Ok(axes) = handle_axes(&block, &bare, target) else {
+                let Ok(axes) = handle_axes(&sketches, scope, &bare, target) else {
                     continue;
                 };
                 for axis in axes {
                     if axis.readonly.is_some() || axis.exprs.is_empty() {
                         continue;
                     }
-                    if let Err(SolveErr::Ambiguous) = axis_writes(&block, &axis) {
+                    if let Err(SolveErr::Ambiguous) = axis_writes(&sketches, scope, &axis) {
                         let span = axis.exprs[0].span();
                         if !seen.insert((span.start, span.end)) {
                             continue;
@@ -1107,14 +1575,15 @@ pub fn drag(
         _ => {}
     }
     let module = parse_or_msg(src).map_err(DragReject::Invalid)?;
-    let (bindings, _body, _span) = find_block(&module, binding).map_err(DragReject::Invalid)?;
-    let block = Block::build(&module, bindings).map_err(DragReject::Invalid)?;
-    let bare: Vec<&SketchBinding> = bindings
+    let sketches = Sketches::build_for(&module, binding);
+    let (scope, block) = sketches.entry(binding).map_err(DragReject::Invalid)?;
+    let bare: Vec<&SketchBinding> = block
+        .bindings
         .iter()
         .filter(|b| b.kind == SketchBindKind::Bare)
         .collect();
 
-    let axes = handle_axes(&block, &bare, target).map_err(DragReject::Invalid)?;
+    let axes = handle_axes(&sketches, scope, &bare, target).map_err(DragReject::Invalid)?;
     // 軸ごとの目標値 (幾何座標)。
     let goals: Vec<f64> = match value {
         DragValue::Pos(p) if axes.len() == 2 => vec![p[0], p[1]],
@@ -1147,7 +1616,7 @@ pub fn drag(
             None
         };
         for e in axis.exprs {
-            match block.invert(e, tval) {
+            match sketches.invert(scope, e, tval) {
                 Ok(w) => axis_writes.push((w.leaf, w.value)),
                 Err(err) => {
                     axis_err = Some(err);
@@ -1232,10 +1701,14 @@ pub struct VarInspect {
 }
 
 /// 軸 1 つ分の書き込み先葉を inspect と同じ順序 (dedupe 済み) で集める。
-fn axis_writes<'a>(block: &Block<'a>, axis: &HandleAxis<'a>) -> Result<Vec<Write<'a>>, SolveErr> {
+fn axis_writes<'a>(
+    sketches: &Sketches<'a>,
+    scope: &'a str,
+    axis: &HandleAxis<'a>,
+) -> Result<Vec<Write<'a>>, SolveErr> {
     let mut out: Vec<Write<'a>> = Vec::new();
     for e in &axis.exprs {
-        let w = block.invert(e, axis.display + axis.offset)?;
+        let w = sketches.invert(scope, e, axis.display + axis.offset)?;
         if !out.iter().any(|p| p.leaf.span == w.leaf.span) {
             out.push(w);
         }
@@ -1246,24 +1719,25 @@ fn axis_writes<'a>(block: &Block<'a>, axis: &HandleAxis<'a>) -> Result<Vec<Write
 /// ハンドル 1 つ分の書き込み先 var 情報を返す。
 pub fn inspect(src: &str, binding: &str, target: DragTarget) -> Result<HandleInspect, String> {
     let module = parse_or_msg(src)?;
-    let (bindings, _body, _span) = find_block(&module, binding)?;
-    let block = Block::build(&module, bindings)?;
-    let bare: Vec<&SketchBinding> = bindings
+    let sketches = Sketches::build_for(&module, binding);
+    let (scope, block) = sketches.entry(binding)?;
+    let bare: Vec<&SketchBinding> = block
+        .bindings
         .iter()
         .filter(|b| b.kind == SketchBindKind::Bare)
         .collect();
     let mut axes = Vec::new();
-    for axis in handle_axes(&block, &bare, target)? {
+    for axis in handle_axes(&sketches, scope, &bare, target)? {
         let (writes, readonly) = if let Some(reason) = axis.readonly.clone() {
             (Vec::new(), Some(reason))
         } else if axis.exprs.is_empty() {
             (Vec::new(), Some(SolveErr::ReadOnly.reason().to_string()))
         } else {
-            match axis_writes(&block, &axis) {
+            match axis_writes(&sketches, scope, &axis) {
                 Ok(ws) => (
                     ws.into_iter()
                         .map(|w| VarInspect {
-                            name: w.var.map(str::to_string),
+                            name: var_display(scope, w.var),
                             value: w.current,
                         })
                         .collect(),
@@ -1295,20 +1769,21 @@ pub fn set_var_value(
         return Err("値が有限ではありません".to_string());
     }
     let module = parse_or_msg(src)?;
-    let (bindings, _body, _span) = find_block(&module, binding)?;
-    let block = Block::build(&module, bindings)?;
-    let bare: Vec<&SketchBinding> = bindings
+    let sketches = Sketches::build_for(&module, binding);
+    let (scope, block) = sketches.entry(binding)?;
+    let bare: Vec<&SketchBinding> = block
+        .bindings
         .iter()
         .filter(|b| b.kind == SketchBindKind::Bare)
         .collect();
-    let ax = handle_axes(&block, &bare, target)?
+    let ax = handle_axes(&sketches, scope, &bare, target)?
         .into_iter()
         .nth(axis)
         .ok_or_else(|| format!("軸 index {axis} が範囲外です"))?;
     if let Some(reason) = ax.readonly.clone() {
         return Err(reason);
     }
-    let leaf = axis_writes(&block, &ax)
+    let leaf = axis_writes(&sketches, scope, &ax)
         .map_err(|e| e.reason().to_string())?
         .into_iter()
         .nth(write)
@@ -1385,7 +1860,12 @@ fn insert_geom(
 ) -> Result<(String, String), String> {
     let module = parse_or_msg(src)?;
     let (bindings, body, span) = find_block(&module, binding)?;
-    let name = fresh_name(prefix, |n| bindings.iter().any(|b| b.name == n));
+    // 生成名は sketch binding 名とも衝突させない (同名の局所 binding を作ると、
+    // このブロックからの `名前.field` 参照が壊れるため。factor_vars と同じ規則)。
+    let top_names: HashSet<&str> = top_sketches(&module).iter().map(|s| s.name).collect();
+    let name = fresh_name(prefix, |n| {
+        bindings.iter().any(|b| b.name == n) || top_names.contains(n)
+    });
     // 挿入位置: 末尾 binding の直後。binding が 0 個なら `sketch` キーワード直後に
     // 1 段深いインデントで入れる。
     let insert = match bindings.last() {
@@ -1509,6 +1989,32 @@ pub fn remove_geom(src: &str, binding: &str, geom_name: &str) -> Result<String, 
             ));
         }
     }
+    // export されている場合、モジュール内 (他 sketch・関数型層) の `binding.field`
+    // 参照が残っていたら削除できない。
+    let exported: Vec<&str> = export_map(bindings, body)
+        .into_iter()
+        .filter(|(_, bn)| *bn == geom_name)
+        .map(|(f, _)| f)
+        .collect();
+    if !exported.is_empty() {
+        for d in &module.decls {
+            let (referrer, decl_body) = match d {
+                Decl::Value(v) if v.name != binding => (v.name.as_str(), &v.body),
+                Decl::Slider(s) => (s.param.as_str(), &s.body),
+                _ => continue,
+            };
+            let mut refs = Vec::new();
+            collect_field_refs(decl_body, &mut refs);
+            if let Some((_, f)) = refs
+                .iter()
+                .find(|(base, f)| *base == binding && exported.contains(f))
+            {
+                return Err(format!(
+                    "`{geom_name}` は `{referrer}` から `{binding}.{f}` で参照されているため削除できません"
+                ));
+            }
+        }
+    }
     let mut edits: Vec<TextEdit> = Vec::new();
     // binding 行の削除 (行頭〜行末の改行まで)
     let line_start = src[..b.span.start].rfind('\n').map(|i| i + 1).unwrap_or(0);
@@ -1577,20 +2083,17 @@ fn collect_lit_leaves(
 /// 対象は座標式全体がリテラルであるもののみ。既に var / 式になっている座標、
 /// circle の半径と translate2d の src は対象外。まとめた座標は以後ドラッグで連動する。
 /// x と y は値が同じでも別の var にする (共有すると斜めドラッグが衝突拒否されるため)。
-///
-/// 値が既存のトップレベル var / let と一致するリテラルは、新しい var を作らず
-/// その名前への参照に置き換える (出現 1 回でも対象。同値の候補が複数あるときは
-/// var 優先・宣言順)。
 pub fn factor_vars(src: &str, binding: &str) -> Result<String, String> {
     let module = parse_or_msg(src)?;
-    let (bindings, _body, _span) = find_block(&module, binding)?;
-    let block = Block::build(&module, bindings)?;
+    let sketches = Sketches::build_for(&module, binding);
+    let (scope, block) = sketches.entry(binding)?;
+    let bindings = block.bindings;
 
     // 軸ごと (0 = x, 1 = y) の座標リテラルを出現順で集める
     let mut leaves: [Vec<(Span, f64)>; 2] = [Vec::new(), Vec::new()];
     let mut seen: HashSet<(usize, usize)> = HashSet::new();
     for b in bindings.iter().filter(|b| b.kind == SketchBindKind::Bare) {
-        let slots: Vec<PosSlot> = match block.geom_shape(b)? {
+        let slots: Vec<PosSlot> = match sketches.geom_shape(scope, b)? {
             GeomShape::Point(s) => vec![s],
             GeomShape::Segment(a, b) => vec![a, b],
             GeomShape::Polygon(v) => v,
@@ -1602,28 +2105,10 @@ pub fn factor_vars(src: &str, binding: &str) -> Result<String, String> {
         }
     }
 
-    // 値が一致する既存のトップレベルスカラー名 (var 優先、宣言順で最初のもの)。
-    let mut by_value: HashMap<u64, &str> = HashMap::new();
-    for d in &module.decls {
-        if let Decl::Var(v) = d
-            && let Some((val, _)) = signed_lit_leaf(&v.body)
-        {
-            by_value.entry(val.to_bits()).or_insert(v.name.as_str());
-        }
-    }
-    let let_values = top_let_values(&module);
-    for d in &module.decls {
-        if let Decl::Let(v) = d
-            && let Some(val) = let_values.get(v.name.as_str())
-        {
-            by_value.entry(val.to_bits()).or_insert(v.name.as_str());
-        }
-    }
-
-    // トップレベル var / let は shadow できないので、生成名から除外する。
+    // 生成名は既存 binding と衝突させない。sketch binding 名も除外する
+    // (同名の局所 binding を作ると、このブロックからの `名前.field` 参照が壊れるため)。
     let mut taken: HashSet<String> = bindings.iter().map(|b| b.name.clone()).collect();
-    taken.extend(block.top_vars.keys().map(|n| n.to_string()));
-    taken.extend(block.top_lets.keys().map(|n| n.to_string()));
+    taken.extend(sketches.blocks.keys().map(|n| n.to_string()));
     let mut decls: Vec<(String, f64)> = Vec::new();
     let mut edits: Vec<TextEdit> = Vec::new();
     for (axis, prefix) in [(0, "x"), (1, "y")] {
@@ -1631,14 +2116,6 @@ pub fn factor_vars(src: &str, binding: &str) -> Result<String, String> {
         let mut groups: Vec<(u64, Vec<Span>)> = Vec::new();
         for (span, v) in &leaves[axis] {
             let bits = v.to_bits();
-            // トップレベル名と同値なら出現回数に関わらずそこへの参照に置き換える
-            if let Some(name) = by_value.get(&bits) {
-                edits.push(TextEdit {
-                    span: *span,
-                    replacement: (*name).to_string(),
-                });
-                continue;
-            }
             match groups.iter_mut().find(|(b, _)| *b == bits) {
                 Some((_, spans)) => spans.push(*span),
                 None => groups.push((bits, vec![*span])),
@@ -1663,21 +2140,19 @@ pub fn factor_vars(src: &str, binding: &str) -> Result<String, String> {
         return Err("まとめられる重複座標がありません".to_string());
     }
 
-    if !decls.is_empty() {
-        // var 宣言は前方参照禁止のため先頭の binding の直前に挿入する
-        let first = bindings
-            .first()
-            .ok_or_else(|| "sketch ブロックに束縛がありません".to_string())?;
-        let indent = line_indent(src, first.span.start);
-        let mut header = String::new();
-        for (name, v) in &decls {
-            header.push_str(&format!("var {name} = {}\n{indent}", fmt_float(*v)));
-        }
-        edits.push(TextEdit {
-            span: Span::new(first.span.start, first.span.start),
-            replacement: header,
-        });
+    // var 宣言は前方参照禁止のため先頭の binding の直前に挿入する
+    let first = bindings
+        .first()
+        .ok_or_else(|| "sketch ブロックに束縛がありません".to_string())?;
+    let indent = line_indent(src, first.span.start);
+    let mut header = String::new();
+    for (name, v) in &decls {
+        header.push_str(&format!("var {name} = {}\n{indent}", fmt_float(*v)));
     }
+    edits.push(TextEdit {
+        span: Span::new(first.span.start, first.span.start),
+        replacement: header,
+    });
     Ok(apply_edits(src, &edits))
 }
 
@@ -1717,6 +2192,19 @@ mod tests {
             panic!("expected polygon");
         };
         assert_eq!(verts, &vec![[0.0, 0.0], [4.0, 0.0], [4.0, 3.0]]);
+    }
+
+    #[test]
+    fn model_point_with_math_fns() {
+        let src = "sk =\n    sketch\n        var x = 3.0\n        let y = sqrt (x * x + 16.0)\n        pt = p2 (cos 60.0) y\n    in\n    { pt = pt }\n    end\n";
+        let m = model_of(src);
+        let SketchGeom::Point { pos, .. } = &m.geoms[0] else {
+            panic!("expected point");
+        };
+        assert!((pos[0] - 0.5).abs() < 1e-12, "cos 60 = 0.5, got {}", pos[0]);
+        assert!((pos[1] - 5.0).abs() < 1e-12, "sqrt 25 = 5, got {}", pos[1]);
+        // sqrt を通る座標は逆評価できないので leaf は空 (軸固定) になる
+        assert!(leaves_of(&m, DragTarget::Point { geom: 0 }).is_empty());
     }
 
     #[test]
@@ -1933,51 +2421,54 @@ mod tests {
     }
 
     #[test]
-    fn drag_through_let_reaches_top_level_var() {
-        let src = "var zb = 5.0\nsk =\n    sketch\n        let t = zb + 1.0\n        p = p2 0.0 t\n    in\n    { p = p }\n    end\n";
+    fn drag_through_foreign_let_chain() {
+        // cross-sketch 参照 + let の多段: skB の座標から skA の var まで押し込む。
+        let src = "skA =\n    sketch\n        var z = 5.0\n        let a = z * 2.0\n        let b = a + 1.0\n        p = p2 z 0.0\n    in\n    { p = p, b }\n    end\n\nskB =\n    sketch\n        let c = skA.b + 1.0\n        p = p2 c 0.0\n    in\n    { p = p }\n    end\n";
         let out = drag(
             src,
-            "sk",
+            "skB",
             DragTarget::Point { geom: 0 },
-            DragValue::Pos([0.0, 10.0]),
+            DragValue::Pos([20.0, 0.0]),
         )
         .expect("drag");
-        assert!(out.source.contains("var zb = 9.0"), "{}", out.source);
+        // c = ((z * 2) + 1) + 1 なので c = 20 → z = 9
+        assert!(out.source.contains("var z = 9.0"), "{}", out.source);
     }
 
     #[test]
-    fn model_resolves_top_level_let() {
-        // トップレベル let (計算式・宣言順不問) を座標に使える。
-        let src = "sk =\n    sketch\n        p = p2 w w2\n    in\n    { p = p }\n    end\nlet w = 10.0\nlet w2 = w + 5.0\n";
-        let m = model_from_source(src, "sk").expect("model");
+    fn model_resolves_foreign_let_and_literal_let() {
+        // 他 sketch の export (計算 let / リテラル let) を座標に使える。宣言順も不問。
+        let src = "skB =\n    sketch\n        q = p2 skA.w skA.zc\n    in\n    { q = q }\n    end\n\nskA =\n    sketch\n        var z1 = 50.0\n        let zc = z1 + 10.0\n        let w = 10.0\n        p = p2 0.0 z1\n    in\n    { p = p, zc, w }\n    end\n";
+        let m = model_from_source(src, "skB").expect("model");
         let SketchGeom::Point { pos, .. } = &m.geoms[0] else {
             panic!()
         };
-        assert_eq!(*pos, [10.0, 15.0]);
+        assert_eq!(*pos, [10.0, 60.0]);
     }
 
     #[test]
-    fn drag_top_let_axis_is_readonly() {
-        // リテラルのみのトップレベル let は凍結値: 書き込めず pinned になる。
-        let src = "let w = 10.0\nsk =\n    sketch\n        p = p2 w 0.0\n    in\n    { p = p }\n    end\n";
+    fn drag_foreign_literal_let_axis_is_readonly() {
+        // リテラルのみの let export は凍結値: 書き込めず pinned になる。
+        // 計算 let export は RHS の var へ押し込まれる。
+        let src = "skA =\n    sketch\n        var z1 = 50.0\n        let zc = z1 + 10.0\n        let w = 10.0\n        p = p2 0.0 z1\n    in\n    { p = p, zc, w }\n    end\n\nskB =\n    sketch\n        q = p2 skA.w skA.zc\n    in\n    { q = q }\n    end\n";
         let out = drag(
             src,
-            "sk",
+            "skB",
             DragTarget::Point { geom: 0 },
-            DragValue::Pos([99.0, 5.0]),
+            DragValue::Pos([99.0, 70.0]),
         )
         .expect("drag");
         assert!(out.source.contains("let w = 10.0"), "{}", out.source);
-        assert!(out.source.contains("p2 w 5.0"), "{}", out.source);
+        assert!(out.source.contains("var z1 = 60.0"), "{}", out.source);
         assert_eq!(out.pinned.len(), 1, "{:?}", out.pinned);
         assert!(out.pinned[0].contains("x"), "{:?}", out.pinned);
     }
 
     #[test]
-    fn drag_top_let_resolves_ambiguity_to_var() {
-        // cool_wear2 パターン: `let l = c - (v - c)` は c がトップレベル let なので
-        // 両辺 writable にならず、v への一意な書き込みに解決される。
-        let src = "let c = 60.0\nsk =\n    sketch\n        var v = 102.0\n        let l = c - (v - c)\n        p = p2 l 0.0\n    in\n    { p = p }\n    end\n";
+    fn drag_foreign_let_resolves_ambiguity_to_var() {
+        // `let l = c - (v - c)` の c がリテラル let export なら両辺 writable に
+        // ならず、v への一意な書き込みに解決される。
+        let src = "skC =\n    sketch\n        let c = 60.0\n        pc = p2 c 0.0\n    in\n    { pc = pc, c }\n    end\n\nsk =\n    sketch\n        var v = 102.0\n        let l = skC.c - (v - skC.c)\n        p = p2 l 0.0\n    in\n    { p = p }\n    end\n";
         let out = drag(
             src,
             "sk",
@@ -1991,37 +2482,171 @@ mod tests {
     }
 
     #[test]
-    fn drag_through_top_level_let_pushes_into_var() {
-        // トップレベル let は sketch 内 let と同じ導出値: RHS の var へ伝播する。
-        let src = "var z = 5.0\nlet w = z + 1.0\nsk =\n    sketch\n        p = p2 w 0.0\n    in\n    { p = p }\n    end\n";
-        let out = drag(
-            src,
-            "sk",
-            DragTarget::Point { geom: 0 },
-            DragValue::Pos([9.0, 0.0]),
-        )
-        .expect("drag");
-        assert!(out.source.contains("var z = 8.0"), "{}", out.source);
-        assert!(out.source.contains("let w = z + 1.0"), "{}", out.source);
-        let SketchGeom::Point { pos, .. } = &out.model.geoms[0] else {
+    fn foreign_point_axis_reads_and_drags() {
+        // export された点の座標を `A.pt.x` / `.y` で参照でき、ドラッグは
+        // export 元の座標リテラルへ書き込まれる (両 sketch が連動)。
+        let src = "skA =\n    sketch\n        anchor = p2 5.0 40.0\n    in\n    { anchor }\n    end\n\nskB =\n    sketch\n        p = p2 skA.anchor.x 0.0\n        q = p2 0.0 skA.anchor.y\n    in\n    { p = p, q = q }\n    end\n";
+        let m = model_from_source(src, "skB").expect("model");
+        let SketchGeom::Point { pos, .. } = &m.geoms[0] else {
             panic!()
         };
-        assert_eq!(*pos, [9.0, 0.0]);
+        assert_eq!(*pos, [5.0, 0.0]);
+        let SketchGeom::Point { pos, .. } = &m.geoms[1] else {
+            panic!()
+        };
+        assert_eq!(*pos, [0.0, 40.0]);
+
+        let out = drag(
+            src,
+            "skB",
+            DragTarget::Point { geom: 0 },
+            DragValue::Pos([7.0, 1.0]),
+        )
+        .expect("drag");
+        assert!(
+            out.source.contains("anchor = p2 7.0 40.0"),
+            "{}",
+            out.source
+        );
+        let ma = model_from_source(&out.source, "skA").expect("model");
+        let SketchGeom::Point { pos, .. } = &ma.geoms[0] else {
+            panic!()
+        };
+        assert_eq!(*pos, [7.0, 40.0], "export 元の点も連動する");
     }
 
     #[test]
-    fn drag_through_top_level_let_chain() {
-        // トップレベル let の多段 + sketch 内 let 経由でも var まで押し込む。
-        let src = "var z = 5.0\nlet a = z * 2.0\nlet b = a + 1.0\nsk =\n    sketch\n        let c = b + 1.0\n        p = p2 c 0.0\n    in\n    { p = p }\n    end\n";
+    fn foreign_point_axis_pushes_into_var() {
+        // 点座標が var 参照なら var へ押し込む。
+        let src = "skA =\n    sketch\n        var ax = 5.0\n        anchor = p2 ax 40.0\n    in\n    { anchor }\n    end\n\nskB =\n    sketch\n        p = p2 skA.anchor.x 0.0\n    in\n    { p = p }\n    end\n";
         let out = drag(
             src,
-            "sk",
+            "skB",
             DragTarget::Point { geom: 0 },
-            DragValue::Pos([20.0, 0.0]),
+            DragValue::Pos([7.0, 0.0]),
         )
         .expect("drag");
-        // c = ((z * 2) + 1) + 1 なので c = 20 → z = 9
-        assert!(out.source.contains("var z = 9.0"), "{}", out.source);
+        assert!(out.source.contains("var ax = 7.0"), "{}", out.source);
+    }
+
+    #[test]
+    fn cross_sketch_cycle_is_rejected() {
+        let src = "skA =\n    sketch\n        let a = skB.b + 1.0\n        p = p2 a 0.0\n    in\n    { p = p, a }\n    end\n\nskB =\n    sketch\n        let b = skA.a + 1.0\n        q = p2 b 0.0\n    in\n    { q = q, b }\n    end\n";
+        let err = model_from_source(src, "skA").expect_err("cycle");
+        assert!(err.contains("循環"), "{err}");
+        let err = model_from_source(src, "skB").expect_err("cycle");
+        assert!(err.contains("循環"), "{err}");
+    }
+
+    #[test]
+    fn self_reference_is_rejected() {
+        let src = "skA =\n    sketch\n        var v = 1.0\n        let a = skA.v + 1.0\n        p = p2 a 0.0\n    in\n    { p = p, v }\n    end\n";
+        let err = model_from_source(src, "skA").expect_err("self ref");
+        assert!(err.contains("循環"), "{err}");
+    }
+
+    #[test]
+    fn remove_geom_rejects_export_referenced_from_other_sketch() {
+        let src = "skA =\n    sketch\n        anchor = p2 5.0 40.0\n        base = p2 0.0 0.0\n    in\n    { anchor, base }\n    end\n\nskB =\n    sketch\n        p = p2 skA.anchor.x 0.0\n    in\n    { p = p }\n    end\n";
+        let err = remove_geom(src, "skA", "anchor").expect_err("reject");
+        assert!(err.contains("skB"), "{err}");
+        assert!(err.contains("skA.anchor"), "{err}");
+        // 参照されていない export は削除できる
+        let s = remove_geom(src, "skA", "base").expect("remove");
+        assert!(!s.contains("base"), "{s}");
+    }
+
+    #[test]
+    fn remove_geom_rejects_export_referenced_from_functional_layer() {
+        let src = "main = skA.anchor.x\n\nskA =\n    sketch\n        anchor = p2 5.0 40.0\n    in\n    { anchor }\n    end\n";
+        let err = remove_geom(src, "skA", "anchor").expect_err("reject");
+        assert!(err.contains("main"), "{err}");
+    }
+
+    #[test]
+    fn field_ref_rejects_locally_shadowed_receiver() {
+        // ローカル束縛より後の参照は shadow され、sketch 参照として使えない
+        // (sema / runtime の逐次スコープと一致)。
+        let src = "other =\n    sketch\n        var w = 5.0\n        o = p2 w 0.0\n    in\n    { o = o, w }\n    end\n\nsk =\n    sketch\n        let other = 1.0\n        p = p2 other.w 0.0\n    in\n    { p = p }\n    end\n";
+        let err = model_from_source(src, "sk").expect_err("reject");
+        assert!(err.contains("ブロック内の束縛"), "{err}");
+    }
+
+    #[test]
+    fn field_ref_before_local_binding_resolves_to_sketch() {
+        // ローカル束縛より前の参照は (runtime と同じく) sketch へ解決される。
+        let src = "other =\n    sketch\n        var w = 5.0\n        o = p2 w 0.0\n    in\n    { o = o, w }\n    end\n\nsk =\n    sketch\n        p = p2 other.w 0.0\n        let other = 1.0\n    in\n    { p = p }\n    end\n";
+        let m = model_from_source(src, "sk").expect("model");
+        let SketchGeom::Point { pos, .. } = &m.geoms[0] else {
+            panic!()
+        };
+        assert_eq!(*pos, [5.0, 0.0]);
+    }
+
+    #[test]
+    fn non_finite_scalar_is_rejected() {
+        // リテラル積のオーバーフロー (Inf) は評価エラーになり座標へ流れない。
+        let big = "999999999999999999999999999999999999999.0"; // ~1e39
+        let src = format!(
+            "sk =\n    sketch\n        let b1 = {big} * {big}\n        let b2 = b1 * b1\n        let b3 = b2 * b2\n        p = p2 b3 0.0\n    in\n    {{ p = p }}\n    end\n"
+        );
+        let err = model_from_source(&src, "sk").expect_err("reject");
+        assert!(err.contains("有限値になりません"), "{err}");
+    }
+
+    #[test]
+    fn duplicated_sketch_names_are_rejected() {
+        let src = "sk =\n    sketch\n        p = p2 1.0 1.0\n    in\n    { p = p }\n    end\n\nsk =\n    sketch\n        q = p2 2.0 2.0\n    in\n    { q = q }\n    end\n";
+        let err = model_from_source(src, "sk").expect_err("reject");
+        assert!(err.contains("同名"), "{err}");
+        let err = add_point(src, "sk", [0.0, 0.0])
+            .map(|_| ())
+            .expect_err("reject");
+        assert!(err.contains("同名"), "{err}");
+    }
+
+    #[test]
+    fn cycle_member_and_dependent_get_distinct_errors() {
+        let src = "skZ =\n    sketch\n        p = p2 skA.a 0.0\n    in\n    { p = p }\n    end\n\nskA =\n    sketch\n        let a = skB.b + 1.0\n        q = p2 a 0.0\n    in\n    { q = q, a }\n    end\n\nskB =\n    sketch\n        let b = skA.a + 1.0\n        r = p2 b 0.0\n    in\n    { r = r, b }\n    end\n";
+        let err = model_from_source(src, "skA").expect_err("cycle member");
+        assert!(err.contains("参照循環に含まれています"), "{err}");
+        let err = model_from_source(src, "skZ").expect_err("dependent");
+        assert!(err.contains("依存しているため"), "{err}");
+        assert!(err.contains("skA"), "{err}");
+    }
+
+    #[test]
+    fn add_point_avoids_sketch_binding_names() {
+        // 生成名 pt1 が top-level sketch 名と衝突する場合は pt2 になる。
+        let src = "pt1 =\n    sketch\n        o = p2 0.0 0.0\n    in\n    { o = o }\n    end\n\nsk =\n    sketch\n        q = p2 1.0 1.0\n    in\n    { q = q }\n    end\n";
+        let (s, name) = add_point(src, "sk", [3.0, 2.0]).expect("add");
+        assert_eq!(name, "pt2");
+        model_from_source(&s, "sk").expect("parses");
+    }
+
+    #[test]
+    fn unrelated_broken_sketch_does_not_block_target() {
+        // 参照していない sketch の評価エラーや循環は対象の操作に影響しない。
+        let src = "skBroken =\n    sketch\n        let x = nope + 1.0\n        p = p2 x 0.0\n    in\n    { p = p }\n    end\n\nskOk =\n    sketch\n        q = p2 1.0 2.0\n    in\n    { q = q }\n    end\n";
+        let m = model_from_source(src, "skOk").expect("model");
+        assert_eq!(m.geoms.len(), 1);
+        drag(
+            src,
+            "skOk",
+            DragTarget::Point { geom: 0 },
+            DragValue::Pos([3.0, 4.0]),
+        )
+        .expect("drag");
+    }
+
+    #[test]
+    fn inspect_foreign_var_reports_qualified_name() {
+        let src = "skA =\n    sketch\n        var z1 = 50.0\n        p = p2 0.0 z1\n    in\n    { p = p, z1 }\n    end\n\nskB =\n    sketch\n        q = p2 3.0 skA.z1\n    in\n    { q = q }\n    end\n";
+        let info = inspect(src, "skB", DragTarget::Point { geom: 0 }).expect("inspect");
+        assert_eq!(info.axes[1].writes[0].name.as_deref(), Some("skA.z1"));
+        // export 元 sketch では修飾なし
+        let info = inspect(src, "skA", DragTarget::Point { geom: 0 }).expect("inspect");
+        assert_eq!(info.axes[1].writes[0].name.as_deref(), Some("z1"));
     }
 
     #[test]
@@ -2334,16 +2959,16 @@ mod tests {
         assert_eq!(m.geoms.len(), 2);
     }
 
-    const SRC_TOP_VAR: &str = "var z1 = 50.0\n\nskxz =\n    sketch\n        var x1 = 10.0\n        p = p2 x1 z1\n    in\n    { p = p }\n    end\n\nskyz =\n    sketch\n        q = p2 3.0 z1\n        r = p2 4.0 (z1 + 10.0)\n    in\n    { q = q, r = r }\n    end\n";
+    const SRC_CROSS: &str = "skxz =\n    sketch\n        var z1 = 50.0\n        var x1 = 10.0\n        p = p2 x1 z1\n    in\n    { p = p, z1 }\n    end\n\nskyz =\n    sketch\n        q = p2 3.0 skxz.z1\n        r = p2 4.0 (skxz.z1 + 10.0)\n    in\n    { q = q, r = r }\n    end\n";
 
     #[test]
-    fn model_reads_top_level_var() {
-        let m = model_from_source(SRC_TOP_VAR, "skxz").expect("model");
+    fn model_reads_foreign_var() {
+        let m = model_from_source(SRC_CROSS, "skxz").expect("model");
         let SketchGeom::Point { pos, .. } = &m.geoms[0] else {
             panic!()
         };
         assert_eq!(*pos, [10.0, 50.0]);
-        let m2 = model_from_source(SRC_TOP_VAR, "skyz").expect("model");
+        let m2 = model_from_source(SRC_CROSS, "skyz").expect("model");
         let SketchGeom::Point { pos, .. } = &m2.geoms[1] else {
             panic!()
         };
@@ -2351,108 +2976,65 @@ mod tests {
     }
 
     #[test]
-    fn drag_writes_top_level_var_and_other_sketch_follows() {
+    fn drag_writes_foreign_var_and_export_sketch_follows() {
         let out = drag(
-            SRC_TOP_VAR,
-            "skxz",
+            SRC_CROSS,
+            "skyz",
             DragTarget::Point { geom: 0 },
-            DragValue::Pos([10.0, 70.0]),
+            DragValue::Pos([3.0, 70.0]),
         )
         .expect("drag");
         assert!(out.source.contains("var z1 = 70.0"), "{}", out.source);
-        // 同じ z1 を参照する別 sketch も新ソースでは連動する
-        let m2 = model_from_source(&out.source, "skyz").expect("model");
+        // export 元の sketch も新ソースでは連動する
+        let m2 = model_from_source(&out.source, "skxz").expect("model");
         let SketchGeom::Point { pos, .. } = &m2.geoms[0] else {
             panic!()
         };
-        assert_eq!(*pos, [3.0, 70.0]);
+        assert_eq!(*pos, [10.0, 70.0]);
     }
 
     #[test]
-    fn drag_offset_expr_pushes_into_top_level_var() {
-        // r の y は `z1 + 10.0` → z1 に押し込まれ、オフセットは保持される。
+    fn drag_offset_expr_pushes_into_foreign_var() {
+        // r の y は `skxz.z1 + 10.0` → z1 に押し込まれ、オフセットは保持される。
         let out = drag(
-            SRC_TOP_VAR,
+            SRC_CROSS,
             "skyz",
             DragTarget::Point { geom: 1 },
             DragValue::Pos([4.0, 90.0]),
         )
         .expect("drag");
         assert!(out.source.contains("var z1 = 80.0"), "{}", out.source);
-        assert!(out.source.contains("z1 + 10.0"), "{}", out.source);
+        assert!(out.source.contains("skxz.z1 + 10.0"), "{}", out.source);
     }
 
     #[test]
-    fn local_binding_shadows_top_var_in_block() {
-        // sema は shadow を拒否するが、Block の名前解決はブロック内優先で一貫させる。
-        let src = "var a = 1.0\nsk =\n    sketch\n        let a = 5.0\n        p = p2 a a\n    in\n    { p = p }\n    end\n";
-        let m = model_from_source(src, "sk").expect("model");
-        let SketchGeom::Point { pos, .. } = &m.geoms[0] else {
-            panic!()
-        };
-        assert_eq!(*pos, [5.0, 5.0]);
-        // ブロック内 let 優先なので両軸とも書き込み不可
-        let err = drag(
-            src,
-            "sk",
-            DragTarget::Point { geom: 0 },
-            DragValue::Pos([9.0, 9.0]),
-        )
-        .expect_err("reject");
-        assert!(matches!(err, DragReject::ReadOnly(_)), "{err:?}");
-    }
-
-    #[test]
-    fn factor_vars_avoids_top_level_var_names() {
-        let src = "var x1 = 9.0\nsk =\n    sketch\n        pt1 = p2 5.0 0.0\n        pt2 = p2 5.0 1.0\n    in\n    { pt1 = pt1, pt2 = pt2 }\n    end\n";
-        let s = factor_vars(src, "sk").expect("factor");
-        // トップレベル x1 と衝突しない名前が生成される
-        assert!(s.contains("var x2 = 5.0"), "{s}");
-        model_from_source(&s, "sk").expect("parses");
-    }
-
-    #[test]
-    fn factor_vars_avoids_top_level_let_names() {
-        let src = "let x1 = 99.0\nsk =\n    sketch\n        pt1 = p2 5.0 0.0\n        pt2 = p2 5.0 1.0\n    in\n    { pt1 = pt1, pt2 = pt2 }\n    end\n";
+    fn factor_vars_avoids_sketch_binding_names() {
+        // 生成名が top-level sketch 名と衝突しない (衝突すると `x1.field` 参照が壊れる)。
+        let src = "x1 =\n    sketch\n        pt0 = p2 0.0 9.0\n    in\n    { pt0 = pt0 }\n    end\n\nsk =\n    sketch\n        pt1 = p2 5.0 0.0\n        pt2 = p2 5.0 1.0\n    in\n    { pt1 = pt1, pt2 = pt2 }\n    end\n";
         let s = factor_vars(src, "sk").expect("factor");
         assert!(s.contains("var x2 = 5.0"), "{s}");
         model_from_source(&s, "sk").expect("parses");
     }
 
     #[test]
-    fn factor_vars_references_matching_top_level_names() {
-        // 50.0 は var z1、60.0 はトップレベル let c と同値 → 出現 1 回でも参照に
-        // 置き換え、新しい var は作らない。
-        let src = "var z1 = 50.0\nlet c = 60.0\nsk =\n    sketch\n        pt1 = p2 50.0 60.0\n    in\n    { pt1 = pt1 }\n    end\n";
-        let s = factor_vars(src, "sk").expect("factor");
-        assert!(s.contains("pt1 = p2 z1 c"), "{s}");
-        assert!(!s.contains("var x1"), "{s}");
-        let m = model_from_source(&s, "sk").expect("parses");
-        let SketchGeom::Point { pos, .. } = &m.geoms[0] else {
-            panic!()
-        };
-        assert_eq!(*pos, [50.0, 60.0]);
-    }
-
-    #[test]
-    fn factor_vars_mixes_top_level_refs_and_new_vars() {
-        // 50.0 (2 回) は var z1 への参照、7.0 (2 回) は新しい var x1 になる。
-        let src = "var z1 = 50.0\nsk =\n    sketch\n        pt1 = p2 7.0 50.0\n        pt2 = p2 7.0 50.0\n    in\n    { pt1 = pt1, pt2 = pt2 }\n    end\n";
-        let s = factor_vars(src, "sk").expect("factor");
-        assert!(s.contains("var x1 = 7.0"), "{s}");
-        assert!(s.contains("pt1 = p2 x1 z1"), "{s}");
-        assert!(s.contains("pt2 = p2 x1 z1"), "{s}");
-        model_from_source(&s, "sk").expect("parses");
-    }
-
-    #[test]
-    fn factor_vars_ignores_plain_top_level_bindings() {
-        // 通常のトップレベル宣言は sketch から不可視なので、同値でも参照しない。
-        let src = "w = 4.0\nsk =\n    sketch\n        pt1 = p2 4.0 1.0\n        pt2 = p2 4.0 2.0\n    in\n    { pt1 = pt1, pt2 = pt2 }\n    end\n";
+    fn factor_vars_ignores_foreign_exports() {
+        // 他 sketch の export と同値のリテラルがあっても参照に置き換えたりしない。
+        let src = "skA =\n    sketch\n        var w = 4.0\n        pw = p2 w 0.0\n    in\n    { pw = pw, w }\n    end\n\nsk =\n    sketch\n        pt1 = p2 4.0 1.0\n        pt2 = p2 4.0 2.0\n    in\n    { pt1 = pt1, pt2 = pt2 }\n    end\n";
         let s = factor_vars(src, "sk").expect("factor");
         assert!(s.contains("var x1 = 4.0"), "{s}");
         assert!(s.contains("pt1 = p2 x1 1.0"), "{s}");
         model_from_source(&s, "sk").expect("parses");
+    }
+
+    #[test]
+    fn writeback_ambiguity_reported_across_sketches() {
+        // 座標式の両辺が writable (foreign var + local var) なら曖昧として報告する。
+        let src = "skA =\n    sketch\n        var z1 = 50.0\n        p = p2 z1 0.0\n    in\n    { p = p, z1 }\n    end\n\nskB =\n    sketch\n        var w = 1.0\n        q = p2 (skA.z1 + w) 0.0\n    in\n    { q = q }\n    end\n";
+        let module = parse::parse(src).unwrap();
+        let warns = writeback_ambiguities(&module);
+        assert_eq!(warns.len(), 1, "{warns:?}");
+        assert!(warns[0].message.contains("skB"), "{warns:?}");
+        assert!(warns[0].message.contains("曖昧"), "{warns:?}");
     }
 
     #[test]

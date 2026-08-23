@@ -194,6 +194,12 @@ pub enum Diagnostic {
         message: String,
     },
 
+    /// 同名の top-level binding / record field の重複 (`sema::duplicates`)。
+    Duplicate {
+        span: Span,
+        message: String,
+    },
+
     // ---- slider ----
     SliderNotRange {
         span: Span,
@@ -267,6 +273,7 @@ impl Diagnostic {
             | NoInstance { span, .. }
             | AmbiguousConstraint { span, .. }
             | SketchDsl { span, .. }
+            | Duplicate { span, .. }
             | SliderNotRange { span, .. }
             | SliderNotConst { span, .. }
             | SliderUnqualified { span, .. }
@@ -371,6 +378,7 @@ impl Diagnostic {
                 "{context}: 型クラス `{class_name}` 制約が解決できません (型を明示してください)"
             ),
             SketchDsl { message, .. } => format!("sketch: {message}"),
+            Duplicate { message, .. } => message.clone(),
             SliderNotRange { name, got, .. } => {
                 format!("slider `{name}`: 右辺が Range 型でない値 ({got}) になっています")
             }

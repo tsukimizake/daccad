@@ -9,6 +9,64 @@ fn compile_run(src: &str) -> cadhr_lang::MainOutput {
 }
 
 #[test]
+fn math_fns_evaluate() {
+    // sqrt 25 = 5, 1 + sin 90° = 2, 2 cos 0° + tan 45° = 3
+    let src = "main = cube (sqrt 25.0) (1.0 + sin 90.0) (2.0 * cos 0.0 + tan 45.0)";
+    let out = compile_run(src);
+    let mesh = cadhr_lang::runtime::manifold_bridge::to_mesh_arrays(&out.models[0]).unwrap();
+    let mut max = [f32::NEG_INFINITY; 3];
+    for p in &mesh.positions {
+        for i in 0..3 {
+            max[i] = max[i].max(p[i]);
+        }
+    }
+    for (i, expect) in [5.0, 2.0, 3.0].into_iter().enumerate() {
+        assert!(
+            (max[i] - expect).abs() < 1e-4,
+            "axis {i}: expected {expect}, got {}",
+            max[i]
+        );
+    }
+}
+
+#[test]
+fn sqrt_negative_is_runtime_error() {
+    let src = "main = cube (sqrt (0.0 - 25.0)) 1.0 1.0";
+    let prog = compile(src).expect("compile");
+    let err = run_binding(&prog, "main", &Inputs::default()).unwrap_err();
+    assert!(
+        err.message().contains("平方根は計算できません"),
+        "got: {}",
+        err.message()
+    );
+}
+
+#[test]
+fn tan_at_90_deg_is_runtime_error() {
+    let src = "main = cube (tan 450.0) 1.0 1.0";
+    let prog = compile(src).expect("compile");
+    let err = run_binding(&prog, "main", &Inputs::default()).unwrap_err();
+    assert!(
+        err.message().contains("では定義されません"),
+        "got: {}",
+        err.message()
+    );
+}
+
+#[test]
+fn sketch_scalar_sqrt_end_to_end() {
+    // sketch の let で sqrt を使い、直角三角形 (3, 4, 5) を作って extrude する
+    let src = "main =\n    sk.tri |> extrude_xy 2.0\n\nsk =\n    sketch\n        var a = 3.0\n        let b = sqrt (25.0 - a * a)\n        tri = polygon (segments [p2 0.0 0.0, p2 a 0.0, p2 a b])\n    in\n    { tri = tri }\n    end\n";
+    let out = compile_run(src);
+    let mesh = cadhr_lang::runtime::manifold_bridge::to_mesh_arrays(&out.models[0]).unwrap();
+    let mut max_y = f32::NEG_INFINITY;
+    for p in &mesh.positions {
+        max_y = max_y.max(p[1]);
+    }
+    assert!((max_y - 4.0).abs() < 1e-4, "sqrt 16 = 4, got {max_y}");
+}
+
+#[test]
 fn revolve_xy_makes_solid() {
     let src = "main = polygon (segments [p2 1.0 0.0, p2 3.0 0.0, p2 3.0 1.0, p2 1.0 1.0]) |> revolve_xy 360.0";
     let out = compile_run(src);

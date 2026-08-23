@@ -85,6 +85,13 @@ fn as_f64(v: &Value) -> Result<f64, String> {
     }
 }
 
+fn math_fn(name: &str, arg: &Value) -> Result<Value, String> {
+    let v = as_f64(arg)?;
+    crate::geom::eval_math_fn(name, v)
+        .expect("registry に登録した数学関数名")
+        .map(Value::Float)
+}
+
 fn as_int(v: &Value) -> Result<i64, String> {
     match v {
         Value::Int(n) => Ok(*n),
@@ -276,6 +283,12 @@ pub fn registry() -> BuiltinEvalRegistry {
         .add("fromInt", 1, |args| {
             Ok(Value::Float(as_int(&args[0])? as f64))
         })
+        // -- 数学関数 (定義域チェック込みの実体は geom::eval_math_fn。
+        //    sema/sketch.rs と sketch.rs の静的評価も同じヘルパーを使う)
+        .add("sqrt", 1, |args| math_fn("sqrt", &args[0]))
+        .add("sin", 1, |args| math_fn("sin", &args[0]))
+        .add("cos", 1, |args| math_fn("cos", &args[0]))
+        .add("tan", 1, |args| math_fn("tan", &args[0]))
         // -- Range の集合演算
         .add("intersect", 2, |args| match (&args[0], &args[1]) {
             (
